@@ -1,0 +1,882 @@
+"""AI 检测模型管理接口（/api/ai/model）。
+
+提供模型元信息 CRUD、权重文件上传、分类查询、启用/停用。
+"""
+import os
+import shutil
+import threading
+import time
+import uuid
+from urllib.parse import urlparse
+
+from flask import Blueprint, request, jsonify, current_app, send_file
+from werkzeug.utils import secure_filename
+
+from extensions import db
+from models import AiModel
+from security import permission_required
+
+ai_model_bp = Blueprint("ai_model", __name__, url_prefix="/api/ai/model")
+
+
+def _ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
+
+
+def _dir_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+@ai_model_bp.get("")
+@permission_required("ai:model:list")
+def list_models():
+    page = int(request.args.get("pageNum", 1))
+    size = int(request.args.get("pageSize", 10))
+    name = request.args.get("modelName", "").strip()
+    category = request.args.get("category", "").strip()
+    source = request.args.get("source", "").strip()  # 来源：huggingface / modelscope / other
+
+    query = AiModel.query
+    if name:
+        query = query.filter(AiModel.model_name.like(f"%{name}%"))
+    if category:
+        query = query.filter(AiModel.category == category)
+    if source == "huggingface":
+        query = query.filter(db.or_(AiModel.source_url.like("%huggingface%"),
+                                    AiModel.source_url.like("%hf.co%")))
+    elif source == "modelscope":
+        query = query.filter(AiModel.source_url.like("%modelscope%"))
+    elif source == "other":
+        query = query.filter(db.and_(AiModel.source_url.notlike("%huggingface%"),
+                                     AiModel.source_url.notlike("%hf.co%"),
+                                     AiModel.source_url.notlike("%modelscope%")))
+    total = query.count()
+    rows = (query.order_by(AiModel.id.asc())
+            .offset((page - 1) * size).limit(size).all())
+    return jsonify(code=0, data={"rows": [m.to_dict() for m in rows], "total": total})
+
+
+@ai_model_bp.get("/categories")
+@permission_required("ai:model:list")
+def list_categories():
+    rows = db.session.query(AiModel.category).distinct().all()
+    cats = [r[0] for r in rows if r[0]]
+    return jsonify(code=0, data=cats)
+
+
+@ai_model_bp.get("/<int:mid>")
+@permission_required("ai:model:query")
+def get_model(mid):
+    return jsonify(code=0, data=AiModel.query.get_or_404(mid).to_dict())
+
+
+@ai_model_bp.post("/upload")
+@permission_required("ai:model:add")
+def upload_weight():
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到文件"), 400
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = current_app.config["MODEL_ALLOWED_EXT"]
+    if ext not in allowed:
+        return jsonify(code=400, message=f"不支持的文件类型，仅允许 {', '.join(sorted(allowed))}"), 400
+
+    # 以模型标识作为子文件夹名；新增时可能还没标识，回退到临时名
+    key = (request.form.get("modelKey") or "").strip()
+    sub = secure_filename(key) or f"_unkeyed_{int(time.time())}"
+    folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
+    _ensure_dir(folder)
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "model"
+    fname = f"{base}{ext}"
+    abs_path = os.path.join(folder, fname)
+    file.save(abs_path)
+    rel_path = f"models/{sub}/{fname}"
+    return jsonify(code=0, message="上传成功", data={
+        "fileName": file.filename,
+        "filePath": rel_path,
+        "fileSize": os.path.getsize(abs_path),
+    })
+
+
+@ai_model_bp.post("")
+@permission_required("ai:model:add")
+def create_model():
+    data = request.get_json(silent=True) or {}
+    if not data.get("modelName"):
+        return jsonify(code=400, message="模型名称必填"), 400
+    key = (data.get("modelKey") or "").strip()
+    if key and AiModel.query.filter_by(model_key=key).first():
+        return jsonify(code=400, message="模型标识已存在"), 400
+
+    m = AiModel(
+        model_name=data["modelName"],
+        category=data.get("category"),
+        model_key=key or None,
+        task=data.get("task", "object-detection"),
+        library=data.get("library", "ultralytics"),
+        version=data.get("version", "v1"),
+        source_url=data.get("sourceUrl"),
+        file_path=data.get("filePath"),
+        file_size=data.get("fileSize", 0),
+        description=data.get("description"),
+        status=data.get("status", "0"),
+    )
+    db.session.add(m)
+    db.session.commit()
+    return jsonify(code=0, message="新增成功", data=m.to_dict()), 201
+
+
+@ai_model_bp.put("/<int:mid>")
+@permission_required("ai:model:edit")
+def update_model(mid):
+    m = AiModel.query.get_or_404(mid)
+    data = request.get_json(silent=True) or {}
+    key = data.get("modelKey")
+    if key and key != m.model_key and AiModel.query.filter_by(model_key=key).first():
+        return jsonify(code=400, message="模型标识已存在"), 400
+
+    for field, attr in [("modelName", "model_name"), ("category", "category"),
+                        ("modelKey", "model_key"), ("task", "task"),
+                        ("library", "library"), ("version", "version"),
+                        ("sourceUrl", "source_url"), ("filePath", "file_path"),
+                        ("fileSize", "file_size"), ("description", "description"),
+                        ("status", "status")]:
+        if field in data:
+            setattr(m, attr, data[field])
+    db.session.commit()
+    return jsonify(code=0, message="修改成功", data=m.to_dict())
+
+
+def _remove_weight_file(m):
+    """删除模型本地权重（单文件或 transformers 目录）。"""
+    if not m.file_path:
+        return
+    abs_path = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    try:
+        if os.path.isdir(abs_path):
+            shutil.rmtree(abs_path, ignore_errors=True)
+        elif os.path.isfile(abs_path):
+            os.remove(abs_path)
+            parent = os.path.dirname(abs_path)
+            if os.path.isdir(parent) and not os.listdir(parent):
+                os.rmdir(parent)
+    except OSError:
+        pass
+
+
+@ai_model_bp.delete("/<int:mid>")
+@permission_required("ai:model:remove")
+def delete_model(mid):
+    m = AiModel.query.get_or_404(mid)
+    _remove_weight_file(m)
+    db.session.delete(m)
+    db.session.commit()
+    return jsonify(code=0, message="删除成功")
+
+
+@ai_model_bp.post("/batch-delete")
+@permission_required("ai:model:remove")
+def batch_delete():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids") or []
+    if not ids:
+        return jsonify(code=400, message="未选择要删除的模型"), 400
+    models = AiModel.query.filter(AiModel.id.in_(ids)).all()
+    for m in models:
+        _remove_weight_file(m)
+        db.session.delete(m)
+    db.session.commit()
+    return jsonify(code=0, message=f"已删除 {len(models)} 个模型")
+
+
+def _abs_weight(m):
+    """单文件权重(YOLO)绝对路径；无则 None。"""
+    if not m.file_path:
+        return None
+    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    return p if os.path.isfile(p) else None
+
+
+def _abs_model_path(m):
+    """模型本地路径（文件或目录均可，transformers 为目录）；无则 None。"""
+    if not m.file_path:
+        return None
+    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    return p if os.path.exists(p) else None
+
+
+@ai_model_bp.get("/<int:mid>/download")
+@permission_required("ai:model:download")
+def download_weight(mid):
+    """下载本地权重文件到浏览器（仅单文件权重，目录型 transformers 模型不支持）。"""
+    m = AiModel.query.get_or_404(mid)
+    abs_path = _abs_weight(m)
+    if abs_path is None:
+        if _abs_model_path(m):
+            return jsonify(code=400, message="目录型模型(transformers)不支持单文件下载"), 400
+        return jsonify(code=400, message="该模型暂无本地权重文件"), 400
+    return send_file(abs_path, as_attachment=True,
+                     download_name=os.path.basename(abs_path))
+
+
+def _hub_of(url):
+    """按来源 URL 主机名判定下载源：modelscope / huggingface。"""
+    host = urlparse(url or "").netloc.lower()
+    return "modelscope" if "modelscope" in host else "huggingface"
+
+
+def _repo_id_from_url(url):
+    """从来源链接解析 repo_id（owner/name）。
+
+    HuggingFace: huggingface.co/{owner}/{name}
+    ModelScope : modelscope.cn/models/{owner}/{name} —— 去掉前导 'models' 段。
+    """
+    if not url:
+        return None
+    parts = [p for p in urlparse(url).path.split("/") if p]
+    if parts and parts[0] == "models":   # ModelScope 路径前缀
+        parts = parts[1:]
+    if len(parts) < 2:
+        return None
+    return f"{parts[0]}/{parts[1]}"
+
+
+_WEIGHT_EXT = (".pt", ".onnx", ".pth")
+
+
+def _pick_local_weight(folder):
+    """从已下载目录里挑单文件权重（优先 best.pt，其次路径最短）。"""
+    cands = []
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            if f.lower().endswith(_WEIGHT_EXT):
+                cands.append(os.path.join(root, f))
+    if not cands:
+        return None
+    cands.sort(key=lambda p: (not os.path.basename(p).lower().endswith("best.pt"), len(p)))
+    return cands[0]
+
+
+def _fetch_huggingface(repo_id, folder, sub, is_dir_model):
+    """从 HuggingFace 拉取权重，返回 (rel_path, size)。"""
+    token = current_app.config.get("HF_TOKEN")  # 受限/私有仓库需令牌认证
+    if is_dir_model:
+        # 目录型模型(transformers/funasr/cosyvoice 等) = 整个仓库目录（config + 权重 + tokenizer）
+        from huggingface_hub import snapshot_download
+        _ensure_dir(folder)
+        snapshot_download(repo_id=repo_id, local_dir=folder, token=token)
+        return f"models/{sub}", _dir_size(folder)
+    # ultralytics：单文件权重(.pt/.onnx/.pth)
+    from huggingface_hub import list_repo_files, hf_hub_download
+    files = list_repo_files(repo_id, token=token)
+    pts = [f for f in files if f.lower().endswith(_WEIGHT_EXT)]
+    if not pts:
+        raise ValueError("仓库内未找到权重文件(.pt/.onnx/.pth)")
+    pts.sort(key=lambda f: (not f.lower().endswith("best.pt"), len(f)))
+    filename = pts[0]
+    cached = hf_hub_download(repo_id=repo_id, filename=filename, token=token)
+    _ensure_dir(folder)
+    dest_name = os.path.basename(filename)
+    shutil.copy2(cached, os.path.join(folder, dest_name))
+    return f"models/{sub}/{dest_name}", os.path.getsize(os.path.join(folder, dest_name))
+
+
+def _fetch_modelscope(repo_id, folder, sub, is_dir_model):
+    """从 ModelScope（模搭社区）拉取权重，返回 (rel_path, size)。
+
+    ModelScope 仅作下载源：整库 snapshot 到本地，产物仍走现有 transformers/ultralytics 推理。
+    """
+    from modelscope import snapshot_download as ms_snapshot
+    token = current_app.config.get("MODELSCOPE_TOKEN")
+    if token:
+        try:
+            from modelscope.hub.api import HubApi
+            HubApi().login(token)
+        except Exception:  # noqa: BLE001  登录失败不阻断公开模型
+            pass
+    _ensure_dir(folder)
+    ms_snapshot(repo_id, local_dir=folder)
+    if is_dir_model:
+        return f"models/{sub}", _dir_size(folder)
+    wp = _pick_local_weight(folder)
+    if wp is None:
+        raise ValueError("仓库内未找到权重文件(.pt/.onnx/.pth)")
+    rel = os.path.relpath(wp, current_app.config["UPLOAD_FOLDER"]).replace(os.sep, "/")
+    return rel, os.path.getsize(wp)
+
+
+@ai_model_bp.post("/<int:mid>/fetch")
+@permission_required("ai:model:add")
+def fetch_weight(mid):
+    """从模型来源拉取权重到服务器（按来源 URL 自动分流 HuggingFace / ModelScope）。"""
+    m = AiModel.query.get_or_404(mid)
+    repo_id = _repo_id_from_url(m.source_url)
+    if repo_id is None:
+        return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
+
+    hub = _hub_of(m.source_url)
+    # 仅 ultralytics 是单文件权重(.pt)；transformers/funasr/cosyvoice/linly 等均为整目录模型
+    is_dir_model = (m.library or "ultralytics") != "ultralytics"
+    sub = secure_filename(m.model_key or f"model{m.id}")
+    folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
+    try:
+        if hub == "modelscope":
+            rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
+        else:
+            rel, size = _fetch_huggingface(repo_id, folder, sub, is_dir_model)
+    except Exception as e:  # noqa: BLE001  网络/仓库错误统一回传
+        msg = str(e)
+        low = msg.lower()
+        if "404" in msg or "not found" in low or "repositorynotfound" in low or "does not exist" in low:
+            return jsonify(code=400, message="拉取失败：仓库不存在或来源地址有误，请核对模型链接(owner/name)"), 400
+        if "401" in msg or "403" in msg or "gated" in low or "restricted" in low:
+            if hub == "modelscope":
+                hint = ("该模型为受限/私有仓库，需先在 ModelScope 模型页申请访问权限，"
+                        "再在后端 .env 配置 MODELSCOPE_TOKEN=<你的令牌> 并重启。")
+            else:
+                hint = ("该模型为受限(gated)/私有仓库，需先在 HuggingFace 模型页申请并获批访问权限，"
+                        "再在后端 .env 配置 HF_TOKEN=<你的HF令牌> 并重启。")
+            return jsonify(code=403, message=f"拉取失败：{hint}"), 403
+        return jsonify(code=500, message=f"拉取失败：{e}"), 500
+
+    m.file_path = rel
+    m.file_size = size
+    db.session.commit()
+    return jsonify(code=0, message="权重拉取成功", data=m.to_dict())
+
+
+@ai_model_bp.post("/<int:mid>/analyze-text")
+@permission_required("ai:model:query")
+def analyze_text(mid):
+    """文本任务在线测试（transformers，如 FinBERT 情感分析）。"""
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(code=400, message="请输入待分析文本"), 400
+
+    try:
+        from inference import classify_text
+        result = classify_text(path, text, task=m.task or "text-classification")
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"分析失败：{e}"), 500
+    return jsonify(code=0, message="分析完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/classify-image")
+@permission_required("ai:model:query")
+def classify_image_route(mid):
+    """图像分类在线测试（transformers，如 ViT/ResNet）。"""
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+    try:
+        top_k = int(request.form.get("topK", 5))
+    except (TypeError, ValueError):
+        top_k = 5
+
+    try:
+        from inference import classify_image
+        result = classify_image(path, file.read(), task=m.task or "image-classification", top_k=top_k)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"分类失败：{e}"), 500
+    return jsonify(code=0, message="分类完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/transcribe")
+@permission_required("ai:model:query")
+def transcribe_route(mid):
+    """语音识别在线测试（funasr SenseVoice）：上传音频 → 转写 + 情感/事件。"""
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到音频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["AUDIO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的音频格式"), 400
+
+    audio_folder = current_app.config["AUDIO_FOLDER"]
+    _ensure_dir(audio_folder)
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "audio"
+    audio_path = os.path.join(audio_folder, f"{base}_{ts}{ext}")
+    file.save(audio_path)
+
+    try:
+        if (m.library or "") == "funasr-onnx":
+            from inference import transcribe_audio_onnx
+            result = transcribe_audio_onnx(path, audio_path)
+        else:
+            from inference import transcribe_audio
+            result = transcribe_audio(path, audio_path)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"识别失败：{e}"), 500
+    finally:
+        if os.path.isfile(audio_path):
+            try:
+                os.remove(audio_path)  # 处理完删除上传源
+            except OSError:
+                pass
+    return jsonify(code=0, message="识别完成", data=result)
+
+
+@ai_model_bp.get("/<int:mid>/tts-speakers")
+@permission_required("ai:model:query")
+def tts_speakers_route(mid):
+    """文本转语音可用音色列表（仅 CosyVoice SFT 有预置音色；transformers TTS 无）。"""
+    m = AiModel.query.get_or_404(mid)
+    if (m.library or "") == "cosyvoice":
+        from inference import COSYVOICE_SFT_SPEAKERS
+        return jsonify(code=0, data=COSYVOICE_SFT_SPEAKERS)
+    if (m.library or "") == "vibevoice":
+        from inference import list_vibevoice_voices
+        return jsonify(code=0, data=list_vibevoice_voices())
+    return jsonify(code=0, data=[])
+
+
+@ai_model_bp.post("/<int:mid>/tts")
+@permission_required("ai:model:query")
+def tts_route(mid):
+    """文本转语音在线测试：文本 -> wav(base64)。
+
+    transformers(VITS/MMS-TTS) 单音色；CosyVoice SFT 按预置音色合成。
+    """
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    speaker = (data.get("speaker") or "中文女").strip()
+    if not text:
+        return jsonify(code=400, message="请输入待合成文本"), 400
+
+    try:
+        if (m.library or "") == "cosyvoice":
+            from inference import synthesize_speech
+            result = synthesize_speech(path, text, speaker=speaker)
+        elif (m.library or "") == "vibevoice":
+            from inference import synthesize_speech_vibevoice
+            result = synthesize_speech_vibevoice(path, text, speaker=speaker)
+        elif (m.library or "") == "sherpa-onnx":
+            from inference import synthesize_speech_melotts
+            result = synthesize_speech_melotts(path, text)
+        else:
+            from inference import synthesize_speech_hf
+            result = synthesize_speech_hf(path, text, task=m.task or "text-to-speech")
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"合成失败：{e}"), 500
+    return jsonify(code=0, message="合成完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/tts-clone")
+@permission_required("ai:model:query")
+def tts_clone_route(mid):
+    """零样本音色克隆（CosyVoice2）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。"""
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    text = (request.form.get("text") or "").strip()
+    prompt_text = (request.form.get("promptText") or "").strip()
+    if not text or not prompt_text:
+        return jsonify(code=400, message="请输入目标文本与参考音频文本"), 400
+
+    file = request.files.get("promptAudio")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到参考音频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["AUDIO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的音频格式"), 400
+
+    audio_folder = current_app.config["AUDIO_FOLDER"]
+    _ensure_dir(audio_folder)
+    ts = int(time.time())
+    prompt_path = os.path.join(audio_folder, f"prompt_{ts}{ext}")
+    file.save(prompt_path)
+
+    try:
+        from inference import synthesize_speech_v2
+        result = synthesize_speech_v2(path, text, prompt_text, prompt_path)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"合成失败：{e}"), 500
+    finally:
+        if os.path.isfile(prompt_path):
+            try:
+                os.remove(prompt_path)
+            except OSError:
+                pass
+    return jsonify(code=0, message="合成完成", data=result)
+
+
+def _text_model_path(mid):
+    """取文本任务模型本地目录；返回 (model, path, error_response)。"""
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return m, None, (jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400)
+    return m, path, None
+
+
+@ai_model_bp.post("/<int:mid>/generate-text")
+@permission_required("ai:model:query")
+def generate_text_route(mid):
+    """文本生成/翻译/摘要（transformers）。"""
+    m, path, err = _text_model_path(mid)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(code=400, message="请输入文本"), 400
+    try:
+        max_new = int(data.get("maxNewTokens", 256))
+    except (TypeError, ValueError):
+        max_new = 256
+    try:
+        from inference import generate_text
+        result = generate_text(path, text, task=m.task or "summarization", max_new_tokens=max_new)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"生成失败：{e}"), 500
+    return jsonify(code=0, message="完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/zero-shot")
+@permission_required("ai:model:query")
+def zero_shot_route(mid):
+    """零样本分类（transformers）。"""
+    m, path, err = _text_model_path(mid)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    labels = [l.strip() for l in (data.get("labels") or []) if l and l.strip()]
+    if not text or not labels:
+        return jsonify(code=400, message="请输入文本与候选标签"), 400
+    try:
+        from inference import zero_shot
+        result = zero_shot(path, text, labels, task=m.task or "zero-shot-classification")
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"分类失败：{e}"), 500
+    return jsonify(code=0, message="完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/fill-mask")
+@permission_required("ai:model:query")
+def fill_mask_route(mid):
+    """完形填空（transformers）。"""
+    m, path, err = _text_model_path(mid)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(code=400, message="请输入含 [MASK] 的文本"), 400
+    try:
+        top_k = int(data.get("topK", 5))
+    except (TypeError, ValueError):
+        top_k = 5
+    try:
+        from inference import fill_mask
+        result = fill_mask(path, text, task=m.task or "fill-mask", top_k=top_k)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"预测失败：{e}"), 500
+    return jsonify(code=0, message="完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/extract-entities")
+@permission_required("ai:model:query")
+def extract_entities_route(mid):
+    """命名实体识别 NER（transformers）。"""
+    m, path, err = _text_model_path(mid)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify(code=400, message="请输入文本"), 400
+    try:
+        from inference import extract_entities
+        result = extract_entities(path, text, task=m.task or "token-classification")
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"识别失败：{e}"), 500
+    return jsonify(code=0, message="完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/answer-question")
+@permission_required("ai:model:query")
+def answer_question_route(mid):
+    """抽取式问答 QA（transformers）。"""
+    m, path, err = _text_model_path(mid)
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+    context = (data.get("context") or "").strip()
+    if not question or not context:
+        return jsonify(code=400, message="请输入问题与上下文"), 400
+    try:
+        from inference import answer_question
+        result = answer_question(path, question, context, task=m.task or "question-answering")
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"问答失败：{e}"), 500
+    return jsonify(code=0, message="完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/detect")
+@permission_required("ai:model:query")
+def detect(mid):
+    """在线测试：用模型权重对上传图片做检测（YOLO 或 transformers）。"""
+    m = AiModel.query.get_or_404(mid)
+    is_hf = (m.library or "ultralytics") == "transformers"
+    abs_path = _abs_model_path(m) if is_hf else _abs_weight(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+
+    draw = request.form.get("draw", "1") != "0"  # 实时场景传 0，省服务端画框/编码
+    try:
+        if is_hf:
+            from inference import detect_image_hf
+            result = detect_image_hf(abs_path, file.read(), conf=conf, draw=draw,
+                                     task=m.task or "object-detection")
+        else:
+            from inference import detect_image
+            result = detect_image(abs_path, file.read(), conf=conf, draw=draw)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"推理失败：{e}"), 500
+    return jsonify(code=0, message="检测完成", data=result)
+
+
+# 视频检测异步任务进度表：jobId -> {status, processed, total, output, stats, error}
+_video_jobs = {}
+_video_jobs_lock = threading.Lock()
+
+
+def _video_worker(job_id, is_hf, task, abs_path, src_path, out_path, out_name, conf):
+    """后台线程：逐帧检测，按帧上报进度，完成写结果。"""
+    def cb(processed, total):
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j["processed"] = processed
+                j["total"] = total
+    try:
+        if is_hf:
+            from inference import detect_video_hf
+            stats = detect_video_hf(abs_path, src_path, out_path, conf=conf, task=task, progress_cb=cb)
+        else:
+            from inference import detect_video
+            stats = detect_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
+        stats["output"] = out_name
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="done", stats=stats,
+                                       processed=stats["frames"], total=stats["frames"])
+    except Exception as e:  # noqa: BLE001
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="error", error=str(e))
+    finally:
+        if os.path.isfile(src_path):
+            try:
+                os.remove(src_path)  # 处理完删除上传源
+            except OSError:
+                pass
+
+
+@ai_model_bp.post("/<int:mid>/detect-video")
+@permission_required("ai:model:query")
+def detect_video_route(mid):
+    """视频检测：启动异步逐帧任务，立即返回 jobId（前端轮询进度）。"""
+    m = AiModel.query.get_or_404(mid)
+    is_hf = (m.library or "ultralytics") == "transformers"
+    abs_path = _abs_model_path(m) if is_hf else _abs_weight(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到视频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的视频格式"), 400
+
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    _ensure_dir(video_folder)
+    _ensure_dir(out_folder)
+
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
+    src_path = os.path.join(video_folder, f"{base}_{ts}{ext}")
+    out_name = f"{base}_{ts}_det.mp4"
+    out_path = os.path.join(out_folder, out_name)
+    file.save(src_path)
+
+    job_id = uuid.uuid4().hex
+    with _video_jobs_lock:
+        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
+                               "stats": None, "error": None}
+    threading.Thread(
+        target=_video_worker,
+        args=(job_id, is_hf, m.task or "object-detection", abs_path, src_path, out_path, out_name, conf),
+        daemon=True,
+    ).start()
+    return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
+
+
+@ai_model_bp.get("/<int:mid>/video-progress/<job_id>")
+@permission_required("ai:model:query")
+def video_progress(mid, job_id):
+    """查询视频检测任务进度。"""
+    with _video_jobs_lock:
+        j = _video_jobs.get(job_id)
+        if j is None:
+            return jsonify(code=404, message="任务不存在或已过期"), 404
+        data = dict(j)
+    if data["status"] == "error":
+        return jsonify(code=500, message=f"视频检测失败：{data['error']}"), 500
+    return jsonify(code=0, data=data)
+
+
+@ai_model_bp.get("/output/<path:name>")
+@permission_required("ai:model:query")
+def get_output(name):
+    """返回带框输出视频（防目录穿越）。"""
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    abs_path = os.path.abspath(os.path.join(out_folder, name))
+    if not abs_path.startswith(os.path.abspath(out_folder) + os.sep):
+        return jsonify(code=400, message="非法路径"), 400
+    if not os.path.isfile(abs_path):
+        return jsonify(code=404, message="输出文件不存在"), 404
+    return send_file(abs_path, mimetype="video/mp4")
+
+
+# ------------------------------------------------------------ Linly-Talker 数字人合成
+_IMAGE_ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+# 数字人异步任务进度表：jobId -> {status, processed, total, output, error}
+_talker_jobs = {}
+_talker_jobs_lock = threading.Lock()
+
+
+def _talker_worker(job_id, model_dir, image_path, audio_path, out_path, out_name):
+    """后台线程：调 SadTalker 合成说话视频，上报进度，完成写结果。"""
+    def cb(processed, total):
+        with _talker_jobs_lock:
+            j = _talker_jobs.get(job_id)
+            if j:
+                j["processed"] = processed
+                j["total"] = total
+    try:
+        from inference import synthesize_talking_head
+        synthesize_talking_head(model_dir, image_path, audio_path, out_path, progress_cb=cb)
+        with _talker_jobs_lock:
+            _talker_jobs[job_id].update(status="done", output=out_name)
+    except Exception as e:  # noqa: BLE001
+        with _talker_jobs_lock:
+            _talker_jobs[job_id].update(status="error", error=str(e))
+    finally:
+        for p in (image_path, audio_path):
+            if p and os.path.isfile(p):
+                try:
+                    os.remove(p)  # 处理完删除上传源
+                except OSError:
+                    pass
+
+
+@ai_model_bp.post("/<int:mid>/talking-head")
+@permission_required("ai:model:query")
+def talking_head_route(mid):
+    """数字人合成：上传人像图 + 驱动音频，启动异步任务，返回 jobId。"""
+    m = AiModel.query.get_or_404(mid)
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    image = request.files.get("image")
+    audio = request.files.get("audio")
+    if image is None or not image.filename:
+        return jsonify(code=400, message="未接收到人像图片"), 400
+    if audio is None or not audio.filename:
+        return jsonify(code=400, message="未接收到驱动音频"), 400
+    img_ext = os.path.splitext(image.filename)[1].lower()
+    aud_ext = os.path.splitext(audio.filename)[1].lower()
+    if img_ext not in _IMAGE_ALLOWED_EXT:
+        return jsonify(code=400, message="不支持的图片格式"), 400
+    if aud_ext not in current_app.config["AUDIO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的音频格式"), 400
+
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    audio_folder = current_app.config["AUDIO_FOLDER"]
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    for d in (video_folder, audio_folder, out_folder):
+        _ensure_dir(d)
+
+    ts = int(time.time())
+    image_path = os.path.join(video_folder, f"talker_{ts}{img_ext}")
+    audio_path = os.path.join(audio_folder, f"talker_{ts}{aud_ext}")
+    out_name = f"talker_{ts}.mp4"
+    out_path = os.path.join(out_folder, out_name)
+    image.save(image_path)
+    audio.save(audio_path)
+
+    job_id = uuid.uuid4().hex
+    with _talker_jobs_lock:
+        _talker_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
+                                "output": None, "error": None}
+    threading.Thread(
+        target=_talker_worker,
+        args=(job_id, path, image_path, audio_path, out_path, out_name),
+        daemon=True,
+    ).start()
+    return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
+
+
+@ai_model_bp.get("/<int:mid>/talking-progress/<job_id>")
+@permission_required("ai:model:query")
+def talking_progress(mid, job_id):
+    """查询数字人合成任务进度。"""
+    with _talker_jobs_lock:
+        j = _talker_jobs.get(job_id)
+        if j is None:
+            return jsonify(code=404, message="任务不存在或已过期"), 404
+        data = dict(j)
+    if data["status"] == "error":
+        return jsonify(code=500, message=f"数字人合成失败：{data['error']}"), 500
+    return jsonify(code=0, data=data)

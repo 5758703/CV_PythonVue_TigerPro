@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ===== 环境变量 / 密钥（绝不提交）=====
+.env
+*.env
+!.env.example
+
+# ===== Node / 前端构建 =====
+node_modules/
+dist/
+*.local
+npm-debug.log*
+
+# ===== IDE / 工具目录 =====
+.idea/
+.vscode/
+.history/
+.claude/
+.DS_Store
+Thumbs.db
+
+# ===== 模型权重 / 上传媒体 / 推理输出（大文件，不提交）=====
+backend/uploads/
+
+# ===== 第三方推理代码（vendored，体积大，部署时各自 git clone）=====
+third_party/
