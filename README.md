@@ -1,6 +1,6 @@
 # CV Python Tigerpro
 
-Flask + Vue 前后端分离 web 项目，实现 **RBAC 用户角色权限管理系统**（参照 RuoYi）。
+Flask + Vue 前后端分离 web 项目，实现 **RBAC 用户角色权限管理系统**。
 
 ```
 backend/    Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
