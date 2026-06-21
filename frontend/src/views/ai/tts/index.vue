@@ -108,12 +108,17 @@ const onCategoryChange = () => {
   loadSpeakers()
 }
 
+// 首选语音合成模型：MeloTTS 中英混合（默认置顶并默认选中）
+const PREFERRED_TTS_KEY = 'melotts-zh-en'
+
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  modelOptions.value = (res.data.rows || []).filter(
+  const rows = (res.data.rows || []).filter(
     (m) => (m.library === 'cosyvoice' || m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx') &&
       m.task === 'text-to-speech' && m.filePath && m.status === '0'
   )
+  rows.sort((a, b) => (b.modelKey === PREFERRED_TTS_KEY) - (a.modelKey === PREFERRED_TTS_KEY))
+  modelOptions.value = rows
   if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
   loadSpeakers()
 }
