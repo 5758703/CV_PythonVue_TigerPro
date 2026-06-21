@@ -1,11 +1,12 @@
 # CV Python Tigerpro
 
-Flask + Vue 前后端分离 web 项目，实现 **RBAC 用户角色权限管理系统**（参照 RuoYi）。
+Flask + Vue 前后端分离 web 项目，实现 **RBAC 用户角色权限管理系统**。
 
 ```
 backend/    Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
 frontend/   Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 ```
+<img width="1920" height="869" alt="f188237f3a32b1379f93840e555b8931" src="https://github.com/user-attachments/assets/a4441dc9-c1ff-4de7-bb1b-8f25287d7ed8" />
 
 ## 功能
 
@@ -90,3 +91,8 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 1. 启动 MySQL，建库 `cv_python_tigerpro`
 2. 后端 `python app.py`（:5001，自动建表+种子）
 3. 前端 `npm run dev`（:5173），浏览器打开，用 `admin/admin123` 登录
+<img width="1920" height="869" alt="744ec6c19b3817d1e7c1efe5d66124e7" src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" />
+
+<img width="1920" height="869" alt="243ec0a85149c5fc2c79168466bfd19d" src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" />
+
+<img width="1920" height="869" alt="a894ca39be5586d2f9bcc7a587404d4d" src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" />
