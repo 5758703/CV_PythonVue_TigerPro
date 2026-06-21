@@ -106,12 +106,17 @@ const onCategoryChange = () => {
   result.value = null
 }
 
+// 首选语音识别模型：Paraformer 中英（默认置顶并默认选中）
+const PREFERRED_ASR_KEY = 'paraformer-zh'
+
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  modelOptions.value = (res.data.rows || []).filter(
+  const rows = (res.data.rows || []).filter(
     (m) => (m.library === 'funasr' || m.library === 'funasr-onnx') &&
       m.task === 'automatic-speech-recognition' && m.filePath && m.status === '0'
   )
+  rows.sort((a, b) => (b.modelKey === PREFERRED_ASR_KEY) - (a.modelKey === PREFERRED_ASR_KEY))
+  modelOptions.value = rows
   if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
 }
 
