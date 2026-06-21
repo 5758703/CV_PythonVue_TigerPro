@@ -259,6 +259,13 @@ def seed_ai_models():
         source_url="https://modelscope.cn/models/iic/SenseVoiceSmall",
         description="多语种语音识别 + 语音情感 + 音频事件检测（中/英/粤/日/韩）。语音识别页使用。", status="0",
     ))
+    # 语音识别（Paraformer 中英，funasr 引擎，非自回归、工业级准确率，复用 SenseVoice 同款推理）
+    created |= _ensure_ai_model("paraformer-zh", dict(
+        model_name="Paraformer 中英语音识别", category="语音识别",
+        task="automatic-speech-recognition", library="funasr", version="v1",
+        source_url="https://huggingface.co/funasr/paraformer-zh",
+        description="Paraformer 中英语音识别(funasr)，非自回归、工业级准确率(中文 CER ~1-2%)，CPU 快。语音识别页使用。", status="0",
+    ))
     # 语音识别（SenseVoice 量化 onnx，242MB，更小更快；funasr_onnx 引擎）
     created |= _ensure_ai_model("sensevoice-small-onnx", dict(
         model_name="SenseVoice 语音识别(onnx量化)", category="语音识别",
