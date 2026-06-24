@@ -194,6 +194,8 @@ import { ElMessage } from 'element-plus'
 import { UploadFilled, VideoPlay, Refresh, Download, ZoomIn, Picture } from '@element-plus/icons-vue'
 
 import { modelApi } from '../../../api/ai'
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 
 const modelOptions = ref([])
 const modelId = ref(null)
@@ -425,8 +427,31 @@ const genReport = async () => {
 
 const riskTagType = (level) => ({ 高: 'danger', 中: 'warning', 低: 'success' }[level] || 'info')
 
-// 真正的 PDF 导出在 Task 6 接入；此处占位以便本任务独立验证
-const exportPdf = () => ElMessage.info('PDF 导出将在下一步接入')
+const exportPdf = async () => {
+  if (!reportEl.value) return
+  try {
+    const canvas = await html2canvas(reportEl.value, { scale: 2, useCORS: true, backgroundColor: '#ffffff' })
+    const img = canvas.toDataURL('image/jpeg', 0.92)
+    const pdf = new jsPDF('p', 'mm', 'a4')
+    const pw = pdf.internal.pageSize.getWidth()
+    const ph = pdf.internal.pageSize.getHeight()
+    const imgH = (canvas.height * pw) / canvas.width // 等比缩放后总高(mm)
+    let left = imgH
+    let pos = 0
+    pdf.addImage(img, 'JPEG', 0, pos, pw, imgH)
+    left -= ph
+    while (left > 0) {
+      pos -= ph
+      pdf.addPage()
+      pdf.addImage(img, 'JPEG', 0, pos, pw, imgH)
+      left -= ph
+    }
+    const name = (report.value?.meta?.imageName || 'detection').replace(/\.[^.]+$/, '')
+    pdf.save(`${name}_AI检测报告.pdf`)
+  } catch (e) {
+    ElMessage.error('PDF 导出失败')
+  }
+}
 
 const clearAll = () => {
   if (progTimer) { clearInterval(progTimer); progTimer = null }
