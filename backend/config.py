@@ -40,3 +40,12 @@ class Config:
     HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
     # ModelScope（模搭社区）访问令牌（拉取受限模型权重时用）
     MODELSCOPE_TOKEN = os.getenv("MODELSCOPE_TOKEN") or os.getenv("MODELSCOPE_API_TOKEN")
+
+    # DeepSeek（检测结果 AI 分析报告）：OpenAI 兼容接口
+    DEEPSEEK_API_KEY = os.getenv(
+        "DEEPSEEK_API_KEY", ""
+    )
+    DEEPSEEK_BASE_URL = os.getenv(
+        "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
+    )
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
