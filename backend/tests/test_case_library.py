@@ -32,9 +32,11 @@ def test_search_cases_matches_by_class():
     cases = search_cases(["person", "未戴安全帽"], ["person", "helmet"], top_n=3)
     assert len(cases) >= 1
     assert all("suggestion" in c for c in cases)
+    assert len(cases) <= 3
 
 
 def test_search_cases_empty_match_falls_back_to_general():
     cases = search_cases(["完全不相关xyz"], ["不存在的类"], top_n=3)
     assert len(cases) >= 1
     assert all(c["category"] == "通用" for c in cases)
+    assert len(cases) <= 3
