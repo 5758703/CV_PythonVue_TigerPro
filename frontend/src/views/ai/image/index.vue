@@ -1,6 +1,7 @@
 <template>
   <div>
-    <el-card shadow="never" class="cfg-card">
+    <el-card shadow="never" class="cfg-card panel">
+      <div class="panel-title"><span class="pt-bar"></span>检测配置</div>
       <el-form :inline="true">
         <el-form-item label="模型分类">
           <el-select v-model="category" placeholder="全部分类" clearable style="width: 160px" @change="onCategoryChange">
@@ -49,7 +50,8 @@
       />
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="panel">
+      <div class="panel-title"><span class="pt-bar"></span>检测结果</div>
       <div v-if="detecting" class="progress-box">
         <div class="progress-title">检测中… 预计剩余 {{ etaText }}</div>
         <el-progress :percentage="percent" :stroke-width="18" :text-inside="true" :status="percent >= 100 ? 'success' : ''" />
@@ -119,68 +121,123 @@
         </div>
       </div>
 
-        <div v-if="report" ref="reportEl" class="ai-report">
-          <div class="rp-head">
-            <h3>智能检测分析报告</h3>
-            <div class="rp-meta">
-              <span>模型：{{ report.meta.modelName }}（{{ report.meta.category || '未分类' }}）</span>
-              <span>图片：{{ report.meta.imageName }}</span>
-              <span>生成时间：{{ report.meta.generatedAt }}</span>
-              <span>置信度阈值：{{ report.meta.conf }}</span>
-            </div>
-            <el-button class="rp-pdf" link type="primary" :icon="Download" @click="exportPdf">下载PDF</el-button>
+        <div v-if="report" class="report-stage">
+          <div class="report-bar">
+            <span class="rb-label">A4 正式报告</span>
+            <el-button type="primary" :icon="Download" @click="exportPdf">下载 PDF</el-button>
           </div>
 
-          <el-alert v-if="!report.meta.aiAvailable" type="warning" :closable="false" :title="report.warning" style="margin-bottom: 12px" />
+          <article ref="reportEl" class="a4-sheet">
+            <div class="sheet-watermark">智能检测报告</div>
 
-          <div class="rp-imgs">
-            <div class="rp-img"><div class="rp-img-t">原图</div><img v-if="previewSrc" :src="previewSrc" /></div>
-            <div class="rp-img"><div class="rp-img-t">检测结果</div><img v-if="resultSrc" :src="resultSrc" /></div>
-          </div>
+            <header class="doc-head">
+              <div class="doc-org">TIGERPRO · 计算机视觉智能检测平台</div>
+              <h1 class="doc-title">智能检测分析报告</h1>
+              <div class="doc-subtitle">Intelligent Detection Analysis Report</div>
+              <div class="doc-no">报告编号　{{ reportNo }}</div>
+            </header>
 
-          <div class="rp-sec">
-            <h4>一、检测概述</h4>
-            <p>{{ report.summary }}</p>
-            <div class="rp-tags">
-              <el-tag v-for="(b, i) in report.stats.byClass" :key="i" type="info" effect="plain">
-                {{ b.className }} × {{ b.count }}（{{ (b.avgConf * 100).toFixed(0) }}%）
-              </el-tag>
-            </div>
-          </div>
+            <table class="doc-info">
+              <tbody>
+                <tr>
+                  <th>检测模型</th>
+                  <td>{{ report.meta.modelName }}</td>
+                  <th>模型分类</th>
+                  <td>{{ report.meta.category || '未分类' }}</td>
+                </tr>
+                <tr>
+                  <th>检测图片</th>
+                  <td>{{ report.meta.imageName }}</td>
+                  <th>置信度阈值</th>
+                  <td class="mono">{{ report.meta.conf }}</td>
+                </tr>
+                <tr>
+                  <th>生成时间</th>
+                  <td class="mono">{{ report.meta.generatedAt }}</td>
+                  <th>分析引擎</th>
+                  <td>
+                    <span :class="['engine-dot', report.meta.aiAvailable ? 'on' : 'off']"></span>
+                    {{ report.meta.aiAvailable ? 'DeepSeek AI' : '案例库（降级）' }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
 
-          <div class="rp-sec">
-            <h4>二、风险评估</h4>
-            <el-tag :type="riskTagType(report.risk.level)" effect="dark">风险等级：{{ report.risk.level }}</el-tag>
-            <p>{{ report.risk.desc }}</p>
-          </div>
+            <div v-if="!report.meta.aiAvailable" class="doc-warn">{{ report.warning }}</div>
 
-          <div class="rp-sec" v-if="report.findings.length">
-            <h4>三、逐项发现</h4>
-            <ul><li v-for="(f, i) in report.findings" :key="i"><b>{{ f.className }}：</b>{{ f.note }}</li></ul>
-          </div>
+            <figure class="doc-figs">
+              <div class="fig">
+                <img v-if="previewSrc" :src="previewSrc" />
+                <figcaption>图 1　原始图像</figcaption>
+              </div>
+              <div class="fig">
+                <img v-if="resultSrc" :src="resultSrc" />
+                <figcaption>图 2　检测标注结果</figcaption>
+              </div>
+            </figure>
 
-          <div class="rp-sec">
-            <h4>四、AI 智能建议</h4>
-            <ol class="rp-sug"><li v-for="(s, i) in report.suggestions" :key="i"><b>{{ s.title }}</b><div>{{ s.detail }}</div></li></ol>
-          </div>
+            <section class="doc-sec">
+              <div class="sec-h"><span class="sec-no">01</span><h2>检测概述</h2></div>
+              <p>{{ report.summary }}</p>
+              <div class="chips">
+                <span v-for="(b, i) in report.stats.byClass" :key="i" class="chip">
+                  {{ b.className }}<b>×{{ b.count }}</b><i class="mono">{{ (b.avgConf * 100).toFixed(0) }}%</i>
+                </span>
+              </div>
+            </section>
 
-          <div class="rp-sec" v-if="report.matchedCases.length">
-            <h4>五、匹配案例</h4>
-            <div class="rp-tags">
-              <el-tag v-for="c in report.matchedCases" :key="c.id" :type="riskTagType(c.risk_level)" effect="plain">
-                {{ c.title }}（{{ c.category }}·{{ c.risk_level }}）
-              </el-tag>
-            </div>
-            <div class="rp-tags" style="margin-top: 6px">
-              <span class="rp-kw">关键词：</span>
-              <el-tag v-for="(k, i) in report.keywords" :key="i" size="small">{{ k }}</el-tag>
-            </div>
-          </div>
+            <section class="doc-sec">
+              <div class="sec-h"><span class="sec-no">02</span><h2>风险评估</h2></div>
+              <div class="risk-row">
+                <span class="risk-stamp" :class="riskClass(report.risk.level)">
+                  <em>风险等级</em><strong>{{ report.risk.level }}</strong>
+                </span>
+                <p>{{ report.risk.desc }}</p>
+              </div>
+            </section>
 
-          <div class="rp-sec">
-            <h4>六、结论</h4>
-            <p>{{ report.conclusion }}</p>
-          </div>
+            <section class="doc-sec" v-if="report.findings.length">
+              <div class="sec-h"><span class="sec-no">03</span><h2>逐项发现</h2></div>
+              <ul class="findings">
+                <li v-for="(f, i) in report.findings" :key="i"><b>{{ f.className }}</b>{{ f.note }}</li>
+              </ul>
+            </section>
+
+            <section class="doc-sec">
+              <div class="sec-h"><span class="sec-no">04</span><h2>AI 智能建议</h2></div>
+              <ol class="suggestions">
+                <li v-for="(s, i) in report.suggestions" :key="i">
+                  <h3>{{ s.title }}</h3>
+                  <p>{{ s.detail }}</p>
+                </li>
+              </ol>
+            </section>
+
+            <section class="doc-sec" v-if="report.matchedCases.length">
+              <div class="sec-h"><span class="sec-no">05</span><h2>匹配案例与关键词</h2></div>
+              <div class="cases">
+                <div v-for="c in report.matchedCases" :key="c.id" class="case" :class="riskClass(c.risk_level)">
+                  <span class="case-dot"></span>
+                  <span class="case-title">{{ c.title }}</span>
+                  <span class="case-meta">{{ c.category }} · {{ c.risk_level }}</span>
+                </div>
+              </div>
+              <div class="kw-row">
+                <span class="kw-label">关键词</span>
+                <span v-for="(k, i) in report.keywords" :key="i" class="kw">{{ k }}</span>
+              </div>
+            </section>
+
+            <section class="doc-sec">
+              <div class="sec-h"><span class="sec-no">06</span><h2>结论</h2></div>
+              <p class="conclusion">{{ report.conclusion }}</p>
+            </section>
+
+            <footer class="doc-foot">
+              <span>本报告由 TigerPro 智能检测平台自动生成{{ report.meta.aiAvailable ? '，AI 分析由 DeepSeek 提供' : '（AI 不可用，已采用案例库兜底）' }}。</span>
+              <span class="mono">{{ reportNo }}</span>
+            </footer>
+          </article>
         </div>
     </el-card>
 
@@ -425,7 +482,13 @@ const genReport = async () => {
   }
 }
 
-const riskTagType = (level) => ({ 高: 'danger', 中: 'warning', 低: 'success' }[level] || 'info')
+const riskClass = (level) => ({ 高: 'is-high', 中: 'is-mid', 低: 'is-low' }[level] || 'is-low')
+
+// 报告编号：由生成时间数字串派生，形如 AIDR-202606241200
+const reportNo = computed(() => {
+  const digits = (report.value?.meta?.generatedAt || '').replace(/\D/g, '').slice(0, 12)
+  return `AIDR-${digits || '------------'}`
+})
 
 const exportPdf = async () => {
   if (!reportEl.value) return
@@ -482,52 +545,69 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.cfg-card {
-  margin-bottom: 12px;
+/* ===== 设计令牌（深蓝公文 + 纸张）===== */
+.panel {
+  --ink: #1a2433;
+  --navy: #1f3a5f;
+  --navy-soft: #2f547f;
+  --rule: #c8d0db;
+  --rule-soft: #e6eaf1;
+  --muted: #6b7787;
+  --paper: #ffffff;
+  --desk: #eef1f6;
+  --seal: #b23b3b;
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  --serif: 'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', SimSun, serif;
 }
+
+/* ===== 卡片面板标题 ===== */
+.panel { border: 1px solid var(--rule-soft); border-radius: 10px; }
+.cfg-card { margin-bottom: 14px; }
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--ink);
+  margin-bottom: 16px;
+}
+.pt-bar {
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: linear-gradient(var(--navy), var(--navy-soft));
+}
+
 .picked {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 8px;
   font-size: 13px;
-  color: #5a6b87;
+  color: var(--muted);
 }
-.pk-name {
-  font-weight: 600;
-  color: #3a4a63;
-}
-.progress-box {
-  padding: 28px 8px;
-}
-.progress-title {
-  font-weight: 600;
-  color: #3a4a63;
-  margin-bottom: 12px;
-}
-.progress-hint {
-  margin-top: 10px;
-  font-size: 12px;
-  color: #909399;
-}
-.grid {
-  display: flex;
-  gap: 16px;
-}
-.col {
-  flex: 1 1 50%;
-  min-width: 0;
-}
+.pk-name { font-weight: 600; color: var(--ink); }
+
+.progress-box { padding: 28px 8px; }
+.progress-title { font-weight: 600; color: var(--ink); margin-bottom: 12px; }
+.progress-hint { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+/* ===== 检测结果双栏 ===== */
+.grid { display: flex; gap: 16px; }
+.col { flex: 1 1 50%; min-width: 0; }
 .col-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
-  color: #3a4a63;
+  color: var(--ink);
   margin-bottom: 8px;
 }
 .img-box {
-  background: #f4f6fb;
+  background: #f6f8fc;
+  border: 1px solid var(--rule-soft);
   border-radius: 8px;
   height: 380px;
   display: flex;
@@ -535,35 +615,14 @@ onBeforeUnmount(() => {
   justify-content: center;
   overflow: hidden;
 }
-.img-box :deep(.el-image) {
-  max-width: 100%;
-  max-height: 100%;
-}
-.stage {
-  position: relative;
-}
-.stage-img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  display: block;
-}
-.stage-canvas {
-  position: absolute;
-  cursor: pointer;
-}
-.result-meta {
-  margin-top: 16px;
-}
-.det-table {
-  margin-top: 12px;
-}
-.det-table :deep(.el-table__row) {
-  cursor: pointer;
-}
-.det-table :deep(.active-row > td.el-table__cell) {
-  background: #fff3e0 !important;
-}
+.img-box :deep(.el-image) { max-width: 100%; max-height: 100%; }
+.stage { position: relative; }
+.stage-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.stage-canvas { position: absolute; cursor: pointer; }
+.result-meta { margin-top: 16px; }
+.det-table { margin-top: 12px; }
+.det-table :deep(.el-table__row) { cursor: pointer; }
+.det-table :deep(.active-row > td.el-table__cell) { background: #fff3e0 !important; }
 .cls-dot {
   display: inline-block;
   width: 10px;
@@ -572,81 +631,347 @@ onBeforeUnmount(() => {
   margin-right: 6px;
   vertical-align: middle;
 }
-.report-actions {
-  margin-top: 16px;
-}
-.ai-report {
+.report-actions { margin-top: 16px; }
+
+/* ===== A4 报告：桌面与工具条 ===== */
+.report-stage {
   margin-top: 20px;
-  padding: 20px;
-  border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  background: #fff;
+  padding: 24px;
+  background:
+    radial-gradient(120% 120% at 50% 0%, #f3f5f9 0%, var(--desk) 70%);
+  border-radius: 10px;
+  border: 1px solid var(--rule-soft);
 }
-.rp-head {
-  position: relative;
-  border-bottom: 2px solid #409eff;
-  padding-bottom: 10px;
-  margin-bottom: 16px;
-}
-.rp-head h3 {
-  margin: 0 0 6px;
-  color: #1f2d3d;
-}
-.rp-meta {
+.report-bar {
+  max-width: 794px;
+  margin: 0 auto 16px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  font-size: 12px;
-  color: #909399;
-}
-.rp-pdf {
-  position: absolute;
-  right: 0;
-  top: 0;
-}
-.rp-imgs {
-  display: flex;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.rp-img {
-  flex: 1;
-  min-width: 0;
-}
-.rp-img-t {
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 4px;
-}
-.rp-img img {
-  width: 100%;
-  border-radius: 6px;
-  border: 1px solid #ebeef5;
-}
-.rp-sec {
-  margin-bottom: 16px;
-}
-.rp-sec h4 {
-  margin: 0 0 8px;
-  color: #3a4a63;
-}
-.rp-sec p {
-  margin: 6px 0;
-  line-height: 1.7;
-  color: #5a6b87;
-}
-.rp-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
   align-items: center;
+  justify-content: space-between;
 }
-.rp-sug li {
-  margin-bottom: 10px;
-  line-height: 1.7;
-}
-.rp-kw {
+.rb-label {
   font-size: 12px;
-  color: #909399;
+  letter-spacing: 2px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+/* ===== A4 纸张 ===== */
+.a4-sheet {
+  position: relative;
+  width: 794px;
+  max-width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+  padding: 56px 60px 40px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(26, 36, 51, 0.06), 0 18px 50px rgba(26, 36, 51, 0.14);
+  border: 1px solid #dfe4ec;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.a4-sheet > *:not(.sheet-watermark) { position: relative; z-index: 1; }
+.sheet-watermark {
+  position: absolute;
+  top: 46%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-22deg);
+  font-family: var(--serif);
+  font-size: 88px;
+  font-weight: 700;
+  letter-spacing: 12px;
+  color: rgba(31, 58, 95, 0.045);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+/* ===== 报告抬头 ===== */
+.doc-head { text-align: center; padding-bottom: 18px; }
+.doc-org {
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: var(--navy);
+  font-weight: 600;
+}
+.doc-title {
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  color: var(--ink);
+  margin: 10px 0 4px;
+}
+.doc-subtitle {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.doc-no {
+  margin-top: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--navy);
+}
+.doc-head {
+  border-bottom: 3px double var(--navy);
+}
+
+/* ===== 信息网格 ===== */
+.doc-info {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0 4px;
+  font-size: 13px;
+}
+.doc-info th,
+.doc-info td {
+  border: 1px solid var(--rule);
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: middle;
+}
+.doc-info th {
+  width: 92px;
+  background: #f4f7fb;
+  color: var(--navy);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.doc-info td { color: var(--ink); word-break: break-all; }
+.mono { font-family: var(--mono); }
+.engine-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.engine-dot.on { background: #2f9e44; box-shadow: 0 0 0 3px rgba(47, 158, 68, 0.16); }
+.engine-dot.off { background: #d98a00; box-shadow: 0 0 0 3px rgba(217, 138, 0, 0.16); }
+
+.doc-warn {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-left: 3px solid #d98a00;
+  background: #fff8ec;
+  color: #8a5d00;
+  font-size: 13px;
+}
+
+/* ===== 图像 ===== */
+.doc-figs {
+  display: flex;
+  gap: 18px;
+  margin: 22px 0 6px;
+}
+.fig { flex: 1; min-width: 0; }
+.fig img {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--rule);
+  background: #f6f8fc;
+}
+.fig figcaption {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ===== 章节 ===== */
+.doc-sec { margin-top: 26px; }
+.sec-h {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--rule);
+}
+.sec-no {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--navy);
+}
+.sec-h h2 {
+  font-family: var(--serif);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--ink);
+  margin: 0;
+}
+.doc-sec p {
+  margin: 0 0 8px;
+  line-height: 1.85;
+  color: #34404f;
+  text-align: justify;
+}
+
+/* 概述统计 chips */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: #f8fafc;
+  font-size: 12px;
+  color: var(--ink);
+}
+.chip b { color: var(--navy); }
+.chip i { font-style: normal; color: var(--muted); }
+
+/* 风险印章 */
+.risk-row { display: flex; align-items: flex-start; gap: 18px; }
+.risk-row p { flex: 1; margin: 0; }
+.risk-stamp {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 92px;
+  border: 2.5px solid var(--seal);
+  border-radius: 8px;
+  color: var(--seal);
+  transform: rotate(-5deg);
+  box-shadow: inset 0 0 0 2px rgba(178, 59, 59, 0.18);
+}
+.risk-stamp em {
+  font-style: normal;
+  font-size: 11px;
+  letter-spacing: 2px;
+}
+.risk-stamp strong {
+  font-family: var(--serif);
+  font-size: 30px;
+  line-height: 1;
+  margin-top: 4px;
+}
+.risk-stamp.is-mid { border-color: #d98a00; color: #d98a00; box-shadow: inset 0 0 0 2px rgba(217, 138, 0, 0.18); }
+.risk-stamp.is-low { border-color: #2f9e44; color: #2f9e44; box-shadow: inset 0 0 0 2px rgba(47, 158, 68, 0.18); }
+
+/* 逐项发现 */
+.findings { margin: 0; padding-left: 0; list-style: none; }
+.findings li {
+  padding: 8px 0 8px 16px;
+  border-bottom: 1px dashed var(--rule-soft);
+  line-height: 1.7;
+  color: #34404f;
+  position: relative;
+}
+.findings li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--navy);
+}
+.findings li b { color: var(--ink); margin-right: 8px; }
+
+/* AI 建议 */
+.suggestions { margin: 0; padding-left: 0; list-style: none; counter-reset: sug; }
+.suggestions li {
+  counter-increment: sug;
+  position: relative;
+  padding: 6px 0 14px 40px;
+}
+.suggestions li::before {
+  content: counter(sug, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 4px;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--navy);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.suggestions h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.suggestions p { margin: 0; }
+
+/* 匹配案例 */
+.cases { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.case {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: #fbfcfe;
+  font-size: 13px;
+}
+.case.is-high { border-left-color: var(--seal); }
+.case.is-mid { border-left-color: #d98a00; }
+.case.is-low { border-left-color: #2f9e44; }
+.case-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; opacity: 0.7; }
+.case.is-high .case-dot { background: var(--seal); }
+.case.is-mid .case-dot { background: #d98a00; }
+.case.is-low .case-dot { background: #2f9e44; }
+.case-title { font-weight: 600; color: var(--ink); }
+.case-meta { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+.kw-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kw-label { font-size: 12px; color: var(--muted); letter-spacing: 1px; }
+.kw {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: #eef2f8;
+  color: var(--navy);
+}
+
+.conclusion {
+  padding: 14px 16px;
+  background: #f4f7fb;
+  border-left: 3px solid var(--navy);
+  font-weight: 500;
+}
+
+/* 页脚 */
+.doc-foot {
+  margin-top: 32px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 860px) {
+  .a4-sheet { padding: 32px 24px 28px; }
+  .doc-figs { flex-direction: column; }
+  .report-stage { padding: 14px; }
 }
 </style>
