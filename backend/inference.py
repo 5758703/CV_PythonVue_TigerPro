@@ -444,6 +444,69 @@ def transcribe_audio_onnx(model_dir, audio_path):
     return _parse_sensevoice_rich(raw)
 
 
+# ------------------------------------------------------------ Whisper 语音识别（transformers，HF whisper 模型目录）
+_whisper_cache = {}  # model_dir -> transformers ASR pipeline
+# Whisper 语言码 -> 中文（覆盖常见语种）
+_WHISPER_LANG_CN = {"chinese": "中文", "english": "英文", "cantonese": "粤语",
+                    "japanese": "日语", "korean": "韩语", "zh": "中文", "en": "英文",
+                    "yue": "粤语", "ja": "日语", "ko": "韩语"}
+
+
+def _get_whisper(model_dir):
+    """加载/缓存 Whisper ASR pipeline（transformers，CPU）。
+
+    chunk_length_s=30 启用分块，支持任意时长音频；惰性导入 transformers/torch。
+    """
+    with _lock:
+        if model_dir in _whisper_cache:
+            return _whisper_cache[model_dir]
+        from transformers import pipeline  # 惰性导入
+        pipe = pipeline("automatic-speech-recognition", model=model_dir,
+                        chunk_length_s=30, device="cpu")
+        _whisper_cache[model_dir] = pipe
+        return pipe
+
+
+def _decode_audio_16k(audio_path):
+    """用 imageio-ffmpeg 自带 ffmpeg 解码任意音频 -> 16k 单声道 float32 numpy。
+
+    避免依赖系统 PATH 上的 ffmpeg（transformers 默认调用名为 `ffmpeg` 的可执行文件，
+    Windows 上常缺失，导致 "ffmpeg was not found"）。支持 wav/mp3/m4a/flac/ogg/aac。
+    """
+    import subprocess
+    import imageio_ffmpeg
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [exe, "-nostdin", "-threads", "1", "-i", audio_path,
+           "-ac", "1", "-ar", "16000", "-f", "f32le", "-hide_banner",
+           "-loglevel", "error", "pipe:1"]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        raise RuntimeError(f"音频解码失败：{proc.stderr.decode('utf-8', 'ignore')[:200]}")
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
+
+
+def transcribe_audio_whisper(model_dir, audio_path):
+    """Whisper 语音识别（transformers）：转写 + 检测语言。
+
+    task=transcribe 保证按原语言转写（不翻译为英文）；返回 {text, language, emotion, events}
+    （与 SenseVoice 同结构，emotion/events 为空，供前端统一渲染）。
+    自行用 ffmpeg 解码为波形再喂入 pipeline，规避系统缺 ffmpeg 的问题。
+    """
+    pipe = _get_whisper(model_dir)
+    waveform = _decode_audio_16k(audio_path)
+    res = pipe({"raw": waveform, "sampling_rate": 16000}, return_language=True,
+               generate_kwargs={"task": "transcribe"})
+    text = (res.get("text") or "").strip()
+    # 语言取自分块 chunks 的首个非空 language（return_language=True 时提供）
+    lang = None
+    for ch in res.get("chunks") or []:
+        if ch.get("language"):
+            lang = ch["language"]
+            break
+    language = _WHISPER_LANG_CN.get((lang or "").lower(), lang) if lang else None
+    return {"text": text, "language": language, "emotion": None, "events": []}
+
+
 # ------------------------------------------------------------ Linly-Talker 数字人（SadTalker）
 def synthesize_talking_head(model_dir, image_path, audio_path, out_path, progress_cb=None):
     """数字人合成：人像图 + 驱动音频 -> 说话头像视频(H.264 mp4)。

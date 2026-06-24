@@ -97,6 +97,12 @@
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="transformers（HF 模型目录）" value="transformers" />
+            <el-option label="funasr（语音识别）" value="funasr" />
+            <el-option label="funasr-onnx（语音识别 onnx）" value="funasr-onnx" />
+            <el-option label="sherpa-onnx（语音合成 onnx）" value="sherpa-onnx" />
+            <el-option label="cosyvoice（语音合成/克隆）" value="cosyvoice" />
+            <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
+            <el-option label="linly（数字人）" value="linly" />
           </el-select>
         </el-form-item>
         <el-form-item label="任务类型" prop="task">
@@ -111,6 +117,9 @@
             <el-option label="文本生成 text-generation" value="text-generation" />
             <el-option label="命名实体识别 token-classification" value="token-classification" />
             <el-option label="问答 question-answering" value="question-answering" />
+            <el-option label="语音识别 automatic-speech-recognition" value="automatic-speech-recognition" />
+            <el-option label="语音合成 text-to-speech" value="text-to-speech" />
+            <el-option label="数字人 talking-head" value="talking-head" />
           </el-select>
         </el-form-item>
         <el-form-item label="版本">
@@ -246,13 +255,25 @@ const TASK_LABELS = {
   "text-generation": "文本生成",
   "token-classification": "实体识别",
   "question-answering": "问答",
+  "automatic-speech-recognition": "语音识别",
+  "text-to-speech": "语音合成",
+  "talking-head": "数字人",
 };
 const taskLabel = (t) => TASK_LABELS[t] || t || "目标检测";
 const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "image-classification" ? "success" : "");
 
+const LIB_DEFAULT_TASK = {
+  ultralytics: "object-detection",
+  "funasr": "automatic-speech-recognition",
+  "funasr-onnx": "automatic-speech-recognition",
+  "sherpa-onnx": "text-to-speech",
+  "cosyvoice": "text-to-speech",
+  "vibevoice": "text-to-speech",
+  "linly": "talking-head",
+};
 const onLibChange = (lib) => {
   if (lib === "transformers" && form.task === "object-detection") form.task = "text-classification";
-  if (lib === "ultralytics") form.task = "object-detection";
+  else if (LIB_DEFAULT_TASK[lib]) form.task = LIB_DEFAULT_TASK[lib];
 };
 const form = reactive(emptyForm());
 
