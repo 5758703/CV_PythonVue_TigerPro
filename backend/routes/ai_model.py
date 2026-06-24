@@ -427,6 +427,9 @@ def transcribe_route(mid):
         if (m.library or "") == "funasr-onnx":
             from inference import transcribe_audio_onnx
             result = transcribe_audio_onnx(path, audio_path)
+        elif (m.library or "") == "transformers":
+            from inference import transcribe_audio_whisper
+            result = transcribe_audio_whisper(path, audio_path)
         else:
             from inference import transcribe_audio
             result = transcribe_audio(path, audio_path)
@@ -677,6 +680,37 @@ def detect(mid):
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"推理失败：{e}"), 500
     return jsonify(code=0, message="检测完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/analyze-report")
+@permission_required("ai:model:query")
+def analyze_report(mid):
+    """对已完成的图片检测结果做 DeepSeek AI 分析，生成正式检测报告。"""
+    m = AiModel.query.get_or_404(mid)
+    data = request.get_json(silent=True) or {}
+    detections = data.get("detections")
+    if not isinstance(detections, list):
+        return jsonify(code=400, message="缺少检测结果 detections"), 400
+
+    try:
+        conf = float(data.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+
+    try:
+        from report import build_report
+        result = build_report(
+            model_name=m.model_name,
+            model_category=m.category,
+            detections=detections,
+            width=data.get("width"),
+            height=data.get("height"),
+            conf=conf,
+            image_name=data.get("imageName") or "未命名图片",
+        )
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"报告生成失败：{e}"), 500
+    return jsonify(code=0, message="报告生成完成", data=result)
 
 
 # 视频检测异步任务进度表：jobId -> {status, processed, total, output, stats, error}
