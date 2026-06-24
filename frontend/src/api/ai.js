@@ -84,5 +84,8 @@ export const modelApi = {
     request.post(`/ai/model/${id}/tts-clone`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
-    })
+    }),
+  // 对检测结果做 DeepSeek AI 分析，生成正式报告
+  analyzeReport: (id, payload) =>
+    request.post(`/ai/model/${id}/analyze-report`, payload, { timeout: 0 }),
 }

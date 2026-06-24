@@ -112,7 +112,76 @@
             <template #default="{ row }">{{ row.bbox.join(', ') }}</template>
           </el-table-column>
         </el-table>
+        <div class="report-actions">
+          <el-button type="primary" :loading="reporting" @click="genReport">
+            生成AI检测报告
+          </el-button>
+        </div>
       </div>
+
+        <div v-if="report" ref="reportEl" class="ai-report">
+          <div class="rp-head">
+            <h3>智能检测分析报告</h3>
+            <div class="rp-meta">
+              <span>模型：{{ report.meta.modelName }}（{{ report.meta.category || '未分类' }}）</span>
+              <span>图片：{{ report.meta.imageName }}</span>
+              <span>生成时间：{{ report.meta.generatedAt }}</span>
+              <span>置信度阈值：{{ report.meta.conf }}</span>
+            </div>
+            <el-button class="rp-pdf" link type="primary" :icon="Download" @click="exportPdf">下载PDF</el-button>
+          </div>
+
+          <el-alert v-if="!report.meta.aiAvailable" type="warning" :closable="false" :title="report.warning" style="margin-bottom: 12px" />
+
+          <div class="rp-imgs">
+            <div class="rp-img"><div class="rp-img-t">原图</div><img v-if="previewSrc" :src="previewSrc" /></div>
+            <div class="rp-img"><div class="rp-img-t">检测结果</div><img v-if="resultSrc" :src="resultSrc" /></div>
+          </div>
+
+          <div class="rp-sec">
+            <h4>一、检测概述</h4>
+            <p>{{ report.summary }}</p>
+            <div class="rp-tags">
+              <el-tag v-for="(b, i) in report.stats.byClass" :key="i" type="info" effect="plain">
+                {{ b.className }} × {{ b.count }}（{{ (b.avgConf * 100).toFixed(0) }}%）
+              </el-tag>
+            </div>
+          </div>
+
+          <div class="rp-sec">
+            <h4>二、风险评估</h4>
+            <el-tag :type="riskTagType(report.risk.level)" effect="dark">风险等级：{{ report.risk.level }}</el-tag>
+            <p>{{ report.risk.desc }}</p>
+          </div>
+
+          <div class="rp-sec" v-if="report.findings.length">
+            <h4>三、逐项发现</h4>
+            <ul><li v-for="(f, i) in report.findings" :key="i"><b>{{ f.className }}：</b>{{ f.note }}</li></ul>
+          </div>
+
+          <div class="rp-sec">
+            <h4>四、AI 智能建议</h4>
+            <ol class="rp-sug"><li v-for="(s, i) in report.suggestions" :key="i"><b>{{ s.title }}</b><div>{{ s.detail }}</div></li></ol>
+          </div>
+
+          <div class="rp-sec" v-if="report.matchedCases.length">
+            <h4>五、匹配案例</h4>
+            <div class="rp-tags">
+              <el-tag v-for="c in report.matchedCases" :key="c.id" :type="riskTagType(c.risk_level)" effect="plain">
+                {{ c.title }}（{{ c.category }}·{{ c.risk_level }}）
+              </el-tag>
+            </div>
+            <div class="rp-tags" style="margin-top: 6px">
+              <span class="rp-kw">关键词：</span>
+              <el-tag v-for="(k, i) in report.keywords" :key="i" size="small">{{ k }}</el-tag>
+            </div>
+          </div>
+
+          <div class="rp-sec">
+            <h4>六、结论</h4>
+            <p>{{ report.conclusion }}</p>
+          </div>
+        </div>
     </el-card>
 
     <el-image-viewer v-if="viewer && resultSrc" :url-list="[resultSrc]" hide-on-click-modal @close="viewer = false" />
@@ -176,6 +245,9 @@ const onCategoryChange = () => {
 const previewSrc = ref('')
 const detecting = ref(false)
 const result = ref(null)
+const report = ref(null)
+const reporting = ref(false)
+const reportEl = ref(null)
 
 const stageEl = ref(null)
 const imgEl = ref(null)
@@ -287,6 +359,7 @@ const loadModels = async () => {
 const clearResult = () => {
   result.value = null
   activeIndex.value = -1
+  report.value = null
 }
 
 const onPick = (uploadFile) => {
@@ -318,6 +391,7 @@ const detect = async () => {
     const res = await modelApi.detect(modelId.value, fd)
     estByModel[modelId.value] = Date.now() - startTime // 记录本次耗时供下次估算
     result.value = res.data
+    report.value = null
     activeIndex.value = -1
     await nextTick()
     syncCanvas()
@@ -327,6 +401,33 @@ const detect = async () => {
   }
 }
 
+const genReport = async () => {
+  if (!result.value) return
+  reporting.value = true
+  try {
+    const payload = {
+      detections: result.value.detections,
+      width: result.value.width,
+      height: result.value.height,
+      count: result.value.count,
+      imageName: file.value?.name || '未命名图片',
+      conf: conf.value
+    }
+    const res = await modelApi.analyzeReport(modelId.value, payload)
+    report.value = res.data
+    if (report.value?.warning) ElMessage.warning(report.value.warning)
+  } catch (e) {
+    ElMessage.error('报告生成失败')
+  } finally {
+    reporting.value = false
+  }
+}
+
+const riskTagType = (level) => ({ 高: 'danger', 中: 'warning', 低: 'success' }[level] || 'info')
+
+// 真正的 PDF 导出在 Task 6 接入；此处占位以便本任务独立验证
+const exportPdf = () => ElMessage.info('PDF 导出将在下一步接入')
+
 const clearAll = () => {
   if (progTimer) { clearInterval(progTimer); progTimer = null }
   if (previewSrc.value) URL.revokeObjectURL(previewSrc.value)
@@ -335,6 +436,7 @@ const clearAll = () => {
   result.value = null
   imageInfo.value = null
   activeIndex.value = -1
+  report.value = null
 }
 
 const downloadResult = () => {
@@ -444,5 +546,82 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   margin-right: 6px;
   vertical-align: middle;
+}
+.report-actions {
+  margin-top: 16px;
+}
+.ai-report {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fff;
+}
+.rp-head {
+  position: relative;
+  border-bottom: 2px solid #409eff;
+  padding-bottom: 10px;
+  margin-bottom: 16px;
+}
+.rp-head h3 {
+  margin: 0 0 6px;
+  color: #1f2d3d;
+}
+.rp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 12px;
+  color: #909399;
+}
+.rp-pdf {
+  position: absolute;
+  right: 0;
+  top: 0;
+}
+.rp-imgs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.rp-img {
+  flex: 1;
+  min-width: 0;
+}
+.rp-img-t {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 4px;
+}
+.rp-img img {
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid #ebeef5;
+}
+.rp-sec {
+  margin-bottom: 16px;
+}
+.rp-sec h4 {
+  margin: 0 0 8px;
+  color: #3a4a63;
+}
+.rp-sec p {
+  margin: 6px 0;
+  line-height: 1.7;
+  color: #5a6b87;
+}
+.rp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.rp-sug li {
+  margin-bottom: 10px;
+  line-height: 1.7;
+}
+.rp-kw {
+  font-size: 12px;
+  color: #909399;
 }
 </style>
