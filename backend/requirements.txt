@@ -34,3 +34,6 @@ funasr_onnx==0.4.1
 accelerate==1.6.0
 # MeloTTS 中英混合文本转语音：sherpa-onnx 纯 onnx 引擎（CPU，win wheel）。
 sherpa-onnx==1.13.3
+# DeepSeek AI 报告：HTTP 调用 + 纯逻辑单测
+requests==2.32.3
+pytest==8.3.3
