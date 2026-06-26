@@ -102,6 +102,7 @@
             <el-option label="sherpa-onnx（语音合成 onnx）" value="sherpa-onnx" />
             <el-option label="cosyvoice（语音合成/克隆）" value="cosyvoice" />
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
+            <el-option label="voxcpm（语音合成/克隆/音色设计）" value="voxcpm" />
             <el-option label="linly（数字人）" value="linly" />
           </el-select>
         </el-form-item>
@@ -269,6 +270,7 @@ const LIB_DEFAULT_TASK = {
   "sherpa-onnx": "text-to-speech",
   "cosyvoice": "text-to-speech",
   "vibevoice": "text-to-speech",
+  "voxcpm": "text-to-speech",
   "linly": "talking-head",
 };
 const onLibChange = (lib) => {

@@ -17,6 +17,9 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="isVoxcpm" label="音色克隆">
+          <el-switch v-model="useClone" />
+        </el-form-item>
         <el-form-item v-if="!isClone && speakers.length" label="音色">
           <el-select v-model="speaker" placeholder="选择音色" style="width: 130px">
             <el-option v-for="s in speakers" :key="s" :label="s" :value="s" />
@@ -49,7 +52,7 @@
         </div>
         <el-input v-model="promptText" class="prompt-text" placeholder="参考音频对应的文本（必填，需与音频内容一致）" />
       </div>
-      <el-input v-model="text" type="textarea" :rows="5" maxlength="500" show-word-limit placeholder="输入要合成的文本…" />
+      <el-input v-model="text" type="textarea" :rows="5" maxlength="500" show-word-limit :placeholder="isVoxcpm ? '输入文本；可在开头用括号描述音色，如「(年轻女声，温柔)你好…」' : '输入要合成的文本…'" />
       <div class="bar">
         <el-button type="primary" :icon="Microphone" :loading="running" :disabled="!modelId || !text.trim() || (isClone && (!promptAudioFile || !promptText.trim()))" @click="run">开始合成</el-button>
         <el-button :icon="Refresh" @click="clearAll">清空</el-button>
@@ -94,6 +97,8 @@ const resSpeaker = ref('')
 const promptAudioFile = ref(null)
 const promptAudioSrc = ref('')
 const promptText = ref('')
+const useClone = ref(false)  // 仅 voxcpm：是否启用音色克隆
+const isVoxcpm = computed(() => currentModel.value?.library === 'voxcpm')
 
 const { running, percent, etaText, elapsedText, start, finish } = useInferProgress(modelId)
 
@@ -102,7 +107,10 @@ const filteredModels = computed(() =>
   category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value
 )
 const currentModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
-const isClone = computed(() => currentModel.value?.library === 'cosyvoice' && currentModel.value?.version === 'v2')
+const isClone = computed(() =>
+  (currentModel.value?.library === 'cosyvoice' && currentModel.value?.version === 'v2') ||
+  (isVoxcpm.value && useClone.value)
+)
 const onCategoryChange = () => {
   modelId.value = filteredModels.value[0]?.id || null
   loadSpeakers()
@@ -114,7 +122,7 @@ const PREFERRED_TTS_KEY = 'melotts-zh-en'
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
   const rows = (res.data.rows || []).filter(
-    (m) => (m.library === 'cosyvoice' || m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx') &&
+    (m) => (m.library === 'cosyvoice' || m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx' || m.library === 'voxcpm') &&
       m.task === 'text-to-speech' && m.filePath && m.status === '0'
   )
   rows.sort((a, b) => (b.modelKey === PREFERRED_TTS_KEY) - (a.modelKey === PREFERRED_TTS_KEY))
@@ -125,6 +133,7 @@ const loadModels = async () => {
 
 const loadSpeakers = async () => {
   if (!modelId.value) return
+  useClone.value = false
   try {
     const res = await modelApi.ttsSpeakers(modelId.value)
     speakers.value = Array.isArray(res.data) ? res.data : []
