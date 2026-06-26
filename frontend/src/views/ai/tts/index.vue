@@ -122,11 +122,7 @@ const PREFERRED_TTS_KEY = 'melotts-zh-en'
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
   const rows = (res.data.rows || []).filter(
-<<<<<<< HEAD
     (m) => (m.library === 'cosyvoice' || m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx' || m.library === 'voxcpm') &&
-=======
-    (m) => (m.library === 'cosyvoice' || m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx') &&
->>>>>>> 0c6e23e0c4bba7be9449151151b5a8d938e4d435
       m.task === 'text-to-speech' && m.filePath && m.status === '0'
   )
   rows.sort((a, b) => (b.modelKey === PREFERRED_TTS_KEY) - (a.modelKey === PREFERRED_TTS_KEY))

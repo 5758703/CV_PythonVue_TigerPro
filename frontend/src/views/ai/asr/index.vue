@@ -112,11 +112,7 @@ const PREFERRED_ASR_KEY = 'paraformer-zh'
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
   const rows = (res.data.rows || []).filter(
-<<<<<<< HEAD
     (m) => (m.library === 'funasr' || m.library === 'funasr-onnx' || m.library === 'transformers') &&
-=======
-    (m) => (m.library === 'funasr' || m.library === 'funasr-onnx') &&
->>>>>>> 0c6e23e0c4bba7be9449151151b5a8d938e4d435
       m.task === 'automatic-speech-recognition' && m.filePath && m.status === '0'
   )
   rows.sort((a, b) => (b.modelKey === PREFERRED_ASR_KEY) - (a.modelKey === PREFERRED_ASR_KEY))
