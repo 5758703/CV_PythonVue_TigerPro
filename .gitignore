@@ -29,3 +29,6 @@ backend/uploads/
 
 # ===== 第三方推理代码（vendored，体积大，部署时各自 git clone）=====
 third_party/
+
+# ===== 设计/计划文档（本地保留，不推送远程）=====
+docs/
