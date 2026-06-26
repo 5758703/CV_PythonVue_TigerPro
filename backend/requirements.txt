@@ -37,3 +37,5 @@ sherpa-onnx==1.13.3
 # DeepSeek AI 报告：HTTP 调用 + 纯逻辑单测
 requests==2.32.3
 pytest==8.3.3
+# VoxCPM2 文本转语音 / 音色克隆 / 音色设计（openbmb/VoxCPM2，HF voxcpm 库，48kHz 输出）
+voxcpm

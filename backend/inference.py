@@ -837,3 +837,56 @@ def synthesize_speech_melotts(model_dir, text, speed=1.0):
     buf = io.BytesIO()
     _sf.write(buf, arr, sr, format="WAV")
     return {"audio": _b64.b64encode(buf.getvalue()).decode(), "sampleRate": sr, "speaker": None}
+
+
+# ------------------------------------------------------------ VoxCPM2 文本转语音 / 克隆 / 音色设计
+_voxcpm_cache = {}  # model_dir -> VoxCPM 实例
+
+
+def _get_voxcpm(model_dir):
+    """加载/缓存 VoxCPM 模型（openbmb/VoxCPM2 等，HF voxcpm 库，CPU/GPU 自适应）。"""
+    with _lock:
+        if model_dir in _voxcpm_cache:
+            return _voxcpm_cache[model_dir]
+        try:
+            from voxcpm import VoxCPM
+        except ImportError as e:
+            raise RuntimeError(
+                "VoxCPM 本地推理需安装 voxcpm 库：pip install voxcpm") from e
+        # load_denoiser=False：关闭可选降噪器，省额外依赖并加速
+        model = VoxCPM.from_pretrained(model_dir, load_denoiser=False)
+        _voxcpm_cache[model_dir] = model
+        return model
+
+
+def _voxcpm_to_result(model, wav):
+    """VoxCPM generate 输出(numpy) -> {audio(base64 wav), sampleRate, speaker}。"""
+    import io
+    import base64 as _b64
+    import numpy as np
+    import soundfile as _sf
+
+    arr = np.asarray(wav, dtype=np.float32).squeeze()
+    if arr.size == 0:
+        raise ValueError("合成结果为空")
+    sr = int(model.tts_model.sample_rate)
+    buf = io.BytesIO()
+    _sf.write(buf, arr, sr, format="WAV")
+    return {"audio": _b64.b64encode(buf.getvalue()).decode(), "sampleRate": sr, "speaker": None}
+
+
+def synthesize_speech_voxcpm(model_dir, text, cfg_value=2.0, inference_timesteps=10):
+    """VoxCPM 纯文本转语音（含音色设计：文本开头括号描述即可，无需特殊处理）。"""
+    model = _get_voxcpm(model_dir)
+    wav = model.generate(text=text, cfg_value=cfg_value,
+                         inference_timesteps=inference_timesteps)
+    return _voxcpm_to_result(model, wav)
+
+
+def synthesize_speech_voxcpm_clone(model_dir, text, prompt_text, prompt_path,
+                                   cfg_value=2.0, inference_timesteps=10):
+    """VoxCPM 零样本音色克隆：参考音频(+其文本) → 用该音色读目标文本。"""
+    model = _get_voxcpm(model_dir)
+    wav = model.generate(text=text, prompt_wav_path=prompt_path, prompt_text=prompt_text,
+                         cfg_value=cfg_value, inference_timesteps=inference_timesteps)
+    return _voxcpm_to_result(model, wav)
