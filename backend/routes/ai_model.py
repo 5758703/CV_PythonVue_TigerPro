@@ -486,6 +486,9 @@ def tts_route(mid):
         elif (m.library or "") == "sherpa-onnx":
             from inference import synthesize_speech_melotts
             result = synthesize_speech_melotts(path, text)
+        elif (m.library or "") == "voxcpm":
+            from inference import synthesize_speech_voxcpm
+            result = synthesize_speech_voxcpm(path, text)
         else:
             from inference import synthesize_speech_hf
             result = synthesize_speech_hf(path, text, task=m.task or "text-to-speech")
@@ -522,8 +525,12 @@ def tts_clone_route(mid):
     file.save(prompt_path)
 
     try:
-        from inference import synthesize_speech_v2
-        result = synthesize_speech_v2(path, text, prompt_text, prompt_path)
+        if (m.library or "") == "voxcpm":
+            from inference import synthesize_speech_voxcpm_clone
+            result = synthesize_speech_voxcpm_clone(path, text, prompt_text, prompt_path)
+        else:
+            from inference import synthesize_speech_v2
+            result = synthesize_speech_v2(path, text, prompt_text, prompt_path)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"合成失败：{e}"), 500
     finally:
