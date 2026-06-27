@@ -715,10 +715,11 @@ def pose_route(mid):
         conf = float(request.form.get("conf", 0.25))
     except (TypeError, ValueError):
         conf = 0.25
+    draw = request.form.get("draw", "1") != "0"
 
     try:
         from inference import estimate_pose
-        result = estimate_pose(abs_path, file.read(), conf=conf, draw=True)
+        result = estimate_pose(abs_path, file.read(), conf=conf, draw=draw)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"姿态估计失败：{e}"), 500
     return jsonify(code=0, message="姿态估计完成", data=result)
@@ -1010,6 +1011,32 @@ def track_video_route(mid):
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
+
+
+@ai_model_bp.post("/<int:mid>/track-frame")
+@permission_required("ai:model:query")
+def track_frame_route(mid):
+    """摄像头实时追踪：单帧 -> 检测框 + 轨迹ID（前端叠画）。"""
+    m = AiModel.query.get_or_404(mid)
+    if (m.library or "ultralytics") != "ultralytics" or (m.task or "") != "object-detection":
+        return jsonify(code=400, message="目标追踪仅支持 YOLO（ultralytics）目标检测模型"), 400
+    abs_path = _abs_weight(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+    reset = request.form.get("reset", "0") == "1"
+    try:
+        from inference import track_frame
+        result = track_frame(abs_path, file.read(), conf=conf, reset=reset)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"追踪失败：{e}"), 500
+    return jsonify(code=0, message="ok", data=result)
 
 
 @ai_model_bp.get("/output/<path:name>")

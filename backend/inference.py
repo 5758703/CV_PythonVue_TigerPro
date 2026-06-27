@@ -326,6 +326,36 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
     }
 
 
+def track_frame(abs_path, image_bytes, conf=0.25, reset=False):
+    """单帧追踪（摄像头实时）：返回 检测框 + 轨迹ID（不画图，前端叠画）。
+
+    reset=True（会话首帧）用 persist=False 重置跟踪器/ID；之后 persist=True 续追。
+    """
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    model = _get_model(abs_path)
+    r = model.track(img, persist=not reset, tracker="bytetrack.yaml",
+                    conf=conf, verbose=False)[0]
+    names = r.names
+    detections = []
+    if r.boxes is not None:
+        ids = (r.boxes.id.int().tolist()
+               if r.boxes.id is not None else [None] * len(r.boxes))
+        for b, tid in zip(r.boxes, ids):
+            cid = int(b.cls[0])
+            detections.append({
+                "className": names.get(cid, str(cid)),
+                "classId": cid,
+                "confidence": round(float(b.conf[0]), 4),
+                "bbox": [round(float(v), 1) for v in b.xyxy[0].tolist()],
+                "trackId": tid,
+            })
+    h, w = img.shape[:2]
+    return {"detections": detections, "width": w, "height": h}
+
+
 # ------------------------------------------------------------ transformers 文本任务
 def _get_pipeline(task, model_dir):
     key = (task, model_dir)
