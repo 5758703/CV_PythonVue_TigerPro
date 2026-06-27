@@ -689,6 +689,33 @@ def detect(mid):
     return jsonify(code=0, message="检测完成", data=result)
 
 
+@ai_model_bp.post("/<int:mid>/pose")
+@permission_required("ai:model:query")
+def pose_route(mid):
+    """姿态估计（图片）：上传图片 -> 关键点 + 骨架图(base64)。"""
+    m = AiModel.query.get_or_404(mid)
+    if (m.task or "") != "pose-estimation" or (m.library or "ultralytics") != "ultralytics":
+        return jsonify(code=400, message="姿态估计仅支持 YOLO pose 模型"), 400
+    abs_path = _abs_weight(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+
+    try:
+        from inference import estimate_pose
+        result = estimate_pose(abs_path, file.read(), conf=conf, draw=True)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"姿态估计失败：{e}"), 500
+    return jsonify(code=0, message="姿态估计完成", data=result)
+
+
 @ai_model_bp.post("/<int:mid>/analyze-report")
 @permission_required("ai:model:query")
 def analyze_report(mid):
@@ -813,6 +840,79 @@ def video_progress(mid, job_id):
     if data["status"] == "error":
         return jsonify(code=500, message=f"视频检测失败：{data['error']}"), 500
     return jsonify(code=0, data=data)
+
+
+def _pose_worker(job_id, abs_path, src_path, out_path, out_name, conf):
+    """后台线程：逐帧姿态估计，按帧上报进度，完成写结果。"""
+    def cb(processed, total):
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j["processed"] = processed
+                j["total"] = total
+    try:
+        from inference import pose_video
+        stats = pose_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
+        stats["output"] = out_name
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="done", stats=stats,
+                                       processed=stats["frames"], total=stats["frames"])
+    except Exception as e:  # noqa: BLE001
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="error", error=str(e))
+    finally:
+        if os.path.isfile(src_path):
+            try:
+                os.remove(src_path)
+            except OSError:
+                pass
+
+
+@ai_model_bp.post("/<int:mid>/pose-video")
+@permission_required("ai:model:query")
+def pose_video_route(mid):
+    """姿态估计（视频）：启动异步逐帧任务，返回 jobId（进度复用 video-progress）。"""
+    m = AiModel.query.get_or_404(mid)
+    if (m.task or "") != "pose-estimation" or (m.library or "ultralytics") != "ultralytics":
+        return jsonify(code=400, message="姿态估计仅支持 YOLO pose 模型"), 400
+    abs_path = _abs_weight(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到视频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的视频格式"), 400
+
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    _ensure_dir(video_folder)
+    _ensure_dir(out_folder)
+
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
+    src_path = os.path.join(video_folder, f"{base}_{ts}{ext}")
+    out_name = f"{base}_{ts}_pose.mp4"
+    out_path = os.path.join(out_folder, out_name)
+    file.save(src_path)
+
+    job_id = uuid.uuid4().hex
+    with _video_jobs_lock:
+        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
+                               "stats": None, "error": None}
+    threading.Thread(
+        target=_pose_worker,
+        args=(job_id, abs_path, src_path, out_path, out_name, conf),
+        daemon=True,
+    ).start()
+    return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
 def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line):
