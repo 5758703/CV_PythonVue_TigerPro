@@ -815,6 +815,95 @@ def video_progress(mid, job_id):
     return jsonify(code=0, data=data)
 
 
+def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line):
+    """后台线程：逐帧追踪，按帧上报进度，完成写结果。"""
+    def cb(processed, total):
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j["processed"] = processed
+                j["total"] = total
+    try:
+        from inference import track_video
+        stats = track_video(abs_path, src_path, out_path, conf=conf, imgsz=imgsz,
+                            line=line, progress_cb=cb)
+        stats["output"] = out_name
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="done", stats=stats,
+                                       processed=stats["frames"], total=stats["frames"])
+    except Exception as e:  # noqa: BLE001
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="error", error=str(e))
+    finally:
+        if os.path.isfile(src_path):
+            try:
+                os.remove(src_path)
+            except OSError:
+                pass
+
+
+@ai_model_bp.post("/<int:mid>/track-video")
+@permission_required("ai:model:query")
+def track_video_route(mid):
+    """目标追踪：启动异步逐帧 ByteTrack 任务，返回 jobId（进度复用 video-progress）。"""
+    m = AiModel.query.get_or_404(mid)
+    if (m.library or "ultralytics") != "ultralytics" or (m.task or "") != "object-detection":
+        return jsonify(code=400, message="目标追踪仅支持 YOLO（ultralytics）目标检测模型"), 400
+    abs_path = _abs_weight(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到视频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的视频格式"), 400
+
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+    try:
+        imgsz = int(request.form.get("imgsz", 640))
+    except (TypeError, ValueError):
+        imgsz = 640
+
+    line = None
+    raw_line = request.form.get("line")
+    if raw_line:
+        try:
+            import json
+            parsed = json.loads(raw_line)
+            if isinstance(parsed, list) and len(parsed) == 4:
+                line = [float(v) for v in parsed]
+        except (ValueError, TypeError):
+            line = None
+
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    _ensure_dir(video_folder)
+    _ensure_dir(out_folder)
+
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
+    src_path = os.path.join(video_folder, f"{base}_{ts}{ext}")
+    out_name = f"{base}_{ts}_track.mp4"
+    out_path = os.path.join(out_folder, out_name)
+    file.save(src_path)
+
+    job_id = uuid.uuid4().hex
+    with _video_jobs_lock:
+        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
+                               "stats": None, "error": None}
+    threading.Thread(
+        target=_track_worker,
+        args=(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line),
+        daemon=True,
+    ).start()
+    return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
+
+
 @ai_model_bp.get("/output/<path:name>")
 @permission_required("ai:model:query")
 def get_output(name):
