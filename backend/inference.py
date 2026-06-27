@@ -890,3 +890,27 @@ def synthesize_speech_voxcpm_clone(model_dir, text, prompt_text, prompt_path,
     wav = model.generate(text=text, prompt_wav_path=prompt_path, prompt_text=prompt_text,
                          cfg_value=cfg_value, inference_timesteps=inference_timesteps)
     return _voxcpm_to_result(model, wav)
+
+
+# ------------------------------------------------------------ 越线计数（纯几何，可单测）
+def _orient(ax, ay, bx, by, cx, cy):
+    """点 C 相对有向线段 A->B 的叉积；>0 / <0 表示两侧，=0 共线。"""
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+
+
+def _crosses(prev, curr, line):
+    """移动线段 prev->curr 是否穿过计数线段 line=[x1,y1,x2,y2]。
+
+    返回 0=未穿；+1=进（prev 在线负侧→正侧）；-1=出（反向）。
+    用线段相交判定：两线段互相分隔对方端点才算真正相交。
+    """
+    ax, ay = prev
+    bx, by = curr
+    x1, y1, x2, y2 = line
+    d1 = _orient(x1, y1, x2, y2, ax, ay)   # prev 相对计数线
+    d2 = _orient(x1, y1, x2, y2, bx, by)   # curr 相对计数线
+    d3 = _orient(ax, ay, bx, by, x1, y1)   # 线端点相对移动线段
+    d4 = _orient(ax, ay, bx, by, x2, y2)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
+        return 1 if d1 < 0 else -1
+    return 0
