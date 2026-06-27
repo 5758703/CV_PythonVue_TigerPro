@@ -155,29 +155,31 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
     """
     model = _get_model(abs_path)
 
-    cap = cv2.VideoCapture(src_path)
-    if not cap.isOpened():
-        raise ValueError("无法打开视频文件")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-
-    writer, ew, eh = _open_h264(dst_path, fps, w, h)
-
-    px_line = None
-    crossing = None
-    if line and len(line) == 4:
-        px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h]
-        crossing = {"in": 0, "out": 0, "total": 0}
-
-    seen_ids = set()
-    class_ids = {}            # className -> set(track_id)
-    last_centroid = {}        # track_id -> (cx, cy)
-    counted = set()           # (track_id, direction) 去抖
-    frames = 0
+    cap = None
+    writer = None
     try:
+        cap = cv2.VideoCapture(src_path)
+        if not cap.isOpened():
+            raise ValueError("无法打开视频文件")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+        writer, ew, eh = _open_h264(dst_path, fps, w, h)
+
+        px_line = None
+        crossing = None
+        if line and len(line) == 4:
+            px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h]
+            crossing = {"in": 0, "out": 0, "total": 0}
+
+        seen_ids = set()
+        class_ids = {}            # className -> set(track_id)
+        last_centroid = {}        # track_id -> (cx, cy)
+        counted = set()           # (track_id, direction) 去抖
+        frames = 0
         while True:
             ok, frame = cap.read()
             if not ok:
@@ -221,8 +223,10 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
             if progress_cb:
                 progress_cb(frames, total)
     finally:
-        cap.release()
-        writer.close()
+        if cap is not None:
+            cap.release()
+        if writer is not None:
+            writer.close()
 
     return {
         "frames": frames,
