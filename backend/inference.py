@@ -146,6 +146,96 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
     }
 
 
+def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
+                progress_cb=None):
+    """YOLO + ByteTrack 逐帧追踪，输出带框+ID 视频。
+
+    line: 归一化 [x1,y1,x2,y2]（0–1）或 None。非 None 时统计越线进/出。
+    返回统计：帧数 / 唯一目标数 / 各类别去重计数 / 越线 {in,out,total} 或 None。
+    """
+    model = _get_model(abs_path)
+
+    cap = cv2.VideoCapture(src_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频文件")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+    writer, ew, eh = _open_h264(dst_path, fps, w, h)
+
+    px_line = None
+    crossing = None
+    if line and len(line) == 4:
+        px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h]
+        crossing = {"in": 0, "out": 0, "total": 0}
+
+    seen_ids = set()
+    class_ids = {}            # className -> set(track_id)
+    last_centroid = {}        # track_id -> (cx, cy)
+    counted = set()           # (track_id, direction) 去抖
+    frames = 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            r = model.track(frame, persist=True, tracker="bytetrack.yaml",
+                            conf=conf, imgsz=imgsz, verbose=False)[0]
+            if r.boxes is not None and r.boxes.id is not None:
+                names = r.names
+                ids = r.boxes.id.int().tolist()
+                clss = r.boxes.cls.int().tolist()
+                xyxy = r.boxes.xyxy.cpu().tolist()
+                for tid, cid, box in zip(ids, clss, xyxy):
+                    seen_ids.add(tid)
+                    name = names.get(cid, str(cid))
+                    class_ids.setdefault(name, set()).add(tid)
+                    if px_line is not None:
+                        cx = (box[0] + box[2]) / 2.0
+                        cy = (box[1] + box[3]) / 2.0
+                        prev = last_centroid.get(tid)
+                        if prev is not None:
+                            d = _crosses(prev, (cx, cy), px_line)
+                            if d != 0 and (tid, d) not in counted:
+                                counted.add((tid, d))
+                                if d > 0:
+                                    crossing["in"] += 1
+                                else:
+                                    crossing["out"] += 1
+                                crossing["total"] = crossing["in"] + crossing["out"]
+                        last_centroid[tid] = (cx, cy)
+
+            annotated = r.plot()  # BGR，带框+ID
+            if px_line is not None:
+                p1 = (int(px_line[0]), int(px_line[1]))
+                p2 = (int(px_line[2]), int(px_line[3]))
+                cv2.line(annotated, p1, p2, (0, 0, 255), 2)
+                cv2.putText(annotated, f"IN:{crossing['in']} OUT:{crossing['out']}",
+                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
+                            cv2.LINE_AA)
+            _write_bgr(writer, annotated, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        cap.release()
+        writer.close()
+
+    return {
+        "frames": frames,
+        "totalFrames": total,
+        "fps": round(float(fps), 2),
+        "width": ew,
+        "height": eh,
+        "uniqueObjects": len(seen_ids),
+        "classCounts": {name: len(idset) for name, idset in class_ids.items()},
+        "crossing": crossing,
+    }
+
+
 # ------------------------------------------------------------ transformers 文本任务
 def _get_pipeline(task, model_dir):
     key = (task, model_dir)
