@@ -87,6 +87,32 @@ def _ensure_ai_menu(mid, parent_id, name, mtype, perms, path=None,
     db.session.commit()
 
 
+def _regroup_ai_menus():
+    """把 AI 叶子菜单重挂到分组目录，并将 path 改为绝对（幂等）。
+
+    _ensure_ai_menu 只新增不更新，故重挂单列。叶子 path 改绝对 /ai/<biz>，
+    使其无论挂在哪个分组下 MenuItem.fullPath 都等于现有静态路由，路由/高亮不变。
+    """
+    # (leaf_id, group_id, abs_path)
+    moves = [
+        (202, 230, "/ai/image"), (203, 230, "/ai/video"), (204, 230, "/ai/camera"),
+        (206, 230, "/ai/imgcls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
+        (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
+        (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
+        (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
+        (211, 233, "/ai/talker"),
+    ]
+    changed = False
+    for leaf_id, group_id, abs_path in moves:
+        m = Menu.query.get(leaf_id)
+        if m and (m.parent_id != group_id or m.path != abs_path):
+            m.parent_id = group_id
+            m.path = abs_path
+            changed = True
+    if changed:
+        db.session.commit()
+
+
 def seed_ai_menus():
     """AI 智能识别菜单种子（独立幂等：菜单不存在才写，已初始化项目也会补齐）。
 
@@ -161,6 +187,16 @@ def seed_ai_menus():
     _ensure_ai_menu(214, 200, "姿态估计", "C", "ai:pose:list",
                     path="pose", component="ai/pose/index", icon="Avatar",
                     order=14, grant_common=True)
+    # 分组目录（menu_type M）：把扁平 AI 菜单归类
+    _ensure_ai_menu(230, 200, "视觉识别", "M", None, path="vision",
+                    icon="View", order=2, grant_common=True)
+    _ensure_ai_menu(231, 200, "文本处理", "M", None, path="text-suite",
+                    icon="Document", order=3, grant_common=True)
+    _ensure_ai_menu(232, 200, "语音处理", "M", None, path="speech",
+                    icon="Microphone", order=4, grant_common=True)
+    _ensure_ai_menu(233, 200, "多模态", "M", None, path="multimodal",
+                    icon="MagicStick", order=5, grant_common=True)
+    _regroup_ai_menus()
     return True
 
 
