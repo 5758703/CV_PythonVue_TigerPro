@@ -46,7 +46,7 @@
         <el-form-item v-if="mode==='camera'">
           <el-button v-if="!camRunning" type="primary" :icon="VideoCamera" :disabled="!modelId" @click="camStart">开始</el-button>
           <el-button v-else type="danger" :icon="SwitchButton" @click="camStop">停止</el-button>
-          <el-button v-if="camLine" link type="primary" @click="camLine=null">清除线</el-button>
+          <el-button v-if="camLine" link type="primary" @click="clearCamLine">清除线</el-button>
           <el-button v-if="recBlobUrl" link type="primary" :icon="Download" @click="downloadRec">下载录制</el-button>
         </el-form-item>
       </el-form>
@@ -344,15 +344,21 @@ const onCamClick = (e) => {
   const rect = cv.getBoundingClientRect()
   const x = (e.clientX - rect.left) * (cv.width / rect.width)
   const y = (e.clientY - rect.top) * (cv.height / rect.height)
-  if (!camLine.value || camLine.value.length === 4) {
-    camCanvas.value._p0 = [x, y]; camLine.value = null
+  if (!cv._p0) {
+    cv._p0 = [x, y]        // 第一点
+    camLine.value = null
   } else {
-    const p0 = camCanvas.value._p0
-    camLine.value = [p0[0] / cv.width, p0[1] / cv.height, x / cv.width, y / cv.height]
+    camLine.value = [cv._p0[0] / cv.width, cv._p0[1] / cv.height, x / cv.width, y / cv.height]  // 第二点 -> 归一化线
+    cv._p0 = null
     cross.value = { in: 0, out: 0 }
     for (const k of Object.keys(lastCentroid)) delete lastCentroid[k]
     counted.clear()
   }
+}
+
+const clearCamLine = () => {
+  camLine.value = null
+  if (camCanvas.value) camCanvas.value._p0 = null
 }
 
 const camStart = async () => {
