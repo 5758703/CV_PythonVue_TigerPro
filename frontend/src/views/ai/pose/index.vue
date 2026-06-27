@@ -362,6 +362,10 @@ const camStop = () => {
   recorder = null
   if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null }
   if (camVideo.value) camVideo.value.srcObject = null
+  if (camCanvas.value) {
+    const ctx = camCanvas.value.getContext('2d')
+    ctx.clearRect(0, 0, camCanvas.value.width, camCanvas.value.height)
+  }
   camCount.value = 0; camFps.value = 0
 }
 
