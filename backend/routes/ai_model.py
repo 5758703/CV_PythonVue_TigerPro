@@ -198,11 +198,19 @@ def batch_delete():
 
 
 def _abs_weight(m):
-    """单文件权重(YOLO)绝对路径；无则 None。"""
+    """单文件权重(YOLO)绝对路径；无则 None。
+
+    file_path 指向单文件则直接用；指向目录（如整库下载的 pose 仓库）时，
+    从目录内挑单文件权重(.pt 优先)，使 ultralytics 仍能加载。
+    """
     if not m.file_path:
         return None
     p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
-    return p if os.path.isfile(p) else None
+    if os.path.isfile(p):
+        return p
+    if os.path.isdir(p):
+        return _pick_local_weight(p)
+    return None
 
 
 def _abs_model_path(m):
