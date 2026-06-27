@@ -39,6 +39,12 @@ export const modelApi = {
       timeout: 0,
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  // 摄像头实时追踪单帧（draw=0，前端叠画）
+  trackFrame: (id, formData) =>
+    request.post(`/ai/model/${id}/track-frame`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
   // 姿态估计（图片，同步）
   pose: (id, formData) =>
     request.post(`/ai/model/${id}/pose`, formData, {
