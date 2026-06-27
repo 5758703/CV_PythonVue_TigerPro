@@ -152,6 +152,13 @@ const renderCharts = (rows) => {
       { offset: 0, color: c1 },
       { offset: 1, color: c2 },
     ]);
+  // 每个分类一种竖向渐变（上浅下深），循环取色
+  const BAR_GRADS = [
+    ["#7ab8ff", "#2f7bff"], ["#7ee0a6", "#34c759"], ["#ffd27a", "#f5a623"],
+    ["#b794f6", "#805ad5"], ["#5ce0e0", "#13c2c2"], ["#ff9aa0", "#f5515f"],
+    ["#8fb0ff", "#2f54eb"], ["#ffb37a", "#fa8c16"], ["#9be36b", "#52c41a"],
+    ["#ff9ed6", "#eb2f96"], ["#c4a0ff", "#722ed1"], ["#6fe0d6", "#08979c"],
+  ];
   barChart = echarts.init(barRef.value);
   barChart.setOption({
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
@@ -173,10 +180,12 @@ const renderCharts = (rows) => {
       {
         type: "bar",
         barMaxWidth: 38,
-        data: cats.map((c) => catCount[c]),
+        data: cats.map((c, i) => {
+          const [c1, c2] = BAR_GRADS[i % BAR_GRADS.length];
+          return { value: catCount[c], itemStyle: { borderRadius: [6, 6, 0, 0], color: grad(c1, c2) } };
+        }),
         label: { show: true, position: "top", color: "#5a6b87", fontWeight: 600, fontSize: 12 },
-        itemStyle: { borderRadius: [6, 6, 0, 0], color: grad("#5aa9ff", "#2f7bff") },
-        emphasis: { itemStyle: { color: grad("#7ab8ff", "#1f6feb") } },
+        emphasis: { itemStyle: { shadowBlur: 10, shadowColor: "rgba(0,0,0,0.2)" } },
       },
     ],
   });
