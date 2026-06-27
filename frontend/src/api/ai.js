@@ -33,6 +33,12 @@ export const modelApi = {
     }),
   // 查询视频检测进度
   videoProgress: (id, jobId) => request.get(`/ai/model/${id}/video-progress/${jobId}`),
+  // 目标追踪：启动异步任务，返回 jobId（进度复用 videoProgress）
+  trackVideo: (id, formData) =>
+    request.post(`/ai/model/${id}/track-video`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
   // 拉取带框输出视频（返回 Blob）
   outputVideo: (name) =>
     request.get(`/ai/model/output/${name}`, { responseType: 'blob', timeout: 0 }),

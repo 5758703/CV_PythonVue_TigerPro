@@ -155,6 +155,9 @@ def seed_ai_menus():
     _ensure_ai_menu(212, 200, "文本转语音", "C", "ai:tts:list",
                     path="tts", component="ai/tts/index", icon="Headset",
                     order=12, grant_common=True)
+    _ensure_ai_menu(213, 200, "目标追踪", "C", "ai:track:list",
+                    path="track", component="ai/track/index", icon="Aim",
+                    order=13, grant_common=True)
     return True
 
 
