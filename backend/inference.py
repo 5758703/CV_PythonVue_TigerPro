@@ -146,6 +146,92 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
     }
 
 
+def estimate_pose(abs_path, image_bytes, conf=0.25, draw=True):
+    """YOLO 姿态估计：图片 -> 关键点 + 骨架标注图。
+
+    无人体/非 pose 权重时 keypoints 为 None，返回 count=0、persons=[]、仍出 r.plot() 图。
+    """
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+
+    model = _get_model(abs_path)
+    r = model.predict(img, conf=conf, verbose=False)[0]
+
+    persons = []
+    if r.keypoints is not None and r.keypoints.data is not None:
+        for kp in r.keypoints.data.cpu().tolist():  # [人][17][x,y,conf]
+            pts = [[round(float(x), 1), round(float(y), 1), round(float(c), 4)]
+                   for x, y, c in kp]
+            persons.append({"keypoints": pts})
+
+    image_b64 = None
+    if draw:
+        plotted = r.plot()  # BGR，含骨架
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    h, w = img.shape[:2]
+    return {
+        "count": len(persons),
+        "persons": persons,
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+    }
+
+
+def pose_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
+    """逐帧姿态估计视频，输出骨架视频到 dst_path。
+
+    progress_cb(processed, total) 每帧回调。返回 帧数 / 总人体数 / 分辨率 / fps。
+    """
+    model = _get_model(abs_path)
+
+    cap = None
+    writer = None
+    total_persons = 0
+    frames = 0
+    try:
+        cap = cv2.VideoCapture(src_path)
+        if not cap.isOpened():
+            raise ValueError("无法打开视频文件")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+        writer, ew, eh = _open_h264(dst_path, fps, w, h)
+
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            r = model.predict(frame, conf=conf, verbose=False)[0]
+            if r.keypoints is not None and r.keypoints.data is not None:
+                total_persons += len(r.keypoints.data)
+            _write_bgr(writer, r.plot(), ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        if cap is not None:
+            cap.release()
+        if writer is not None:
+            writer.close()
+
+    return {
+        "frames": frames,
+        "totalFrames": total,
+        "totalPersons": total_persons,
+        "fps": round(float(fps), 2),
+        "width": ew,
+        "height": eh,
+    }
+
+
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 progress_cb=None):
     """YOLO + ByteTrack 逐帧追踪，输出带框+ID 视频。
