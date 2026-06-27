@@ -158,6 +158,9 @@ def seed_ai_menus():
     _ensure_ai_menu(213, 200, "目标追踪", "C", "ai:track:list",
                     path="track", component="ai/track/index", icon="Aim",
                     order=13, grant_common=True)
+    _ensure_ai_menu(214, 200, "姿态估计", "C", "ai:pose:list",
+                    path="pose", component="ai/pose/index", icon="Avatar",
+                    order=14, grant_common=True)
     return True
 
 

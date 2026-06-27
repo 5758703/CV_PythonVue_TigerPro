@@ -16,6 +16,7 @@ const routes = [
       { path: 'ai/image', name: 'aiImage', component: () => import('../views/ai/image/index.vue'), meta: { title: '图片检测' } },
       { path: 'ai/video', name: 'aiVideo', component: () => import('../views/ai/video/index.vue'), meta: { title: '视频检测' } },
       { path: 'ai/track', name: 'aiTrack', component: () => import('../views/ai/track/index.vue'), meta: { title: '目标追踪' } },
+      { path: 'ai/pose', name: 'aiPose', component: () => import('../views/ai/pose/index.vue'), meta: { title: '姿态估计' } },
       { path: 'ai/camera', name: 'aiCamera', component: () => import('../views/ai/camera/index.vue'), meta: { title: '摄像头实时检测' } },
       { path: 'ai/text', name: 'aiText', component: () => import('../views/ai/text/index.vue'), meta: { title: '文本分析' } },
       { path: 'ai/imgcls', name: 'aiImgcls', component: () => import('../views/ai/imgcls/index.vue'), meta: { title: '图像分类' } },

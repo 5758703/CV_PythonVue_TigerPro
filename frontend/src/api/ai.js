@@ -39,6 +39,18 @@ export const modelApi = {
       timeout: 0,
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  // 姿态估计（图片，同步）
+  pose: (id, formData) =>
+    request.post(`/ai/model/${id}/pose`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  // 姿态估计（视频，异步，进度复用 videoProgress）
+  poseVideo: (id, formData) =>
+    request.post(`/ai/model/${id}/pose-video`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
   // 拉取带框输出视频（返回 Blob）
   outputVideo: (name) =>
     request.get(`/ai/model/output/${name}`, { responseType: 'blob', timeout: 0 }),
