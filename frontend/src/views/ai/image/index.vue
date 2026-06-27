@@ -165,16 +165,16 @@
 
             <div v-if="!report.meta.aiAvailable" class="doc-warn">{{ report.warning }}</div>
 
-            <figure class="doc-figs">
-              <div class="fig">
+            <div class="doc-figs">
+              <figure class="fig">
                 <img v-if="previewSrc" :src="previewSrc" />
                 <figcaption>图 1　原始图像</figcaption>
-              </div>
-              <div class="fig">
+              </figure>
+              <figure class="fig">
                 <img v-if="resultSrc" :src="resultSrc" />
                 <figcaption>图 2　检测标注结果</figcaption>
-              </div>
-            </figure>
+              </figure>
+            </div>
 
             <section class="doc-sec">
               <div class="sec-h"><span class="sec-no">01</span><h2>检测概述</h2></div>
@@ -770,7 +770,7 @@ onBeforeUnmount(() => {
   gap: 18px;
   margin: 22px 0 6px;
 }
-.fig { flex: 1; min-width: 0; }
+.fig { flex: 1; min-width: 0; margin: 0; }
 .fig img {
   width: 100%;
   display: block;
