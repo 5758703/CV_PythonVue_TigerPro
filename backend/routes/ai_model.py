@@ -432,6 +432,36 @@ def ocr_route(mid):
     return jsonify(code=0, message="识别完成", data=result)
 
 
+@ai_model_bp.post("/ocr-paddle")
+@permission_required("ai:model:query")
+def ocr_paddle_route():
+    """PaddleOCR（RapidOCR）：检测模型 + 识别模型 + 图片 -> 文本 + 框。"""
+    try:
+        det_id = int(request.form.get("detId", 0))
+        rec_id = int(request.form.get("recId", 0))
+    except (TypeError, ValueError):
+        return jsonify(code=400, message="缺少检测/识别模型"), 400
+    det_m = AiModel.query.get(det_id)
+    rec_m = AiModel.query.get(rec_id)
+    if det_m is None or rec_m is None or (det_m.library or "") != "rapidocr" or (rec_m.library or "") != "rapidocr":
+        return jsonify(code=400, message="请选择 RapidOCR 检测与识别模型"), 400
+    det_dir = _abs_model_path(det_m)
+    rec_dir = _abs_model_path(rec_m)
+    if det_dir is None or rec_dir is None:
+        return jsonify(code=400, message="检测/识别模型暂无本地权重，请先拉取"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+
+    try:
+        from inference import paddle_ocr
+        result = paddle_ocr(det_dir, rec_dir, file.read())
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"PaddleOCR 识别失败：{e}"), 500
+    return jsonify(code=0, message="识别完成", data=result)
+
+
 @ai_model_bp.post("/<int:mid>/transcribe")
 @permission_required("ai:model:query")
 def transcribe_route(mid):
