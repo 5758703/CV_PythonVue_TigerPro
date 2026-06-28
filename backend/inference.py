@@ -1169,3 +1169,88 @@ def recognize_text(model_dir, image_bytes, formatted=False):
 
     w, h = img.size
     return {"text": text, "chars": len(text), "width": w, "height": h}
+
+
+# ------------------------------------------------------------ PaddleOCR onnx（RapidOCR：det+rec）
+_paddle_cache = {}  # (det_onnx, rec_onnx) -> RapidOCR 引擎
+
+
+def _find_onnx(model_dir):
+    """目录内找权重 onnx（优先 inference.onnx，否则首个 .onnx）。"""
+    import os
+    cand = os.path.join(model_dir, "inference.onnx")
+    if os.path.isfile(cand):
+        return cand
+    for root, _dirs, files in os.walk(model_dir):
+        for f in files:
+            if f.lower().endswith(".onnx"):
+                return os.path.join(root, f)
+    raise ValueError("目录内未找到 onnx 模型")
+
+
+def _extract_rec_keys(rec_dir):
+    """从 rec 目录 inference.yml 的 PostProcess.character_dict 提取字符字典，写 rec_keys.txt（幂等）。"""
+    import os
+    import yaml
+    keys_path = os.path.join(rec_dir, "rec_keys.txt")
+    if os.path.isfile(keys_path) and os.path.getsize(keys_path) > 0:
+        return keys_path
+    yml_path = os.path.join(rec_dir, "inference.yml")
+    if not os.path.isfile(yml_path):
+        raise ValueError("识别模型目录缺少 inference.yml")
+    with open(yml_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    chars = (cfg or {}).get("PostProcess", {}).get("character_dict")
+    if not chars:
+        raise ValueError("无法解析识别字典(character_dict)")
+    with open(keys_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(str(c) for c in chars))
+    return keys_path
+
+
+def _get_paddle(det_onnx, rec_onnx, keys_path):
+    """加载/缓存 RapidOCR 引擎（按 det+rec onnx 路径键）。"""
+    with _lock:
+        key = (det_onnx, rec_onnx)
+        if key in _paddle_cache:
+            return _paddle_cache[key]
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+        except ImportError as e:
+            raise RuntimeError("PaddleOCR 引擎需安装 rapidocr_onnxruntime：pip install rapidocr_onnxruntime") from e
+        engine = RapidOCR(det_model_path=det_onnx, rec_model_path=rec_onnx,
+                          rec_keys_path=keys_path)
+        _paddle_cache[key] = engine
+        return engine
+
+
+def paddle_ocr(det_dir, rec_dir, image_bytes):
+    """PaddleOCR（RapidOCR）det+rec 流水线：图片字节 -> 文本 + 框。"""
+    det_onnx = _find_onnx(det_dir)
+    rec_onnx = _find_onnx(rec_dir)
+    keys_path = _extract_rec_keys(rec_dir)
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+    if img is None:
+        raise ValueError("无法解析图片")
+
+    engine = _get_paddle(det_onnx, rec_onnx, keys_path)
+    result, _elapse = engine(img)
+
+    lines = []
+    for item in (result or []):
+        box, txt, score = item[0], item[1], item[2]
+        lines.append({
+            "text": txt,
+            "score": round(float(score), 4),
+            "box": [[round(float(x), 1), round(float(y), 1)] for x, y in box],
+        })
+    h, w = img.shape[:2]
+    return {
+        "text": "\n".join(l["text"] for l in lines),
+        "lines": lines,
+        "count": len(lines),
+        "width": w,
+        "height": h,
+    }
