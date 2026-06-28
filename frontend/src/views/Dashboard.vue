@@ -70,6 +70,7 @@ const TASK_LABELS = {
   "object-detection": "目标检测",
   "pose-estimation": "姿态估计",
   "image-classification": "图像分类",
+  "ocr": "文字识别",
   "text-classification": "文本分类",
   "zero-shot-classification": "零样本分类",
   "fill-mask": "完形填空",

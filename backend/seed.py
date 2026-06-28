@@ -197,6 +197,9 @@ def seed_ai_menus():
     _ensure_ai_menu(233, 200, "多模态", "M", None, path="multimodal",
                     icon="MagicStick", order=5, grant_common=True)
     _regroup_ai_menus()
+    _ensure_ai_menu(215, 230, "文字识别 OCR", "C", "ai:ocr:list",
+                    path="/ai/ocr", component="ai/ocr/index", icon="Document",
+                    order=7, grant_common=True)
     return True
 
 

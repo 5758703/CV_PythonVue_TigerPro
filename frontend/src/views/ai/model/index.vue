@@ -111,6 +111,7 @@
             <el-option label="目标检测 object-detection" value="object-detection" />
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
             <el-option label="图像分类 image-classification" value="image-classification" />
+            <el-option label="文字识别 OCR" value="ocr" />
             <el-option label="文本分类 text-classification" value="text-classification" />
             <el-option label="零样本分类 zero-shot-classification" value="zero-shot-classification" />
             <el-option label="完形填空 fill-mask" value="fill-mask" />

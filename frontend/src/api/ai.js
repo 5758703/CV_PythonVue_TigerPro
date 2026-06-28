@@ -69,6 +69,12 @@ export const modelApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
     }),
+  // 文字识别 OCR（GOT-OCR2）
+  ocr: (id, formData) =>
+    request.post(`/ai/model/${id}/ocr`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
   // 文本生成/翻译/摘要
   generateText: (id, text, maxNewTokens) =>
     request.post(`/ai/model/${id}/generate-text`, { text, maxNewTokens }, { timeout: 0 }),
