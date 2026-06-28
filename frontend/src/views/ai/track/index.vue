@@ -55,6 +55,11 @@
       <div v-else-if="mode==='file'" class="hint">越线计数（可选）：在下方首帧上点两点画一条计数线；不画则不统计越线。</div>
     </el-card>
 
+    <el-card v-if="mode==='file' && previewUrl" shadow="never" class="cfg-card">
+      <div class="preview-title">原视频预览</div>
+      <video :src="previewUrl" controls class="player" />
+    </el-card>
+
     <el-card v-if="mode==='file' && file" shadow="never" class="cfg-card">
       <div class="line-tip">
         首帧画线：点第一点 → 点第二点。
@@ -120,6 +125,7 @@ const category = ref('')
 const imgsz = ref(640)
 const conf = ref(0.25)
 const file = ref(null)
+const previewUrl = ref('')   // 选中视频的原视频回放 URL
 
 const frameCanvas = ref(null)
 const linePts = ref([])      // 像素点 [{x,y}...]（canvas 坐标）
@@ -174,6 +180,8 @@ const onPick = (uploadFile) => {
   const raw = uploadFile.raw
   if (!raw || !raw.type.startsWith('video/')) { ElMessage.error('请选择视频文件'); return }
   file.value = raw
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  previewUrl.value = URL.createObjectURL(raw)
   clearLine()
   clearOutput()
   drawFirstFrame(raw)
@@ -308,6 +316,7 @@ const download = () => {
 const clearAll = () => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   clearOutput()
+  if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
   file.value = null
   clearLine()
   processed.value = 0
@@ -496,6 +505,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
   if (blobUrl) URL.revokeObjectURL(blobUrl)
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   camStop()
   if (recUrl) URL.revokeObjectURL(recUrl)
 })
@@ -504,6 +514,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .cfg-card { margin-bottom: 12px; }
 .hint, .line-tip { font-size: 13px; color: #5a6b87; margin-top: 8px; }
+.preview-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; }
 .meta { margin-left: 10px; color: #67c23a; }
 .frame-box { margin-top: 10px; }
 .frame-canvas { max-width: 100%; border: 1px solid #e4e7ed; border-radius: 6px; cursor: crosshair; }

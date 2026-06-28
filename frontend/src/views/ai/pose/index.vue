@@ -47,6 +47,11 @@
                 title="暂无可用模型：姿态估计需 task=pose-estimation 的 YOLO 模型，请到「模型管理」上传/拉取并启用。" />
     </el-card>
 
+    <el-card v-if="mode === 'video' && previewUrl" shadow="never" class="cfg-card">
+      <div class="preview-title">原视频预览</div>
+      <video :src="previewUrl" controls class="player" />
+    </el-card>
+
     <el-card shadow="never">
       <div v-if="running" class="progress-box">
         <div class="progress-title">
@@ -109,6 +114,7 @@ const modelId = ref(null)
 const category = ref('')
 const conf = ref(0.25)
 const file = ref(null)
+const previewUrl = ref('')   // 视频模式：选中视频的原视频回放 URL
 
 const running = ref(false)
 const processed = ref(0)
@@ -167,6 +173,8 @@ const onPick = (uploadFile) => {
   file.value = raw
   resultImg.value = ''
   clearVideoOut()
+  if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
+  if (!wantImage) previewUrl.value = URL.createObjectURL(raw)
 }
 
 const run = async () => {
@@ -256,6 +264,7 @@ const clearVideoOut = () => {
 const clearAll = () => {
   if (camRunning.value) camStop()
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
   file.value = null
   resultImg.value = ''
   poseCount.value = 0
@@ -380,6 +389,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   clearVideoOut()
   camStop()
   if (recUrl) URL.revokeObjectURL(recUrl)
@@ -391,6 +401,7 @@ onBeforeUnmount(() => {
 .progress-box { padding: 22px 4px; }
 .progress-title { font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
 .res-title { display: flex; align-items: center; gap: 12px; font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
+.preview-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; }
 .result-img { max-width: 100%; max-height: 560px; border: 1px solid #ebeef5; border-radius: 6px; }
 .player { width: 100%; max-height: 480px; background: #000; border-radius: 6px; }
 .stats { display: flex; gap: 10px; margin-top: 12px; }

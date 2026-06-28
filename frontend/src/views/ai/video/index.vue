@@ -48,6 +48,13 @@
       />
     </el-card>
 
+    <el-card v-if="previewUrl" shadow="never" class="cfg-card">
+      <div class="preview-title">原视频预览</div>
+      <div class="video-wrap">
+        <video :src="previewUrl" controls class="result-video"></video>
+      </div>
+    </el-card>
+
     <el-card shadow="never">
       <div v-if="detecting" class="progress-box">
         <div class="progress-title">逐帧检测中… {{ processed }} / {{ total || '?' }} 帧 · 预计剩余 {{ etaText }}</div>
@@ -94,6 +101,7 @@ const conf = ref(0.25)
 const file = ref(null)
 const fileName = ref('')
 const videoInfo = ref(null)
+const previewUrl = ref('')   // 选中视频的原视频回放 URL
 
 const detecting = ref(false)
 const result = ref(null)
@@ -101,7 +109,6 @@ const outputUrl = ref('')
 const processed = ref(0)
 const total = ref(0)
 
-let probeUrl = ''
 let pollTimer = null
 let startTime = 0
 
@@ -177,15 +184,15 @@ const onPick = (uploadFile) => {
   videoInfo.value = null
   clearOutput()
   result.value = null
-  // 浏览器端读取视频元信息（时长/分辨率）
-  if (probeUrl) URL.revokeObjectURL(probeUrl)
-  probeUrl = URL.createObjectURL(raw)
+  // 原视频回放 + 浏览器端读取视频元信息（时长/分辨率），复用同一 objectURL
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
+  previewUrl.value = URL.createObjectURL(raw)
   const v = document.createElement('video')
   v.preload = 'metadata'
   v.onloadedmetadata = () => {
     videoInfo.value = { duration: v.duration, width: v.videoWidth, height: v.videoHeight, size: raw.size }
   }
-  v.src = probeUrl
+  v.src = previewUrl.value
 }
 
 const clearOutput = () => {
@@ -241,6 +248,7 @@ const poll = (jobId) => {
 const clearAll = () => {
   stopPoll()
   clearOutput()
+  if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
   file.value = null
   fileName.value = ''
   videoInfo.value = null
@@ -260,7 +268,7 @@ onMounted(loadModels)
 onBeforeUnmount(() => {
   stopPoll()
   clearOutput()
-  if (probeUrl) URL.revokeObjectURL(probeUrl)
+  if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
 })
 </script>
 
@@ -279,6 +287,11 @@ onBeforeUnmount(() => {
 .pk-name {
   font-weight: 600;
   color: #3a4a63;
+}
+.preview-title {
+  font-weight: 600;
+  color: #3a4a63;
+  margin-bottom: 10px;
 }
 .progress-box {
   padding: 28px 8px;
