@@ -257,6 +257,16 @@ def _repo_id_from_url(url):
     return f"{parts[0]}/{parts[1]}"
 
 
+def _weight_hint_from_url(url):
+    """来源链接锚点指定具体权重文件名（如 .../YOLO26#yolo26n.pt）。
+
+    单仓多权重（官方 Ultralytics/YOLO26 含 n/s/m/l/x）时用于精确选权重；
+    无锚点则返回 None，回退原有“最短文件名”挑选逻辑。
+    """
+    frag = urlparse(url or "").fragment.strip()
+    return frag or None
+
+
 _WEIGHT_EXT = (".pt", ".onnx", ".pth")
 
 
@@ -273,8 +283,11 @@ def _pick_local_weight(folder):
     return cands[0]
 
 
-def _fetch_huggingface(repo_id, folder, sub, is_dir_model):
-    """从 HuggingFace 拉取权重，返回 (rel_path, size)。"""
+def _fetch_huggingface(repo_id, folder, sub, is_dir_model, want=None):
+    """从 HuggingFace 拉取权重，返回 (rel_path, size)。
+
+    want：可选的目标权重文件名（来源链接锚点），单仓多权重时精确选取。
+    """
     token = current_app.config.get("HF_TOKEN")  # 受限/私有仓库需令牌认证
     if is_dir_model:
         # 目录型模型(transformers/funasr/cosyvoice 等) = 整个仓库目录（config + 权重 + tokenizer）
@@ -288,8 +301,16 @@ def _fetch_huggingface(repo_id, folder, sub, is_dir_model):
     pts = [f for f in files if f.lower().endswith(_WEIGHT_EXT)]
     if not pts:
         raise ValueError("仓库内未找到权重文件(.pt/.onnx/.pth)")
-    pts.sort(key=lambda f: (not f.lower().endswith("best.pt"), len(f)))
-    filename = pts[0]
+    match = None
+    if want:
+        match = next((f for f in pts if os.path.basename(f).lower() == want.lower()), None)
+        if match is None:
+            raise ValueError(f"仓库内未找到指定权重文件：{want}")
+    if match:
+        filename = match
+    else:
+        pts.sort(key=lambda f: (not f.lower().endswith("best.pt"), len(f)))
+        filename = pts[0]
     cached = hf_hub_download(repo_id=repo_id, filename=filename, token=token)
     _ensure_dir(folder)
     dest_name = os.path.basename(filename)
@@ -339,7 +360,8 @@ def fetch_weight(mid):
         if hub == "modelscope":
             rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
         else:
-            rel, size = _fetch_huggingface(repo_id, folder, sub, is_dir_model)
+            rel, size = _fetch_huggingface(
+                repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
     except Exception as e:  # noqa: BLE001  网络/仓库错误统一回传
         msg = str(e)
         low = msg.lower()

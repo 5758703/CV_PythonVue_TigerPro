@@ -237,6 +237,19 @@ def seed_ai_models():
         source_url="https://huggingface.co/keremberke/yolov8m-table-extraction",
         description="YOLOv8 文档表格检测（bordered/borderless），用于图片/视频/摄像头检测页。", status="0",
     ))
+    # YOLO26 官方通用检测权重（单仓多权重，靠来源链接锚点 #yolo26X.pt 精确拉取）
+    created |= _ensure_ai_model("yolo26n", dict(
+        model_name="YOLO26n 通用检测", category="通用检测",
+        task="object-detection", library="ultralytics", version="v26",
+        source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26n.pt",
+        description="Ultralytics YOLO26 nano 通用目标检测权重（最轻量，CPU 友好），用于检测/追踪/视频页。", status="0",
+    ))
+    created |= _ensure_ai_model("yolo26s", dict(
+        model_name="YOLO26s 通用检测", category="通用检测",
+        task="object-detection", library="ultralytics", version="v26",
+        source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26s.pt",
+        description="Ultralytics YOLO26 small 通用目标检测权重（精度更高），用于检测/追踪/视频页。", status="0",
+    ))
     created |= _ensure_ai_model("finbert", dict(
         model_name="FinBERT 金融情感分析", category="金融NLP",
         task="text-classification", library="transformers", version="v1",
