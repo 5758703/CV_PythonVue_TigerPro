@@ -103,6 +103,7 @@
             <el-option label="cosyvoice（语音合成/克隆）" value="cosyvoice" />
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
             <el-option label="voxcpm（语音合成/克隆/音色设计）" value="voxcpm" />
+            <el-option label="rapidocr（PaddleOCR onnx）" value="rapidocr" />
             <el-option label="linly（数字人）" value="linly" />
           </el-select>
         </el-form-item>
@@ -112,6 +113,8 @@
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
             <el-option label="图像分类 image-classification" value="image-classification" />
             <el-option label="文字识别 OCR" value="ocr" />
+            <el-option label="文本检测 text-detection" value="text-detection" />
+            <el-option label="文本识别 text-recognition" value="text-recognition" />
             <el-option label="文本分类 text-classification" value="text-classification" />
             <el-option label="零样本分类 zero-shot-classification" value="zero-shot-classification" />
             <el-option label="完形填空 fill-mask" value="fill-mask" />

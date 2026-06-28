@@ -75,6 +75,15 @@ export const modelApi = {
       timeout: 0,
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  // PaddleOCR（RapidOCR）：检测模型 + 识别模型 + 图片
+  paddleOcr: (detId, recId, formData) => {
+    formData.append('detId', detId)
+    formData.append('recId', recId)
+    return request.post('/ai/model/ocr-paddle', formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
   // 文本生成/翻译/摘要
   generateText: (id, text, maxNewTokens) =>
     request.post(`/ai/model/${id}/generate-text`, { text, maxNewTokens }, { timeout: 0 }),

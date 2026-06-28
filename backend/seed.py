@@ -200,6 +200,9 @@ def seed_ai_menus():
     _ensure_ai_menu(215, 230, "文字识别 OCR", "C", "ai:ocr:list",
                     path="/ai/ocr", component="ai/ocr/index", icon="Document",
                     order=7, grant_common=True)
+    _ensure_ai_menu(216, 230, "PaddleOCR 识别", "C", "ai:paddleocr:list",
+                    path="/ai/paddleocr", component="ai/paddleocr/index", icon="Document",
+                    order=8, grant_common=True)
     return True
 
 

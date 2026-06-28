@@ -71,6 +71,8 @@ const TASK_LABELS = {
   "pose-estimation": "姿态估计",
   "image-classification": "图像分类",
   "ocr": "文字识别",
+  "text-detection": "文本检测",
+  "text-recognition": "文本识别",
   "text-classification": "文本分类",
   "zero-shot-classification": "零样本分类",
   "fill-mask": "完形填空",
