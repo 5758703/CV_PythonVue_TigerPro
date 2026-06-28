@@ -42,4 +42,4 @@ pytest==8.3.3
 # 注意：安装 voxcpm 会把 modelscope 升到 ~1.37、datasets 升到 ~3.6（torch 2.11.0 不受影响，已验证 import app/funasr/modelscope 正常）。
 voxcpm==2.0.3
 # PaddleOCR onnx 文字识别（RapidOCR 封装 PP-OCR det+rec，CPU）
-rapidocr_onnxruntime
+rapidocr_onnxruntime==1.4.4
