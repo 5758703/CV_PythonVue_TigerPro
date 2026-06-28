@@ -1124,3 +1124,48 @@ def _crosses(prev, curr, line):
     if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)):
         return 1 if d1 < 0 else -1
     return 0
+
+
+# ------------------------------------------------------------ GOT-OCR2 文字识别（OCR）
+_ocr_cache = {}  # model_dir -> (processor, model)
+
+
+def _get_ocr(model_dir):
+    """加载/缓存 GOT-OCR2（transformers 原生 image-text-to-text，CPU/float32）。"""
+    with _lock:
+        if model_dir in _ocr_cache:
+            return _ocr_cache[model_dir]
+        import torch
+        from transformers import AutoProcessor, AutoModelForImageTextToText
+        processor = AutoProcessor.from_pretrained(model_dir)
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_dir, torch_dtype=torch.float32, low_cpu_mem_usage=True).eval()
+        _ocr_cache[model_dir] = (processor, model)
+        return processor, model
+
+
+def recognize_text(model_dir, image_bytes, formatted=False):
+    """GOT-OCR2 文字识别：图片字节 -> 文本。formatted=True 输出格式化(markdown/latex)。"""
+    import io as _io
+    from PIL import Image
+    try:
+        img = Image.open(_io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"无法解析图片：{e}")
+
+    processor, model = _get_ocr(model_dir)
+    if formatted:
+        try:
+            inputs = processor(img, return_tensors="pt", format=True)
+        except TypeError:
+            inputs = processor(img, return_tensors="pt")  # 不支持 format 参数则回退 plain
+    else:
+        inputs = processor(img, return_tensors="pt")
+
+    gen = model.generate(**inputs, do_sample=False, max_new_tokens=4096,
+                         tokenizer=processor.tokenizer, stop_strings="<|im_end|>")
+    text = processor.decode(
+        gen[0, inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+    w, h = img.size
+    return {"text": text, "chars": len(text), "width": w, "height": h}

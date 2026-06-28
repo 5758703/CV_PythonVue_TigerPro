@@ -408,6 +408,30 @@ def classify_image_route(mid):
     return jsonify(code=0, message="分类完成", data=result)
 
 
+@ai_model_bp.post("/<int:mid>/ocr")
+@permission_required("ai:model:query")
+def ocr_route(mid):
+    """文字识别（GOT-OCR2）：上传图片 -> 识别文本。"""
+    m = AiModel.query.get_or_404(mid)
+    if (m.task or "") != "ocr":
+        return jsonify(code=400, message="文字识别仅支持 OCR 模型"), 400
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+    formatted = request.form.get("formatted", "0") == "1"
+
+    try:
+        from inference import recognize_text
+        result = recognize_text(path, file.read(), formatted=formatted)
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"文字识别失败：{e}"), 500
+    return jsonify(code=0, message="识别完成", data=result)
+
+
 @ai_model_bp.post("/<int:mid>/transcribe")
 @permission_required("ai:model:query")
 def transcribe_route(mid):
