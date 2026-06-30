@@ -152,10 +152,10 @@ const onCommand = async (cmd) => {
   border-right: 3px solid #409eff;
 }
 /* 子菜单内联展开/收起：实际走 el-collapse-transition(max-height 动画)，
-   默认 var(--el-transition-duration)=0.3s 偏慢，缩短至 0.16s 更跟手 */
+   默认 var(--el-transition-duration)=0.3s 偏慢，缩短至 0.1s 近乎瞬开 */
 .side-menu :deep(.el-collapse-transition-enter-active),
 .side-menu :deep(.el-collapse-transition-leave-active) {
-  transition-duration: 0.16s !important;
+  transition-duration: 0.1s !important;
 }
 /* 菜单项 hover/激活的过渡也压短，点击反馈更即时 */
 .side-menu :deep(.el-menu-item),
