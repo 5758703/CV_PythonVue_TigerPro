@@ -4,6 +4,7 @@ import request from './request'
 export const modelApi = {
   list: (params) => request.get('/ai/model', { params }),
   categories: () => request.get('/ai/model/categories'),
+  tasks: () => request.get('/ai/model/tasks'),
   get: (id) => request.get(`/ai/model/${id}`),
   add: (data) => request.post('/ai/model', data),
   update: (data) => request.put(`/ai/model/${data.id}`, data),

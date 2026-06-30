@@ -34,6 +34,19 @@ def _dir_size(path):
     return total
 
 
+# 可排序列白名单：前端列 prop(驼峰) -> 模型字段，防 SQL 注入
+_SORT_COLUMNS = {
+    "id": AiModel.id,
+    "modelName": AiModel.model_name,
+    "category": AiModel.category,
+    "task": AiModel.task,
+    "version": AiModel.version,
+    "fileSize": AiModel.file_size,
+    "status": AiModel.status,
+    "createTime": AiModel.create_time,
+}
+
+
 @ai_model_bp.get("")
 @permission_required("ai:model:list")
 def list_models():
@@ -41,13 +54,18 @@ def list_models():
     size = int(request.args.get("pageSize", 10))
     name = request.args.get("modelName", "").strip()
     category = request.args.get("category", "").strip()
+    task = request.args.get("task", "").strip()
     source = request.args.get("source", "").strip()  # 来源：huggingface / modelscope / other
+    order_by = request.args.get("orderBy", "").strip()
+    order_dir = request.args.get("orderDir", "").strip().lower()
 
     query = AiModel.query
     if name:
         query = query.filter(AiModel.model_name.like(f"%{name}%"))
     if category:
         query = query.filter(AiModel.category == category)
+    if task:
+        query = query.filter(AiModel.task == task)
     if source == "huggingface":
         query = query.filter(db.or_(AiModel.source_url.like("%huggingface%"),
                                     AiModel.source_url.like("%hf.co%")))
@@ -58,7 +76,10 @@ def list_models():
                                      AiModel.source_url.notlike("%hf.co%"),
                                      AiModel.source_url.notlike("%modelscope%")))
     total = query.count()
-    rows = (query.order_by(AiModel.id.asc())
+    # 列排序：前端列 prop(驼峰) -> 模型字段，白名单防注入；非法列回退 id
+    col = _SORT_COLUMNS.get(order_by, AiModel.id)
+    col = col.desc() if order_dir == "desc" else col.asc()
+    rows = (query.order_by(col)
             .offset((page - 1) * size).limit(size).all())
     return jsonify(code=0, data={"rows": [m.to_dict() for m in rows], "total": total})
 
@@ -69,6 +90,15 @@ def list_categories():
     rows = db.session.query(AiModel.category).distinct().all()
     cats = [r[0] for r in rows if r[0]]
     return jsonify(code=0, data=cats)
+
+
+@ai_model_bp.get("/tasks")
+@permission_required("ai:model:list")
+def list_tasks():
+    """库内实际出现的任务 slug 去重列表，供任务查询下拉。"""
+    rows = db.session.query(AiModel.task).distinct().all()
+    tasks = [r[0] for r in rows if r[0]]
+    return jsonify(code=0, data=tasks)
 
 
 @ai_model_bp.get("/<int:mid>")

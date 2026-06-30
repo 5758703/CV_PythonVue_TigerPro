@@ -239,64 +239,64 @@ def seed_ai_models():
     ))
     # YOLO26 官方通用检测权重（单仓多权重，靠来源链接锚点 #yolo26X.pt 精确拉取）
     created |= _ensure_ai_model("yolo26n", dict(
-        model_name="YOLO26n 通用检测", category="通用检测",
+        model_name="YOLO26n 通用检测", category="通用目标检测",
         task="object-detection", library="ultralytics", version="v26",
         source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26n.pt",
         description="Ultralytics YOLO26 nano 通用目标检测权重（最轻量，CPU 友好），用于检测/追踪/视频页。", status="0",
     ))
     created |= _ensure_ai_model("yolo26s", dict(
-        model_name="YOLO26s 通用检测", category="通用检测",
+        model_name="YOLO26s 通用检测", category="通用目标检测",
         task="object-detection", library="ultralytics", version="v26",
         source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26s.pt",
         description="Ultralytics YOLO26 small 通用目标检测权重（精度更高），用于检测/追踪/视频页。", status="0",
     ))
     created |= _ensure_ai_model("finbert", dict(
-        model_name="FinBERT 金融情感分析", category="金融NLP",
+        model_name="FinBERT 金融情感分析", category="文本分类",
         task="text-classification", library="transformers", version="v1",
         source_url="https://huggingface.co/ProsusAI/finbert",
         description="FinBERT 金融文本情感分析模型，输出 positive/negative/neutral 三类概率。", status="0",
     ))
     # 阶段B 示例：transformers 目标检测（复用检测页）
     created |= _ensure_ai_model("detr-resnet-50", dict(
-        model_name="DETR 通用目标检测", category="通用检测",
+        model_name="DETR 通用目标检测", category="通用目标检测",
         task="object-detection", library="transformers", version="v1",
         source_url="https://huggingface.co/facebook/detr-resnet-50",
         description="Facebook DETR 通用目标检测(COCO 80类)，transformers 引擎，可用于图片/视频/摄像头检测页。", status="0",
     ))
     # 阶段C 示例：transformers 图像分类
     created |= _ensure_ai_model("vit-base", dict(
-        model_name="ViT 通用图像分类", category="通用分类",
+        model_name="ViT 通用图像分类", category="图像分类",
         task="image-classification", library="transformers", version="v1",
         source_url="https://huggingface.co/google/vit-base-patch16-224",
         description="Google ViT 图像分类(ImageNet 1000类)，transformers 引擎，用于图像分类页。", status="0",
     ))
     # NLP 任务示例（A 文本分类 / B 零样本·完形 / C 翻译·摘要 / D NER·QA）
     created |= _ensure_ai_model("bert-emotion", dict(
-        model_name="BERT 情绪识别", category="情感NLP",
+        model_name="BERT 情绪识别", category="文本分类",
         task="text-classification", library="transformers", version="v1",
         source_url="https://huggingface.co/bhadresh-savani/bert-base-uncased-emotion",
         description="文本情绪识别(anger/joy/sadness/fear/surprise/love)，文本分析页使用。", status="0",
     ))
     created |= _ensure_ai_model("bart-mnli", dict(
-        model_name="BART 零样本分类", category="通用NLP",
+        model_name="BART 零样本分类", category="文本理解",
         task="zero-shot-classification", library="transformers", version="v1",
         source_url="https://huggingface.co/facebook/bart-large-mnli",
         description="零样本文本分类：自定义候选标签，无需训练。文本分析页使用。", status="0",
     ))
     created |= _ensure_ai_model("bert-fill-mask", dict(
-        model_name="BERT 完形填空", category="通用NLP",
+        model_name="BERT 完形填空", category="文本理解",
         task="fill-mask", library="transformers", version="v1",
         source_url="https://huggingface.co/bert-base-uncased",
         description="预测 [MASK] 处词语。文本分析页使用。", status="0",
     ))
     created |= _ensure_ai_model("distilbart-cnn", dict(
-        model_name="DistilBART 文本摘要", category="文本摘要",
+        model_name="DistilBART 文本摘要", category="文本生成",
         task="summarization", library="transformers", version="v1",
         source_url="https://huggingface.co/sshleifer/distilbart-cnn-12-6",
         description="长文本摘要。文本生成页使用。", status="0",
     ))
     created |= _ensure_ai_model("opus-mt-en-zh", dict(
-        model_name="Opus 英译中", category="机器翻译",
+        model_name="Opus 英译中", category="文本生成",
         task="translation", library="transformers", version="v1",
         source_url="https://huggingface.co/Helsinki-NLP/opus-mt-en-zh",
         description="英文→中文机器翻译。文本生成页使用。", status="0",

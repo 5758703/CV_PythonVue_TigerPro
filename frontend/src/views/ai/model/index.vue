@@ -10,6 +10,11 @@
             <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
+        <el-form-item label="任务">
+          <el-select v-model="query.task" placeholder="全部任务" clearable style="width: 160px;" @change="load">
+            <el-option v-for="t in tasks" :key="t" :label="taskLabel(t)" :value="t" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="来源">
           <el-select v-model="query.source" placeholder="全部来源" clearable style="width: 150px;" @change="load">
             <el-option label="HuggingFace" value="huggingface" />
@@ -30,24 +35,24 @@
         <el-button v-permission="'ai:model:remove'" type="danger" :icon="Delete" :disabled="!selectedIds.length" @click="batchRemove">批量删除{{ selectedIds.length ? `（${selectedIds.length}）` : "" }}</el-button>
       </div>
 
-      <el-table :data="rows" v-loading="loading" border stripe @selection-change="onSelect">
+      <el-table :data="rows" v-loading="loading" border stripe @selection-change="onSelect" @sort-change="onSort">
         <el-table-column type="selection" width="48" />
-        <el-table-column prop="id" label="ID" width="50" />
-        <el-table-column prop="modelName" label="模型名称" min-width="130" show-overflow-tooltip />
-        <el-table-column label="分类" width="120">
+        <el-table-column prop="id" label="ID" width="64" sortable="custom" />
+        <el-table-column prop="modelName" label="模型名称" min-width="130" show-overflow-tooltip sortable="custom" />
+        <el-table-column prop="category" label="分类" width="120" sortable="custom">
           <template #default="{ row }">
             <el-tag v-if="row.category" effect="dark" :color="categoryColor(row.category)" class="cat-tag">{{ row.category }}</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
         <el-table-column prop="modelKey" label="标识" min-width="150" show-overflow-tooltip />
-        <el-table-column label="任务" width="120">
+        <el-table-column prop="task" label="任务" width="120" sortable="custom">
           <template #default="{ row }">
             <el-tag size="small" :type="taskTagType(row.task)">{{ taskLabel(row.task) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="version" label="版本" width="80" />
-        <el-table-column label="权重文件" width="130">
+        <el-table-column prop="version" label="版本" width="80" sortable="custom" />
+        <el-table-column prop="fileSize" label="权重文件" width="130" sortable="custom">
           <template #default="{ row }">
             <el-tag v-if="row.filePath" type="success" effect="plain">{{ fmtSize(row.fileSize) }}</el-tag>
             <el-tag v-else type="info" effect="plain">未上传</el-tag>
@@ -61,7 +66,7 @@
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column prop="status" label="状态" width="90" sortable="custom">
           <template #default="{ row }">
             <el-tag :type="row.status === '0' ? 'success' : 'info'">{{ row.status === "0" ? "启用" : "停用" }}</el-tag>
           </template>
@@ -223,7 +228,8 @@ const uploading = ref(false);
 const rows = ref([]);
 const total = ref(0);
 const categories = ref([]);
-const query = reactive({ pageNum: 1, pageSize: 10, modelName: "", category: "", source: "" });
+const tasks = ref([]);
+const query = reactive({ pageNum: 1, pageSize: 10, modelName: "", category: "", task: "", source: "", orderBy: "", orderDir: "" });
 
 const HUB_META = {
   huggingface: { label: "HuggingFace", color: "#ff9d00" },
@@ -252,7 +258,11 @@ const emptyForm = () => ({
 // 切库时给个合理的默认任务
 const TASK_LABELS = {
   "object-detection": "目标检测",
+  "pose-estimation": "姿态估计",
   "image-classification": "图像分类",
+  "ocr": "文字识别",
+  "text-detection": "文本检测",
+  "text-recognition": "文本识别",
   "text-classification": "文本分类",
   "zero-shot-classification": "零样本分类",
   "fill-mask": "完形填空",
@@ -325,6 +335,19 @@ const loadCategories = async () => {
   categories.value = res.data || [];
 };
 
+const loadTasks = async () => {
+  const res = await modelApi.tasks();
+  tasks.value = res.data || [];
+};
+
+// 列排序：el-table 排序变化 -> 后端 orderBy/orderDir；取消排序回退默认
+const onSort = ({ prop, order }) => {
+  query.orderBy = order ? prop : "";
+  query.orderDir = order === "ascending" ? "asc" : order === "descending" ? "desc" : "";
+  query.pageNum = 1;
+  load();
+};
+
 const load = async () => {
   loading.value = true;
   try {
@@ -339,7 +362,10 @@ const load = async () => {
 const reset = () => {
   query.modelName = "";
   query.category = "";
+  query.task = "";
   query.source = "";
+  query.orderBy = "";
+  query.orderDir = "";
   query.pageNum = 1;
   load();
 };
@@ -600,6 +626,7 @@ const onTResize = () => tSync();
 onMounted(() => {
   load();
   loadCategories();
+  loadTasks();
   window.addEventListener("resize", onTResize);
 });
 onBeforeUnmount(() => {
