@@ -8,6 +8,8 @@
       <el-menu
         :default-active="$route.path"
         :collapse="collapse"
+        :show-timeout="0"
+        :hide-timeout="0"
         router
         background-color="transparent"
         text-color="#bcd0f5"
@@ -148,6 +150,15 @@ const onCommand = async (cmd) => {
 .side-menu :deep(.el-menu-item.is-active) {
   background: linear-gradient(90deg, rgba(64, 158, 255, 0.25), transparent);
   border-right: 3px solid #409eff;
+}
+/* 子菜单内联展开/收起：默认 0.3s 高度动画偏慢，缩短至 0.18s 更跟手 */
+.side-menu :deep(.collapse-transition) {
+  transition-duration: 0.18s !important;
+}
+/* 菜单项 hover/激活的过渡也压短，点击反馈更即时 */
+.side-menu :deep(.el-menu-item),
+.side-menu :deep(.el-sub-menu__title) {
+  transition: background-color 0.12s, color 0.12s;
 }
 .header {
   display: flex;
