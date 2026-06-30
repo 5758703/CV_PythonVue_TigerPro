@@ -151,9 +151,11 @@ const onCommand = async (cmd) => {
   background: linear-gradient(90deg, rgba(64, 158, 255, 0.25), transparent);
   border-right: 3px solid #409eff;
 }
-/* 子菜单内联展开/收起：默认 0.3s 高度动画偏慢，缩短至 0.18s 更跟手 */
-.side-menu :deep(.collapse-transition) {
-  transition-duration: 0.18s !important;
+/* 子菜单内联展开/收起：实际走 el-collapse-transition(max-height 动画)，
+   默认 var(--el-transition-duration)=0.3s 偏慢，缩短至 0.16s 更跟手 */
+.side-menu :deep(.el-collapse-transition-enter-active),
+.side-menu :deep(.el-collapse-transition-leave-active) {
+  transition-duration: 0.16s !important;
 }
 /* 菜单项 hover/激活的过渡也压短，点击反馈更即时 */
 .side-menu :deep(.el-menu-item),
