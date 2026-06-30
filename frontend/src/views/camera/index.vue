@@ -30,7 +30,7 @@
         <el-table-column prop="name" label="名称" min-width="140" show-overflow-tooltip />
         <el-table-column label="来源类型" width="100">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.sourceType === 'rtsp' ? 'warning' : 'success'">{{ row.sourceType === 'rtsp' ? '网络RTSP' : '本地模拟' }}</el-tag>
+            <el-tag size="small" :type="srcTagType(row.sourceType)">{{ srcTagLabel(row.sourceType) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="source" label="来源" min-width="200" show-overflow-tooltip />
@@ -65,6 +65,7 @@
           <el-select v-model="form.sourceType" style="width: 100%" @change="onTypeChange">
             <el-option label="本地视频（ffmpeg 模拟）" value="file" />
             <el-option label="网络摄像头（RTSP）" value="rtsp" />
+            <el-option label="本机摄像头（DirectShow）" value="device" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="form.sourceType === 'file'" label="视频文件" prop="source">
@@ -72,6 +73,15 @@
             <el-button :icon="UploadFilled" :loading="uploading">上传视频</el-button>
           </el-upload>
           <div v-if="form.source" class="file-hint">已选：{{ form.source }}</div>
+        </el-form-item>
+        <el-form-item v-else-if="form.sourceType === 'device'" label="本机摄像头" prop="source">
+          <div class="device-row">
+            <el-select v-model="form.source" placeholder="点右侧获取本机摄像头" style="flex: 1" filterable>
+              <el-option v-for="d in devices" :key="d" :label="d" :value="d" />
+            </el-select>
+            <el-button :icon="Refresh" :loading="loadingDevices" @click="fetchDevices">获取</el-button>
+          </div>
+          <div class="file-hint">仅当服务器与摄像头同机（本地部署）有效</div>
         </el-form-item>
         <el-form-item v-else label="RTSP 地址" prop="source">
           <el-input v-model="form.source" placeholder="rtsp://用户:密码@ip:554/stream" />
@@ -133,6 +143,30 @@ const reset = () => { query.name = ''; query.status = ''; query.pageNum = 1; loa
 
 const selectedIds = ref([])
 const onSelect = (sel) => { selectedIds.value = sel.map((r) => r.id) }
+
+// 本机摄像头(DirectShow)设备枚举
+const devices = ref([])
+const loadingDevices = ref(false)
+const fetchDevices = async () => {
+  loadingDevices.value = true
+  try {
+    const res = await cameraApi.devices()
+    devices.value = res.data || []
+    if (!devices.value.length) ElMessage.warning('未发现本机摄像头设备')
+  } catch (e) {
+    ElMessage.error('获取本机摄像头失败')
+  } finally {
+    loadingDevices.value = false
+  }
+}
+
+const SRC_META = {
+  file: { label: '本地模拟', type: 'success' },
+  rtsp: { label: '网络RTSP', type: 'warning' },
+  device: { label: '本机摄像头', type: 'primary' },
+}
+const srcTagLabel = (t) => (SRC_META[t] || SRC_META.file).label
+const srcTagType = (t) => (SRC_META[t] || SRC_META.file).type
 
 const dialog = ref(false)
 const formRef = ref()
@@ -215,6 +249,7 @@ load()
 .toolbar { margin-bottom: 12px; }
 .pager { margin-top: 14px; justify-content: flex-end; }
 .file-hint { margin-top: 6px; font-size: 12px; color: #67c23a; word-break: break-all; }
+.device-row { display: flex; gap: 8px; width: 100%; }
 .preview-stage { position: relative; background: #0c1733; border-radius: 8px; min-height: 360px; display: flex; align-items: center; justify-content: center; }
 .preview-video { max-width: 100%; max-height: 520px; border-radius: 6px; }
 .preview-err { color: #f56c6c; font-size: 14px; }

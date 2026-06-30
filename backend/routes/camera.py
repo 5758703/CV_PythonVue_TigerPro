@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import Camera
 from security import permission_required, current_user, has_perm
-from services.camera_stream import mjpeg_stream
+from services.camera_stream import mjpeg_stream, list_dshow_devices
 
 camera_bp = Blueprint("camera", __name__, url_prefix="/api/camera")
 
@@ -34,6 +34,17 @@ def list_cameras():
     return jsonify(code=0, data={"rows": [c.to_dict() for c in rows], "total": total})
 
 
+@camera_bp.get("/devices")
+@permission_required("camera:query")
+def list_local_devices():
+    """枚举服务器本机的 DirectShow 视频设备名（用于「获取本机摄像头」）。"""
+    try:
+        names = list_dshow_devices()
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"枚举本机摄像头失败：{e}"), 500
+    return jsonify(code=0, data=names)
+
+
 def _apply(cam, data):
     cam.name = (data.get("name") or "").strip()
     cam.source_type = data.get("sourceType") or "file"
@@ -47,12 +58,12 @@ def _apply(cam, data):
 def _validate(cam):
     if not cam.name:
         return "请输入摄像头名称"
-    if cam.source_type not in ("file", "rtsp"):
+    if cam.source_type not in ("file", "rtsp", "device"):
         return "来源类型非法"
     if cam.source_type == "rtsp" and not cam.source.startswith("rtsp://"):
         return "rtsp 地址须以 rtsp:// 开头"
     if not cam.source:
-        return "请填写来源(本地视频或 rtsp 地址)"
+        return "请填写来源(本地视频/rtsp 地址/本机摄像头设备名)"
     return None
 
 

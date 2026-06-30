@@ -8,6 +8,7 @@ export const cameraApi = {
   update: (data) => request.put(`/camera/${data.id}`, data),
   remove: (id) => request.delete(`/camera/${id}`),
   batchRemove: (ids) => request.post('/camera/batch-delete', { ids }),
+  devices: () => request.get('/camera/devices'),
   upload: (formData) =>
     request.post('/camera/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   // MJPEG 预览：<img> 不能带 header，token 走 query

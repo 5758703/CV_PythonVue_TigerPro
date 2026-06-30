@@ -3,6 +3,7 @@
 按需按路：每个 HTTP stream 连接 spawn 一个 ffmpeg；客户端断开(GeneratorExit) -> kill。
 """
 import os
+import re
 import subprocess
 
 from flask import current_app
@@ -17,6 +18,8 @@ def build_ffmpeg_cmd(ffmpeg_exe, source_type, source, width, fps):
     common_in = ["-hide_banner", "-loglevel", "error"]
     if source_type == "rtsp":
         src = ["-rtsp_transport", "tcp", "-i", source]
+    elif source_type == "device":  # 本机摄像头(Windows DirectShow)，source 为设备名
+        src = ["-f", "dshow", "-i", f"video={source}"]
     else:  # file：循环 + 按真实速率，模拟直播
         src = ["-stream_loop", "-1", "-re", "-i", source]
     return [
@@ -49,9 +52,24 @@ def iter_jpeg_frames(chunks):
             buf = buf[end:]
 
 
+def parse_dshow_video_names(stderr_text):
+    """从 ffmpeg -list_devices 的 stderr 文本里解析视频设备名列表。"""
+    return re.findall(r'"([^"]+)"\s*\(video\)', stderr_text or "")
+
+
+def list_dshow_devices(ffmpeg_exe=None):
+    """枚举本机 DirectShow 视频设备名（Windows）。ffmpeg 将设备清单打到 stderr 且退出码非 0，属正常。"""
+    import imageio_ffmpeg
+    exe = ffmpeg_exe or imageio_ffmpeg.get_ffmpeg_exe()
+    proc = subprocess.run([exe, "-hide_banner", "-list_devices", "true",
+                           "-f", "dshow", "-i", "dummy"],
+                          capture_output=True, text=True, errors="ignore")
+    return parse_dshow_video_names(proc.stderr)
+
+
 def _resolve_source(camera):
-    """file 源相对路径 -> 绝对路径(限定 UPLOAD_FOLDER 内防穿越)；rtsp 源原样返回。"""
-    if camera.source_type == "rtsp":
+    """file 源相对路径 -> 绝对路径(限定 UPLOAD_FOLDER 内防穿越)；rtsp/device 源原样返回。"""
+    if camera.source_type in ("rtsp", "device"):
         return camera.source
     base = os.path.abspath(current_app.config["UPLOAD_FOLDER"])
     p = os.path.abspath(os.path.join(base, camera.source or ""))
