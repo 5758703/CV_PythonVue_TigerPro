@@ -31,6 +31,7 @@ class Config:
     VIDEO_FOLDER = os.path.join(UPLOAD_FOLDER, "videos")     # 上传待检测视频
     OUTPUT_FOLDER = os.path.join(UPLOAD_FOLDER, "outputs")   # 带框输出视频
     AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, "audios")     # 上传待识别音频（语音识别）
+    CAMERA_FOLDER = os.path.join(UPLOAD_FOLDER, "cameras")   # 上传的模拟摄像头视频
     MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 单文件上限 500MB（权重/视频文件较大）
     MODEL_ALLOWED_EXT = {".pt", ".pth", ".onnx", ".engine", ".weights"}
     VIDEO_ALLOWED_EXT = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
