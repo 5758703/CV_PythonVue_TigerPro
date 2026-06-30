@@ -203,6 +203,14 @@ def seed_ai_menus():
     _ensure_ai_menu(216, 230, "PaddleOCR 识别", "C", "ai:paddleocr:list",
                     path="/ai/paddleocr", component="ai/paddleocr/index", icon="Document",
                     order=8, grant_common=True)
+    # 摄像头管理（顶级菜单，order=2 排在 AI(0)/系统(1) 之后）
+    _ensure_ai_menu(240, 0, "摄像头管理", "C", "camera:list",
+                    path="/camera", component="camera/index", icon="VideoCamera",
+                    order=2, grant_common=True)
+    _ensure_ai_menu(2401, 240, "摄像头查询", "F", "camera:query", grant_common=True)
+    _ensure_ai_menu(2402, 240, "摄像头新增", "F", "camera:add")
+    _ensure_ai_menu(2403, 240, "摄像头修改", "F", "camera:edit")
+    _ensure_ai_menu(2404, 240, "摄像头删除", "F", "camera:remove")
     return True
 
 
