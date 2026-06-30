@@ -32,7 +32,8 @@ const routes = [
       { path: 'system/role', name: 'sysRole', component: () => import('../views/system/role/index.vue'), meta: { title: '角色管理' } },
       { path: 'system/dept', name: 'sysDept', component: () => import('../views/system/dept/index.vue'), meta: { title: '部门管理' } },
       { path: 'system/job', name: 'sysJob', component: () => import('../views/system/job/index.vue'), meta: { title: '岗位管理' } },
-      { path: 'system/menu', name: 'sysMenu', component: () => import('../views/system/menu/index.vue'), meta: { title: '菜单管理' } }
+      { path: 'system/menu', name: 'sysMenu', component: () => import('../views/system/menu/index.vue'), meta: { title: '菜单管理' } },
+      { path: 'camera', name: 'camera', component: () => import('../views/camera/index.vue'), meta: { title: '摄像头管理' } }
     ]
   },
   { path: '/:pathMatch(.*)*', redirect: '/index' }
