@@ -113,6 +113,65 @@ def _regroup_ai_menus():
         db.session.commit()
 
 
+def _regroup_model_menus():
+    """「模型管理」升级为目录：下挂模型列表(2010) + 模型训练(260)。"""
+    changed = False
+    m201 = Menu.query.get(201)
+    if not m201:
+        return
+
+    if m201.menu_type != "M" or m201.path != "/ai/model-center":
+        m201.menu_type = "M"
+        m201.path = "/ai/model-center"
+        m201.component = None
+        m201.perms = None
+        m201.icon = m201.icon or "Files"
+        changed = True
+
+    if not Menu.query.get(2010):
+        m2010 = _menu(2010, 201, "模型列表", "C", perms="ai:model:list",
+                      path="/ai/model", component="ai/model/index", icon="Files", order=1)
+        db.session.add(m2010)
+        db.session.flush()
+        admin = Role.query.filter_by(role_key="admin").first()
+        if admin:
+            admin.menus = list(admin.menus) + [m2010]
+        common = Role.query.filter_by(role_key="common").first()
+        if common:
+            common.menus = list(common.menus) + [m2010]
+        changed = True
+    else:
+        m2010 = Menu.query.get(2010)
+        if m2010.parent_id != 201 or m2010.path != "/ai/model":
+            m2010.parent_id = 201
+            m2010.path = "/ai/model"
+            m2010.component = m2010.component or "ai/model/index"
+            m2010.perms = m2010.perms or "ai:model:list"
+            changed = True
+
+    m2010 = Menu.query.get(2010)
+    if m2010:
+        for bid in (2011, 2012, 2013, 2014, 2015, 2016):
+            b = Menu.query.get(bid)
+            if b and b.parent_id != m2010.id:
+                b.parent_id = m2010.id
+                changed = True
+        for role in Role.query.all():
+            ids = {m.id for m in role.menus}
+            if 201 in ids and m2010.id not in ids:
+                role.menus = list(role.menus) + [m2010]
+                changed = True
+
+    m260 = Menu.query.get(260)
+    if m260 and m260.parent_id != 201:
+        m260.parent_id = 201
+        m260.order_num = 2
+        changed = True
+
+    if changed:
+        db.session.commit()
+
+
 def seed_ai_menus():
     """AI 智能识别菜单种子（独立幂等：菜单不存在才写，已初始化项目也会补齐）。
 
@@ -211,6 +270,35 @@ def seed_ai_menus():
     _ensure_ai_menu(2402, 240, "摄像头新增", "F", "camera:add")
     _ensure_ai_menu(2403, 240, "摄像头修改", "F", "camera:edit")
     _ensure_ai_menu(2404, 240, "摄像头删除", "F", "camera:remove")
+    # 升级为「摄像头」目录，下挂 摄像头管理(240) + 实时监控大屏(241)
+    _ensure_ai_menu(245, 0, "摄像头", "M", None, path="/camera-center",
+                    icon="VideoCamera", order=2, grant_common=True)
+    _m240 = Menu.query.get(240)
+    if _m240 and _m240.parent_id != 245:   # 把已存在的「摄像头管理」归入分组（幂等）
+        _m240.parent_id = 245
+        db.session.commit()
+    _ensure_ai_menu(241, 245, "实时监控大屏", "C", "camera:list",
+                    path="/camera/wall", component="camera/wall/index", icon="Monitor",
+                    order=2, grant_common=True)
+    # 水位检测（视觉识别分组 230 下，order=9）
+    _ensure_ai_menu(250, 230, "水位检测", "C", "ai:water:list",
+                    path="/ai/water", component="ai/water/index", icon="Pouring",
+                    order=9, grant_common=True)
+    _ensure_ai_menu(2501, 250, "水位检测查询", "F", "ai:water:query", grant_common=True)
+    # 老库曾误写 WaterMelon（非 Element Plus 图标名），修正为 Pouring
+    _m250 = Menu.query.get(250)
+    if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
+        _m250.icon = "Pouring"
+        db.session.commit()
+    # 模型训练（模型管理目录 201 下，order=2）
+    _ensure_ai_menu(260, 201, "模型训练", "C", "ai:training:list",
+                    path="/ai/training", component="ai/training/index", icon="Cpu",
+                    order=2, grant_common=True)
+    _ensure_ai_menu(2601, 260, "训练查询", "F", "ai:training:query", grant_common=True)
+    _ensure_ai_menu(2602, 260, "训练新增", "F", "ai:training:add")
+    _ensure_ai_menu(2603, 260, "训练修改", "F", "ai:training:edit")
+    _ensure_ai_menu(2604, 260, "训练删除", "F", "ai:training:remove")
+    _regroup_model_menus()
     return True
 
 

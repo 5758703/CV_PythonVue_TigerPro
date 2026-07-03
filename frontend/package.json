@@ -16,10 +16,12 @@
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
     "pinia": "^2.1.7",
+    "three": "^0.185.0",
     "vue": "^3.4.31",
     "vue-router": "^4.4.0"
   },
   "devDependencies": {
+    "@types/three": "^0.185.0",
     "@vitejs/plugin-vue": "^5.0.5",
     "vite": "^5.3.3"
   }

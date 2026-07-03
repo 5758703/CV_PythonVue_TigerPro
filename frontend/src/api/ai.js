@@ -129,3 +129,51 @@ export const modelApi = {
   analyzeReport: (id, payload) =>
     request.post(`/ai/model/${id}/analyze-report`, payload, { timeout: 0 }),
 }
+
+// ---------------- 水位检测
+export const waterLevelApi = {
+  detect: (formData) =>
+    request.post('/ai/water-level/detect', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+}
+
+// ---------------- 模型训练
+export const trainingApi = {
+  // 数据集
+  listDatasets: (params) => request.get('/ai/training/datasets', { params }),
+  getDataset: (id) => request.get(`/ai/training/datasets/${id}`),
+  addDataset: (data) => request.post('/ai/training/datasets', data),
+  updateDataset: (id, data) => request.put(`/ai/training/datasets/${id}`, data),
+  removeDataset: (id) => request.delete(`/ai/training/datasets/${id}`),
+  uploadDatasetFiles: (id, formData) =>
+    request.post(`/ai/training/datasets/${id}/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+  buildDataset: (id) => request.post(`/ai/training/datasets/${id}/build`, null, { timeout: 0 }),
+  datasetSamples: (id) => request.get(`/ai/training/datasets/${id}/samples`),
+  // 训练任务
+  listJobs: (params) => request.get('/ai/training/jobs', { params }),
+  getJob: (id) => request.get(`/ai/training/jobs/${id}`),
+  jobProgress: (id) => request.get(`/ai/training/jobs/${id}/progress`),
+  addJob: (data) => request.post('/ai/training/jobs', data),
+  startJob: (id) => request.post(`/ai/training/jobs/${id}/start`, null, { timeout: 0 }),
+  cancelJob: (id) => request.post(`/ai/training/jobs/${id}/cancel`),
+  removeJob: (id) => request.delete(`/ai/training/jobs/${id}`),
+  validateJob: (id) => request.post(`/ai/training/jobs/${id}/validate`, null, { timeout: 0 }),
+  validateProgress: (id) => request.get(`/ai/training/jobs/${id}/validate-progress`),
+  jobLogs: (id, params) => request.get(`/ai/training/jobs/${id}/logs`, { params }),
+  testJob: (id, formData) =>
+    request.post(`/ai/training/jobs/${id}/test`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+  exportJob: (id, data) => request.post(`/ai/training/jobs/${id}/export`, data, { timeout: 0 }),
+  deployJob: (id, data) => request.post(`/ai/training/jobs/${id}/deploy`, data),
+  getArtifact: (id, name) =>
+    request.get(`/ai/training/jobs/${id}/artifact/${name}`, { responseType: 'blob', timeout: 0 }),
+  downloadExportFile: (id, file) =>
+    request.get(`/ai/training/jobs/${id}/download-export`, { params: { file }, responseType: 'blob', timeout: 0 }),
+}
