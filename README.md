@@ -9,6 +9,11 @@ frontend/   Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 <img width="1920" height="869" alt="image" src="https://github.com/user-attachments/assets/0301e97a-85f5-441d-90cb-8d86d15efec8" />
 
 
+
+https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
+
+
+
 ## 功能
 
 - 用户注册 / 登录（JWT 认证）
