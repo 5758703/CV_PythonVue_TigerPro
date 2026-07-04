@@ -30,45 +30,104 @@
 
     <!-- 主体 -->
     <el-row :gutter="16" class="main-row" v-if="previewSrc || running">
-      <!-- 左：图像 -->
-      <el-col :span="14">
-        <el-card shadow="never" class="img-card">
-          <template #header>
-            <div class="card-hd">
-              <span>水位尺图像</span>
-              <span class="hint" v-if="previewSrc && !result">
-                可拖动红色虚线手动设置水面位置，再点「重新检测」
-              </span>
-              <span class="hint ok" v-if="result">
-                水面置信度 {{ (result.surfaceConfidence * 100).toFixed(0) }}%
-              </span>
-            </div>
-          </template>
-
-          <div class="stage-wrap">
-            <div v-if="running" class="loading-box">
-              <el-icon class="rotating" :size="40"><Loading /></el-icon>
-              <p>OCR 识别中，请稍候…</p>
-            </div>
-
-            <template v-else-if="previewSrc && !result">
-              <div class="canvas-host"
-                @mousedown="startDrag" @mousemove="onDrag" @mouseup="endDrag" @mouseleave="endDrag"
-                @touchstart.prevent="startDragT" @touchmove.prevent="onDragT" @touchend="endDrag">
-                <img ref="imgEl" :src="previewSrc" class="preview-img" @load="initCanvas" />
-                <canvas ref="cv" class="overlay-canvas" />
+      <!-- 左：图像预览 -->
+      <el-col :span="15">
+        <el-row :gutter="12" class="img-row">
+          <!-- 原图 -->
+          <el-col :span="result && !running ? 12 : 24">
+            <div class="img-panel">
+              <div class="panel-hd">
+                <span class="panel-title">原图</span>
+                <span v-if="!result && previewSrc && !running" class="panel-hint">
+                  拖动红线可手动设置水面位置
+                </span>
+                <div v-if="previewSrc && !running" class="zoom-toolbar">
+                  <el-button-group size="small">
+                    <el-button :icon="ZoomOut" @click="origZoom.zoomOut()" />
+                    <el-button class="zoom-pct" @click="origZoom.zoomFit()">{{ origZoom.pctText }}</el-button>
+                    <el-button :icon="ZoomIn" @click="origZoom.zoomIn()" />
+                  </el-button-group>
+                  <el-button size="small" link type="primary" @click="origViewer = true">全屏</el-button>
+                </div>
               </div>
-            </template>
 
-            <template v-else-if="result">
-              <img :src="'data:image/jpeg;base64,' + result.imageBase64" class="result-img" />
-            </template>
-          </div>
-        </el-card>
+              <div v-if="running" class="panel-loading">
+                <el-icon class="rotating" :size="36"><Loading /></el-icon>
+                <p>识别中…</p>
+              </div>
+
+              <div
+                v-else-if="previewSrc"
+                ref="origViewport"
+                class="zoom-viewport"
+                @wheel.prevent="origZoom.onWheel"
+              >
+                <div class="zoom-spacer" :style="origZoom.spacerStyle">
+                  <div class="zoom-inner" :style="origZoom.innerStyle">
+                  <div
+                    class="canvas-host"
+                    :class="{ interactive: !result }"
+                    @mousedown="!result && startDrag($event)"
+                    @mousemove="!result && onDrag($event)"
+                    @mouseup="endDrag"
+                    @mouseleave="endDrag"
+                    @touchstart.prevent="!result && startDragT($event)"
+                    @touchmove.prevent="!result && onDragT($event)"
+                    @touchend="endDrag"
+                  >
+                    <img
+                      ref="imgEl"
+                      :src="previewSrc"
+                      class="panel-img"
+                      draggable="false"
+                      @load="onOrigLoad"
+                    />
+                    <canvas v-if="!result" ref="cv" class="overlay-canvas" />
+                  </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </el-col>
+
+          <!-- 检测结果图 -->
+          <el-col v-if="result && !running" :span="12">
+            <div class="img-panel">
+              <div class="panel-hd">
+                <span class="panel-title">检测结果</span>
+                <span class="panel-hint ok">
+                  置信度 {{ (result.surfaceConfidence * 100).toFixed(0) }}%
+                </span>
+                <div class="zoom-toolbar">
+                  <el-button-group size="small">
+                    <el-button :icon="ZoomOut" @click="resultZoom.zoomOut()" />
+                    <el-button class="zoom-pct" @click="resultZoom.zoomFit()">{{ resultZoom.pctText }}</el-button>
+                    <el-button :icon="ZoomIn" @click="resultZoom.zoomIn()" />
+                  </el-button-group>
+                  <el-button size="small" link type="primary" @click="resultViewer = true">全屏</el-button>
+                </div>
+              </div>
+
+              <div ref="resultViewport" class="zoom-viewport" @wheel.prevent="resultZoom.onWheel">
+                <div class="zoom-spacer" :style="resultZoom.spacerStyle">
+                  <div class="zoom-inner" :style="resultZoom.innerStyle">
+                    <img
+                      ref="resultImgEl"
+                      :src="resultSrc"
+                      class="panel-img"
+                      draggable="false"
+                      @load="onResultLoad"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </el-col>
+        </el-row>
       </el-col>
 
-      <!-- 右：结果 -->
-      <el-col :span="10">
+      <!-- 右：结果数据 -->
+      <el-col :span="9">
         <el-card shadow="never" class="result-card">
           <template #header><span>检测结果</span></template>
 
@@ -77,7 +136,6 @@
           </div>
 
           <div v-else-if="result" class="result-body">
-            <!-- 大号读数 -->
             <div class="level-display" :class="levelClass">
               <div class="level-value">
                 {{ result.level != null ? result.level.toFixed(2) : 'N/A' }}
@@ -97,8 +155,8 @@
               </el-descriptions-item>
               <el-descriptions-item label="识别刻度数">
                 {{ result.markCount }} 个
-                <span v-if="result.ocrRawCount != null" style="margin-left:8px;color:#909399;font-size:12px">
-                  （OCR 共检测到 {{ result.ocrRawCount }} 行文字）
+                <span v-if="result.ocrRawCount != null" class="sub-hint">
+                  （OCR 共 {{ result.ocrRawCount }} 行）
                 </span>
               </el-descriptions-item>
               <el-descriptions-item label="水面线 y">
@@ -108,7 +166,9 @@
                 <el-progress
                   :percentage="+(result.surfaceConfidence * 100).toFixed(0)"
                   :status="result.surfaceConfidence > 0.5 ? 'success' : 'warning'"
-                  :stroke-width="8" style="width:140px" />
+                  :stroke-width="8"
+                  style="width:140px"
+                />
               </el-descriptions-item>
               <el-descriptions-item label="图像尺寸">
                 {{ result.width }} × {{ result.height }} px
@@ -118,8 +178,13 @@
             <div class="marks-section" v-if="result.marks.length">
               <div class="marks-title">已识别刻度</div>
               <div class="marks-list">
-                <el-tag v-for="m in result.marks" :key="m.value" size="small" class="mark-tag"
-                  :type="isNearWater(m) ? 'danger' : 'info'">
+                <el-tag
+                  v-for="m in result.marks"
+                  :key="m.value"
+                  size="small"
+                  class="mark-tag"
+                  :type="isNearWater(m) ? 'danger' : 'info'"
+                >
                   {{ m.value }} m
                 </el-tag>
               </div>
@@ -134,29 +199,42 @@
           <el-empty v-else description="上传图片并选择模型后开始检测" :image-size="80" />
         </el-card>
 
-        <!-- 说明 -->
         <el-card shadow="never" class="tips-card">
           <div class="tips-title">使用说明</div>
           <ol class="tips-list">
             <li>到「模型管理」拉取 RapidOCR <b>检测</b>和<b>识别</b>模型（library=rapidocr）</li>
             <li>上传水位尺照片，点击<b>开始检测</b></li>
-            <li>系统自动定位水面线，读取刻度数字并线性插值</li>
-            <li>水面置信度低时可拖动预览图中红线手动校正，再重新检测</li>
+            <li>原图与结果图均支持<b>滚轮缩放</b>、工具栏放大/缩小/适应</li>
+            <li>检测前可在原图上拖动红线手动校正水面位置</li>
             <li>理论精度 <b>0.01 m</b>（取决于图像分辨率与刻度间距）</li>
           </ol>
         </el-card>
       </el-col>
     </el-row>
 
-    <el-empty v-if="!previewSrc && !running" description="请选择图片" :image-size="120"
-      style="margin-top:80px" />
+    <el-empty v-if="!previewSrc && !running" description="请选择图片" :image-size="120" class="empty-pick" />
+
+    <el-image-viewer
+      v-if="origViewer && previewSrc"
+      :url-list="[previewSrc]"
+      hide-on-click-modal
+      @close="origViewer = false"
+    />
+    <el-image-viewer
+      v-if="resultViewer && resultSrc"
+      :url-list="[resultSrc]"
+      hide-on-click-modal
+      @close="resultViewer = false"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, Aim, Refresh, Download, Loading } from '@element-plus/icons-vue'
+import {
+  UploadFilled, Aim, Refresh, Download, Loading, ZoomIn, ZoomOut
+} from '@element-plus/icons-vue'
 import { modelApi } from '../../../api/ai'
 import request from '../../../api/request'
 
@@ -170,10 +248,19 @@ const result = ref(null)
 
 const imgEl = ref(null)
 const cv = ref(null)
-const manualWaterY = ref(null)  // 归一化 0-1，null = 自动检测
+const origViewport = ref(null)
+const resultImgEl = ref(null)
+const resultViewport = ref(null)
+const manualWaterY = ref(null)
+
+const origViewer = ref(false)
+const resultViewer = ref(false)
 
 const detModels = computed(() => allModels.value.filter(m => m.task === 'text-detection'))
 const recModels = computed(() => allModels.value.filter(m => m.task === 'text-recognition'))
+const resultSrc = computed(() =>
+  result.value?.imageBase64 ? `data:image/jpeg;base64,${result.value.imageBase64}` : ''
+)
 
 const levelClass = computed(() => {
   if (!result.value || result.value.level == null) return 'level-na'
@@ -188,6 +275,62 @@ const methodType = computed(() => {
   return 'warning'
 })
 
+function useImageZoom(viewportRef, imgRef) {
+  const zoom = ref(1)
+  const fitZoom = ref(1)
+  const naturalW = ref(0)
+  const naturalH = ref(0)
+  const pctText = computed(() => `${Math.round(zoom.value * 100)}%`)
+  const spacerStyle = computed(() => ({
+    width: `${Math.max(1, naturalW.value * zoom.value)}px`,
+    height: `${Math.max(1, naturalH.value * zoom.value)}px`
+  }))
+  const innerStyle = computed(() => ({
+    transform: `scale(${zoom.value})`,
+    transformOrigin: '0 0',
+    width: naturalW.value ? `${naturalW.value}px` : 'auto'
+  }))
+
+  function onImageLoad() {
+    const img = imgRef.value
+    if (!img) return
+    naturalW.value = img.naturalWidth || img.width
+    naturalH.value = img.naturalHeight || img.height
+    calcFit()
+  }
+
+  function calcFit() {
+    nextTick(() => {
+      const vp = viewportRef.value
+      if (!vp || !naturalW.value) return
+      const pad = 16
+      const vw = vp.clientWidth - pad
+      const vh = vp.clientHeight - pad
+      fitZoom.value = Math.min(vw / naturalW.value, vh / naturalH.value, 1)
+      zoom.value = fitZoom.value
+    })
+  }
+
+  function zoomIn() {
+    zoom.value = Math.min(4, +(zoom.value + 0.15).toFixed(2))
+  }
+  function zoomOut() {
+    zoom.value = Math.max(0.15, +(zoom.value - 0.15).toFixed(2))
+  }
+  function zoomFit() {
+    zoom.value = fitZoom.value
+  }
+  function onWheel(e) {
+    const delta = e.deltaY > 0 ? -0.1 : 0.1
+    zoom.value = Math.max(0.15, Math.min(4, +(zoom.value + delta).toFixed(2)))
+  }
+
+  return { zoom, fitZoom, pctText, spacerStyle, innerStyle, onImageLoad, calcFit, zoomIn, zoomOut, zoomFit, onWheel }
+}
+
+const origZoom = useImageZoom(origViewport, imgEl)
+const resultZoom = useImageZoom(resultViewport, resultImgEl)
+
 function isNearWater(mark) {
   if (!result.value) return false
   return Math.abs(mark.y - result.value.waterY) < result.value.height * 0.08
@@ -197,7 +340,7 @@ async function loadModels() {
   try {
     const res = await modelApi.list({ pageNum: 1, pageSize: 200 })
     allModels.value = res.data?.rows || []
-  } catch {}
+  } catch { /* ignore */ }
 }
 
 function onPick(uploadFile) {
@@ -216,8 +359,23 @@ function reset() {
   manualWaterY.value = null
 }
 
+function onOrigLoad() {
+  origZoom.onImageLoad()
+  initCanvas()
+}
+
+function onResultLoad() {
+  resultZoom.onImageLoad()
+}
+
+watch([result, running], ([r, run]) => {
+  if (r && !run) nextTick(() => resultZoom.onImageLoad())
+})
+
 // ── Canvas 水面线拖拽 ──
-let canvasH = 0, canvasW = 0, dragging = false
+let canvasH = 0
+let canvasW = 0
+let dragging = false
 
 function initCanvas() {
   nextTick(() => {
@@ -231,6 +389,10 @@ function initCanvas() {
   })
 }
 
+watch(() => origZoom.zoom.value, () => {
+  if (!result.value) nextTick(initCanvas)
+})
+
 function drawLine() {
   if (!cv.value) return
   const ctx = cv.value.getContext('2d')
@@ -241,7 +403,10 @@ function drawLine() {
   ctx.strokeStyle = '#ff3300'
   ctx.lineWidth = 2
   ctx.setLineDash([8, 5])
-  ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvasW, y); ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(0, y)
+  ctx.lineTo(canvasW, y)
+  ctx.stroke()
   ctx.fillStyle = '#ff3300'
   ctx.font = '13px monospace'
   ctx.setLineDash([])
@@ -253,6 +418,7 @@ function _ratio(clientY) {
   const rect = cv.value.getBoundingClientRect()
   return Math.max(0.01, Math.min(0.99, (clientY - rect.top) / rect.height))
 }
+
 function startDrag(e) { dragging = true; manualWaterY.value = _ratio(e.clientY); drawLine() }
 function onDrag(e) { if (!dragging) return; manualWaterY.value = _ratio(e.clientY); drawLine() }
 function endDrag() { dragging = false }
@@ -279,7 +445,10 @@ async function run() {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
     })
-    if (res.code !== 0) { ElMessage.error(res.message || '检测失败'); return }
+    if (res.code !== 0) {
+      ElMessage.error(res.message || '检测失败')
+      return
+    }
     result.value = res.data
     if (res.data.level == null) {
       ElMessage.warning(`检测完成，但未计算出水位：${res.data.note}`)
@@ -296,7 +465,7 @@ async function run() {
 function downloadResult() {
   if (!result.value?.imageBase64) return
   const a = document.createElement('a')
-  a.href = 'data:image/jpeg;base64,' + result.value.imageBase64
+  a.href = resultSrc.value
   a.download = `water_level_${result.value.level?.toFixed(2) ?? 'NA'}m.jpg`
   a.click()
 }
@@ -308,38 +477,98 @@ onMounted(loadModels)
 .water-root { padding: 0; }
 .cfg-card { margin-bottom: 14px; }
 .main-row { margin-top: 0; }
+.empty-pick { margin-top: 80px; }
 
-.card-hd { display: flex; align-items: center; gap: 10px; }
-.hint { font-size: 12px; color: #909399; }
-.hint.ok { color: #67c23a; }
+.img-row { align-items: stretch; }
 
-.stage-wrap {
-  min-height: 320px;
+.img-panel {
+  background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 460px;
+}
+
+.panel-hd {
   display: flex;
   align-items: center;
-  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.panel-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+}
+.panel-hint {
+  font-size: 12px;
+  color: #909399;
+  flex: 1;
+  min-width: 120px;
+}
+.panel-hint.ok { color: #67c23a; }
+.zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.zoom-pct {
+  min-width: 58px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
 }
 
-.loading-box {
-  display: flex; flex-direction: column;
-  align-items: center; gap: 12px;
-  color: #909399; padding: 40px 0;
+.zoom-viewport {
+  flex: 1;
+  min-height: 400px;
+  max-height: 520px;
+  overflow: auto;
+  background: repeating-conic-gradient(#e8eaed 0% 25%, #f4f5f7 0% 50%) 50% / 16px 16px;
+  padding: 8px;
 }
-.rotating { animation: spin 1.2s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+.zoom-spacer {
+  position: relative;
+  min-width: 1px;
+  min-height: 1px;
+}
+.zoom-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  line-height: 0;
+}
+
+.panel-loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #909399;
+  min-height: 400px;
+}
 
 .canvas-host {
   position: relative;
   display: inline-block;
-  cursor: ns-resize;
   user-select: none;
-  max-width: 100%;
 }
-.preview-img {
+.canvas-host.interactive {
+  cursor: ns-resize;
+}
+.panel-img {
   display: block;
-  max-width: 100%;
-  max-height: 540px;
-  object-fit: contain;
+  width: auto;
+  height: auto;
+  max-width: none;
 }
 .overlay-canvas {
   position: absolute;
@@ -348,13 +577,9 @@ onMounted(loadModels)
   height: 100%;
   pointer-events: none;
 }
-.result-img {
-  display: block;
-  max-width: 100%;
-  max-height: 560px;
-  object-fit: contain;
-  margin: 0 auto;
-}
+
+.rotating { animation: spin 1.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* 结果卡 */
 .result-card { margin-bottom: 14px; }
@@ -382,6 +607,7 @@ onMounted(loadModels)
 .level-na   .level-value { color: #909399; }
 
 .desc-table { font-size: 13px; }
+.sub-hint { margin-left: 6px; color: #909399; font-size: 12px; }
 
 .marks-title { font-size: 13px; color: #606266; margin-bottom: 6px; }
 .marks-list { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -391,4 +617,9 @@ onMounted(loadModels)
 
 .tips-title { font-weight: 600; margin-bottom: 8px; color: #303133; }
 .tips-list { margin: 0; padding-left: 18px; color: #606266; font-size: 13px; line-height: 2.1; }
+
+@media (max-width: 1200px) {
+  .img-row .el-col { max-width: 100%; flex: 0 0 100%; }
+  .main-row .el-col { max-width: 100%; flex: 0 0 100%; }
+}
 </style>

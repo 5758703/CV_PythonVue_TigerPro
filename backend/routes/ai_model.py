@@ -320,7 +320,7 @@ def _fetch_huggingface(repo_id, folder, sub, is_dir_model, want=None):
     """
     token = current_app.config.get("HF_TOKEN")  # 受限/私有仓库需令牌认证
     if is_dir_model:
-        # 目录型模型(transformers/funasr/cosyvoice 等) = 整个仓库目录（config + 权重 + tokenizer）
+        # 目录型模型(transformers/funasr 等) = 整个仓库目录（config + 权重 + tokenizer）
         from huggingface_hub import snapshot_download
         _ensure_dir(folder)
         snapshot_download(repo_id=repo_id, local_dir=folder, token=token)
@@ -372,6 +372,31 @@ def _fetch_modelscope(repo_id, folder, sub, is_dir_model):
     return rel, os.path.getsize(wp)
 
 
+def _fetch_rfdetr_weight(folder, sub, model_key):
+    """拉取 RF-DETR 官方预训练 .pth（Roboflow CDN，与 HF 模型对应）。"""
+    from inference import rfdetr_weight_filename
+    from rfdetr.assets.model_weights import download_pretrain_weights
+    fname = rfdetr_weight_filename(model_key)
+    _ensure_dir(folder)
+    dest = os.path.join(folder, fname)
+    download_pretrain_weights(dest)
+    if not os.path.isfile(dest):
+        raise ValueError(f"RF-DETR 权重下载失败：{fname}")
+    return f"models/{sub}/{fname}", os.path.getsize(dest)
+
+
+def _detect_lib(m):
+    return (m.library or "ultralytics").lower()
+
+
+def _detect_model_path(m):
+    """目标检测模型本地路径（ultralytics/rfdetr 单文件，transformers 目录）。"""
+    lib = _detect_lib(m)
+    if lib == "transformers":
+        return _abs_model_path(m)
+    return _abs_weight(m)
+
+
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
@@ -382,14 +407,17 @@ def fetch_weight(mid):
         return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
 
     hub = _hub_of(m.source_url)
-    # 仅 ultralytics 是单文件权重(.pt)；transformers/funasr/cosyvoice/linly 等均为整目录模型
-    is_dir_model = (m.library or "ultralytics") != "ultralytics"
+    lib = _detect_lib(m)
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if hub == "modelscope":
+        if lib == "rfdetr":
+            rel, size = _fetch_rfdetr_weight(folder, sub, m.model_key)
+        elif hub == "modelscope":
+            is_dir_model = lib != "ultralytics"
             rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
         else:
+            is_dir_model = lib != "ultralytics"
             rel, size = _fetch_huggingface(
                 repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
     except Exception as e:  # noqa: BLE001  网络/仓库错误统一回传
@@ -561,11 +589,8 @@ def transcribe_route(mid):
 @ai_model_bp.get("/<int:mid>/tts-speakers")
 @permission_required("ai:model:query")
 def tts_speakers_route(mid):
-    """文本转语音可用音色列表（仅 CosyVoice SFT 有预置音色；transformers TTS 无）。"""
+    """文本转语音可用音色列表（VibeVoice 等有预置音色；transformers TTS 无）。"""
     m = AiModel.query.get_or_404(mid)
-    if (m.library or "") == "cosyvoice":
-        from inference import COSYVOICE_SFT_SPEAKERS
-        return jsonify(code=0, data=COSYVOICE_SFT_SPEAKERS)
     if (m.library or "") == "vibevoice":
         from inference import list_vibevoice_voices
         return jsonify(code=0, data=list_vibevoice_voices())
@@ -577,7 +602,7 @@ def tts_speakers_route(mid):
 def tts_route(mid):
     """文本转语音在线测试：文本 -> wav(base64)。
 
-    transformers(VITS/MMS-TTS) 单音色；CosyVoice SFT 按预置音色合成。
+    transformers(VITS/MMS-TTS) 单音色；VibeVoice 等按预置音色合成。
     """
     m = AiModel.query.get_or_404(mid)
     path = _abs_model_path(m)
@@ -591,10 +616,7 @@ def tts_route(mid):
         return jsonify(code=400, message="请输入待合成文本"), 400
 
     try:
-        if (m.library or "") == "cosyvoice":
-            from inference import synthesize_speech
-            result = synthesize_speech(path, text, speaker=speaker)
-        elif (m.library or "") == "vibevoice":
+        if (m.library or "") == "vibevoice":
             from inference import synthesize_speech_vibevoice
             result = synthesize_speech_vibevoice(path, text, speaker=speaker)
         elif (m.library or "") == "sherpa-onnx":
@@ -614,8 +636,10 @@ def tts_route(mid):
 @ai_model_bp.post("/<int:mid>/tts-clone")
 @permission_required("ai:model:query")
 def tts_clone_route(mid):
-    """零样本音色克隆（CosyVoice2）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。"""
+    """零样本音色克隆（VoxCPM）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。"""
     m = AiModel.query.get_or_404(mid)
+    if (m.library or "") != "voxcpm":
+        return jsonify(code=400, message="该模型不支持音色克隆"), 400
     path = _abs_model_path(m)
     if path is None:
         return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
@@ -639,12 +663,8 @@ def tts_clone_route(mid):
     file.save(prompt_path)
 
     try:
-        if (m.library or "") == "voxcpm":
-            from inference import synthesize_speech_voxcpm_clone
-            result = synthesize_speech_voxcpm_clone(path, text, prompt_text, prompt_path)
-        else:
-            from inference import synthesize_speech_v2
-            result = synthesize_speech_v2(path, text, prompt_text, prompt_path)
+        from inference import synthesize_speech_voxcpm_clone
+        result = synthesize_speech_voxcpm_clone(path, text, prompt_text, prompt_path)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"合成失败：{e}"), 500
     finally:
@@ -775,8 +795,8 @@ def answer_question_route(mid):
 def detect(mid):
     """在线测试：用模型权重对上传图片做检测（YOLO 或 transformers）。"""
     m = AiModel.query.get_or_404(mid)
-    is_hf = (m.library or "ultralytics") == "transformers"
-    abs_path = _abs_model_path(m) if is_hf else _abs_weight(m)
+    lib = _detect_lib(m)
+    abs_path = _detect_model_path(m)
     if abs_path is None:
         return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
 
@@ -791,10 +811,14 @@ def detect(mid):
 
     draw = request.form.get("draw", "1") != "0"  # 实时场景传 0，省服务端画框/编码
     try:
-        if is_hf:
+        if lib == "transformers":
             from inference import detect_image_hf
             result = detect_image_hf(abs_path, file.read(), conf=conf, draw=draw,
                                      task=m.task or "object-detection")
+        elif lib == "rfdetr":
+            from inference import detect_image_rfdetr
+            result = detect_image_rfdetr(abs_path, file.read(), conf=conf, draw=draw,
+                                         model_key=m.model_key or "rf-detr-medium")
         else:
             from inference import detect_image
             result = detect_image(abs_path, file.read(), conf=conf, draw=draw)
@@ -867,7 +891,7 @@ _video_jobs = {}
 _video_jobs_lock = threading.Lock()
 
 
-def _video_worker(job_id, is_hf, task, abs_path, src_path, out_path, out_name, conf):
+def _video_worker(job_id, library, task, abs_path, src_path, out_path, out_name, conf, model_key=""):
     """后台线程：逐帧检测，按帧上报进度，完成写结果。"""
     def cb(processed, total):
         with _video_jobs_lock:
@@ -876,9 +900,14 @@ def _video_worker(job_id, is_hf, task, abs_path, src_path, out_path, out_name, c
                 j["processed"] = processed
                 j["total"] = total
     try:
-        if is_hf:
+        lib = (library or "ultralytics").lower()
+        if lib == "transformers":
             from inference import detect_video_hf
             stats = detect_video_hf(abs_path, src_path, out_path, conf=conf, task=task, progress_cb=cb)
+        elif lib == "rfdetr":
+            from inference import detect_video_rfdetr
+            stats = detect_video_rfdetr(abs_path, src_path, out_path, conf=conf,
+                                        model_key=model_key, progress_cb=cb)
         else:
             from inference import detect_video
             stats = detect_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
@@ -902,8 +931,8 @@ def _video_worker(job_id, is_hf, task, abs_path, src_path, out_path, out_name, c
 def detect_video_route(mid):
     """视频检测：启动异步逐帧任务，立即返回 jobId（前端轮询进度）。"""
     m = AiModel.query.get_or_404(mid)
-    is_hf = (m.library or "ultralytics") == "transformers"
-    abs_path = _abs_model_path(m) if is_hf else _abs_weight(m)
+    lib = _detect_lib(m)
+    abs_path = _detect_model_path(m)
     if abs_path is None:
         return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
 
@@ -937,7 +966,8 @@ def detect_video_route(mid):
                                "stats": None, "error": None}
     threading.Thread(
         target=_video_worker,
-        args=(job_id, is_hf, m.task or "object-detection", abs_path, src_path, out_path, out_name, conf),
+        args=(job_id, lib, m.task or "object-detection", abs_path, src_path, out_path, out_name, conf,
+              m.model_key or ""),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})

@@ -6,7 +6,7 @@
       <div class="hero-body">
         <h1 class="hero-title">Tiger AI Platform</h1>
         <p class="hero-sub">多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 多模态 全栈纳管</p>
-        <p class="hero-desc">一站式管理与在线测试多种 AI 模型：从 <b>HuggingFace / ModelScope（模搭社区）双下载源</b>拉取权重、统一纳管、按任务在对应页面即点即测。 平台现支持 <b>14 类 AI 任务</b>，跨 <b>视觉 / 文本 / 语音 / 多模态</b> 四大方向， 推理引擎涵盖 <b>YOLO · ByteTrack · transformers · funasr · onnx 量化 · CosyVoice · VibeVoice · VoxCPM</b>，纯 <b>CPU</b> 即可运行 —— 覆盖目标检测、图像分类、目标追踪、姿态估计、文本分类、零样本分类、完形填空、翻译 / 摘要 / 生成、实体识别、智能问答、语音识别、语音合成、数字人合成。 视觉任务支持<b>图片 / 视频 / 摄像头实时</b>三种输入，追踪与姿态可<b>摄像头实时处理、越线计数并录制下载</b>；图片检测可调 <b>DeepSeek AI</b> 生成正式检测报告。</p>
+        <p class="hero-desc">一站式管理与在线测试多种 AI 模型：从 <b>HuggingFace / ModelScope（模搭社区）双下载源</b>拉取权重、统一纳管、按任务在对应页面即点即测。 平台现支持 <b>14 类 AI 任务</b>，跨 <b>视觉 / 文本 / 语音 / 多模态</b> 四大方向， 推理引擎涵盖 <b>YOLO · ByteTrack · transformers · funasr · onnx 量化 · VibeVoice · VoxCPM</b>，纯 <b>CPU</b> 即可运行 —— 覆盖目标检测、图像分类、目标追踪、姿态估计、文本分类、零样本分类、完形填空、翻译 / 摘要 / 生成、实体识别、智能问答、语音识别、语音合成、数字人合成。 视觉任务支持<b>图片 / 视频 / 摄像头实时</b>三种输入，追踪与姿态可<b>摄像头实时处理、越线计数并录制下载</b>；图片检测可调 <b>DeepSeek AI</b> 生成正式检测报告。</p>
         <div class="hero-tags">
           <el-tag effect="dark" color="#409eff" class="htag">目标检测</el-tag>
           <el-tag effect="dark" color="#67c23a" class="htag">图像分类</el-tag>

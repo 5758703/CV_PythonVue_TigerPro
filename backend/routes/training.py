@@ -2,6 +2,7 @@
 import os
 import shutil
 import threading
+import zipfile
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify, current_app, send_file
@@ -12,7 +13,14 @@ from models.training import TrainingDataset, TrainingJob
 from security import permission_required
 from services.training import (
     build_yolo_dataset,
+    build_dataset_unified,
     write_data_yaml,
+    detect_dataset_format,
+    extract_zip_dataset,
+    scan_dataset_structure,
+    DATASET_FORMATS,
+    get_format_specs_list,
+    is_allowed_import_path,
     run_training_worker,
     request_cancel,
     validate_model,
@@ -22,11 +30,12 @@ from services.training import (
     read_metrics_history,
     parse_results_csv,
     run_validate_worker,
+    IMG_EXTENSIONS,
 )
 
 training_bp = Blueprint("training", __name__, url_prefix="/api/ai/training")
 
-_IMG_EXT = {".jpg", ".jpeg", ".png", ".bmp"}
+_IMG_EXT = set(IMG_EXTENSIONS) | {".xml", ".txt", ".yaml", ".yml", ".zip"}
 _XML_EXT = {".xml"}
 
 _val_jobs = {}
@@ -81,6 +90,13 @@ def job_logs(jid):
 
 # ── 数据集 ────────────────────────────────────────────
 
+@training_bp.get("/datasets/formats")
+@permission_required("ai:training:query")
+def list_dataset_formats():
+    """返回支持的数据集格式列表（含详细说明）。"""
+    return jsonify(code=0, data=get_format_specs_list())
+
+
 @training_bp.get("/datasets")
 @permission_required("ai:training:list")
 def list_datasets():
@@ -109,13 +125,29 @@ def create_dataset():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify(code=400, message="请输入数据集名称"), 400
+
+    fmt = (data.get("format") or "auto").strip().lower()
+    if fmt not in DATASET_FORMATS:
+        return jsonify(code=400, message=f"不支持的格式: {fmt}"), 400
+
     class_names = data.get("classNames") or []
-    if not class_names:
-        return jsonify(code=400, message="请至少填写一个类别名称"), 400
+    source_path = (data.get("sourcePath") or "").strip()
+
+    if fmt == "import":
+        if not source_path:
+            return jsonify(code=400, message="import 格式请填写本地数据集路径 sourcePath"), 400
+        src = Path(source_path)
+        if not src.exists():
+            return jsonify(code=400, message=f"源路径不存在: {source_path}"), 400
+        if not is_allowed_import_path(src, Path(current_app.config["BASE_DIR"])):
+            return jsonify(code=400, message="仅允许导入项目目录内的数据集路径"), 400
+    elif not class_names and fmt not in ("yolo", "auto", "coco", "labelme", "import"):
+        return jsonify(code=400, message="请至少填写一个类别名称（YOLO/COCO/LabelMe 可从标注文件推断）"), 400
 
     ds = TrainingDataset(
         name=name,
-        format=data.get("format") or "voc",
+        format=fmt,
+        source_path=source_path or None,
         split_ratio=float(data.get("splitRatio") or 0.8),
         description=(data.get("description") or "").strip(),
         status="draft",
@@ -124,7 +156,8 @@ def create_dataset():
     db.session.add(ds)
     db.session.flush()
 
-    raw_dir = _dataset_dir(ds.id) / "raw"
+    ds_root = _dataset_dir(ds.id)
+    raw_dir = ds_root / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     ds.storage_path = str(raw_dir.relative_to(_upload_root())).replace("\\", "/")
     db.session.commit()
@@ -142,6 +175,12 @@ def update_dataset(did):
         ds.set_class_list(data["classNames"])
     if "splitRatio" in data:
         ds.split_ratio = float(data["splitRatio"])
+    if "format" in data:
+        fmt = (data.get("format") or "auto").strip().lower()
+        if fmt in DATASET_FORMATS:
+            ds.format = fmt
+    if "sourcePath" in data:
+        ds.source_path = (data.get("sourcePath") or "").strip() or None
     if "description" in data:
         ds.description = (data.get("description") or "").strip()
     db.session.commit()
@@ -165,8 +204,11 @@ def delete_dataset(did):
 @training_bp.post("/datasets/<int:did>/upload")
 @permission_required("ai:training:add")
 def upload_dataset_files(did):
-    """上传 VOC 标注文件（jpg/png + xml 配对）。"""
+    """上传数据集文件：图片、XML、YOLO txt、data.yaml 或 zip 压缩包。"""
     ds = TrainingDataset.query.get_or_404(did)
+    if ds.format == "import":
+        return jsonify(code=400, message="import 格式无需上传，请直接构建"), 400
+
     raw_dir = _dataset_dir(did) / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
@@ -178,72 +220,138 @@ def upload_dataset_files(did):
     if not files:
         return jsonify(code=400, message="未接收到文件"), 400
 
-    saved = 0
+    saved, zip_extracted = 0, 0
     for f in files:
         if not f or not f.filename:
             continue
         fname = secure_filename(f.filename)
         ext = Path(fname).suffix.lower()
-        if ext not in _IMG_EXT and ext not in _XML_EXT:
+
+        if ext == ".zip":
+            zip_path = raw_dir / fname
+            f.save(str(zip_path))
+            saved += 1
+            try:
+                zip_extracted += extract_zip_dataset(zip_path, raw_dir)
+            except zipfile.BadZipFile:
+                return jsonify(code=400, message=f"无效的 zip 文件: {fname}"), 400
             continue
-        f.save(str(raw_dir / fname))
+
+        if ext not in _IMG_EXT:
+            continue
+
+        # 支持 zip 内相对路径（如 images/train/xxx.jpg）
+        rel_path = request.form.get("relativePath") or fname
+        rel_path = rel_path.replace("\\", "/").lstrip("/")
+        if ".." in rel_path:
+            continue
+        target = raw_dir / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        f.save(str(target))
         saved += 1
 
-    return jsonify(code=0, message=f"已上传 {saved} 个文件", data={"saved": saved})
+    detected = detect_dataset_format(raw_dir)
+    return jsonify(code=0, message=f"已上传 {saved} 个文件" + (f"，解压 {zip_extracted} 个" if zip_extracted else ""),
+                    data={"saved": saved, "zipExtracted": zip_extracted, "detectedFormat": detected})
 
 
 @training_bp.post("/datasets/<int:did>/build")
 @permission_required("ai:training:edit")
 def build_dataset(did):
-    """VOC → YOLO 格式转换并生成 data.yaml。"""
+    """多格式数据集 → YOLO 统一格式并生成 data.yaml。"""
     ds = TrainingDataset.query.get_or_404(did)
-    raw_dir = _dataset_dir(did) / "raw"
     yolo_dir = _dataset_dir(did) / "yolo"
-    if not raw_dir.exists():
+    raw_dir = _dataset_dir(did) / "raw"
+    fmt = (ds.format or "auto").lower()
+    class_names = ds.class_list()
+
+    source_path = Path(ds.source_path) if ds.source_path else None
+    work_dir = raw_dir
+
+    if fmt == "import":
+        if not source_path or not source_path.exists():
+            return jsonify(code=400, message="import 格式请填写有效的 sourcePath"), 400
+        work_dir = source_path
+    elif fmt != "import" and not raw_dir.exists():
         return jsonify(code=400, message="请先上传标注数据"), 400
 
-    if yolo_dir.exists():
-        shutil.rmtree(yolo_dir, ignore_errors=True)
+    try:
+        train_n, val_n, diag = build_dataset_unified(
+            fmt=fmt,
+            source_dir=work_dir,
+            yolo_dir=yolo_dir,
+            class_names=class_names,
+            split_ratio=ds.split_ratio or 0.8,
+            source_path=source_path,
+            app_base_dir=Path(current_app.config["BASE_DIR"]),
+        )
+    except ValueError as e:
+        ds.status = "error"
+        db.session.commit()
+        return jsonify(code=400, message=str(e)), 400
+    except Exception as e:  # noqa: BLE001
+        ds.status = "error"
+        db.session.commit()
+        return jsonify(code=500, message=f"构建失败：{e}"), 500
 
-    class_names = ds.class_list()
-    ok, skip, train_n, val_n, diag = build_yolo_dataset(
-        raw_dir, yolo_dir, class_names, split_ratio=ds.split_ratio or 0.8,
-    )
-    if ok == 0:
+    if train_n + val_n == 0:
         ds.status = "error"
         db.session.commit()
         found = diag.get("foundClasses") or []
         hint = ""
         if found and class_names and not set(found).intersection(set(class_names)):
-            hint = f"；XML 类别={found} 与你填写的类别={class_names} 不匹配（请严格一致，区分大小写）"
-        msg = (
-            f"无有效样本（XML {diag.get('xmlTotal', 0)}，跳过 {skip}："
-            f"缺图片 {diag.get('skipNoImage', 0)}，无有效框 {diag.get('skipNoBoxes', 0)}，"
-            f"XML 解析失败 {diag.get('skipParseError', 0)}）{hint}"
-        )
+            hint = f"；标注类别={found} 与填写类别={class_names} 不匹配（区分大小写）"
+        fmt_used = diag.get("format", fmt)
+        if fmt_used == "voc" or fmt_used == "voc_standard":
+            msg = (
+                f"无有效样本（XML {diag.get('xmlTotal', 0)}，跳过 {diag.get('skip', 0)}："
+                f"缺图片 {diag.get('skipNoImage', 0)}，无有效框 {diag.get('skipNoBoxes', 0)}，"
+                f"解析失败 {diag.get('skipParseError', 0)}）{hint}"
+            )
+        elif fmt_used in ("coco", "labelme"):
+            msg = (
+                f"无有效样本（格式={fmt_used}，跳过 {diag.get('skip', 0)}）"
+                f"{hint}"
+            )
+        else:
+            msg = f"无有效样本（检测格式={fmt_used}）{hint}"
         return jsonify(code=400, message=msg, data=diag), 400
 
-    yaml_path = write_data_yaml(yolo_dir, class_names)
+    # 若构建时从 yaml 推断出类别，回写数据库
+    inferred = diag.get("classNames")
+    if inferred and not class_names:
+        ds.set_class_list(inferred)
+        class_names = inferred
+
+    yaml_path = yolo_dir / "data.yaml"
+    if not yaml_path.exists():
+        yaml_path = write_data_yaml(yolo_dir, class_names)
+
     ds.train_count = train_n
     ds.val_count = val_n
     ds.yaml_path = str(yaml_path.relative_to(_upload_root())).replace("\\", "/")
     ds.status = "ready"
     db.session.commit()
-    return jsonify(code=0, message=f"构建完成：训练 {train_n} / 验证 {val_n}（跳过 {skip}）", data=ds.to_dict())
+
+    fmt_label = DATASET_FORMATS.get(diag.get("format", fmt), diag.get("format", fmt))
+    skip = diag.get("skip", 0)
+    msg = f"构建完成（{fmt_label}）：训练 {train_n} / 验证 {val_n}"
+    if skip:
+        msg += f"（跳过 {skip}）"
+    return jsonify(code=0, message=msg, data={**ds.to_dict(), "buildInfo": diag})
 
 
 @training_bp.get("/datasets/<int:did>/samples")
 @permission_required("ai:training:query")
 def dataset_samples(did):
-    """预览数据集文件列表。"""
+    """预览数据集文件列表与结构检测。"""
     ds = TrainingDataset.query.get_or_404(did)
-    raw_dir = _dataset_dir(did) / "raw"
-    files = []
-    if raw_dir.exists():
-        for p in sorted(raw_dir.iterdir()):
-            if p.is_file():
-                files.append({"name": p.name, "size": p.stat().st_size})
-    return jsonify(code=0, data={"dataset": ds.to_dict(), "files": files[:200]})
+    if ds.format == "import" and ds.source_path:
+        scan_dir = Path(ds.source_path)
+    else:
+        scan_dir = _dataset_dir(did) / "raw"
+    info = scan_dataset_structure(scan_dir)
+    return jsonify(code=0, data={"dataset": ds.to_dict(), **info})
 
 
 # ── 训练任务 ──────────────────────────────────────────

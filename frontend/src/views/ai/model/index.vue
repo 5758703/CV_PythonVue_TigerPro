@@ -102,10 +102,10 @@
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="transformers（HF 模型目录）" value="transformers" />
+            <el-option label="rfdetr（RF-DETR 目标检测）" value="rfdetr" />
             <el-option label="funasr（语音识别）" value="funasr" />
             <el-option label="funasr-onnx（语音识别 onnx）" value="funasr-onnx" />
             <el-option label="sherpa-onnx（语音合成 onnx）" value="sherpa-onnx" />
-            <el-option label="cosyvoice（语音合成/克隆）" value="cosyvoice" />
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
             <el-option label="voxcpm（语音合成/克隆/音色设计）" value="voxcpm" />
             <el-option label="rapidocr（PaddleOCR onnx）" value="rapidocr" />
@@ -280,10 +280,10 @@ const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "ima
 
 const LIB_DEFAULT_TASK = {
   ultralytics: "object-detection",
+  rfdetr: "object-detection",
   "funasr": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",
   "sherpa-onnx": "text-to-speech",
-  "cosyvoice": "text-to-speech",
   "vibevoice": "text-to-speech",
   "voxcpm": "text-to-speech",
   "linly": "talking-head",

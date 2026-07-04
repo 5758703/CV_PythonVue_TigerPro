@@ -27,7 +27,6 @@ Flask 应用 :5001
         ├─ transformers            文本分类/零样本/完形/翻译/摘要/生成/NER/QA/图像分类/DETR/MMS-TTS
         ├─ funasr / funasr_onnx    语音识别（SenseVoice / 量化 onnx）
         ├─ sherpa-onnx             MeloTTS 中英混合语音合成
-        ├─ CosyVoice (vendored)    语音合成 / 零样本音色克隆
         └─ VibeVoice (vendored)    实时语音合成（预置音色）
    ▼
 MySQL（元数据） + uploads/（模型权重 / 上传媒体 / 输出）
@@ -49,7 +48,7 @@ MySQL（元数据） + uploads/（模型权重 / 上传媒体 / 输出）
 | 推理引擎 | ultralytics(YOLO)、transformers 4.51、funasr、funasr_onnx、sherpa-onnx、onnxruntime |
 | 模型来源 | huggingface_hub、modelscope |
 | 媒体处理 | OpenCV、imageio-ffmpeg(H.264)、soundfile、librosa |
-| 第三方推理代码（vendored） | `third_party/CosyVoice`(+Matcha-TTS)、`third_party/VibeVoice` |
+| 第三方推理代码（vendored） | `uploads/models/third_party/VibeVoice` |
 
 ## 目录结构
 
@@ -65,7 +64,7 @@ backend/
 ├─ routes/           # 蓝图（auth/user/role/dept/job/menu/ai_model）
 ├─ requirements.txt
 ├─ .env.example      # 环境变量样例（复制为 .env）
-└─ uploads/          # 运行时生成：models / videos / audios / outputs
+└─ uploads/          # 运行时：models(含 third_party/VibeVoice) / videos / audios / outputs
 ```
 
 ## 环境准备
@@ -106,13 +105,12 @@ MODELSCOPE_TOKEN=    # 可选：拉取 ModelScope 受限模型
 
 ### 4. 语音 / 数字人引擎（按需，可选）
 
-仅用 YOLO / transformers 任务可跳过。需要 CosyVoice / VibeVoice 时，clone 官方推理代码到 `third_party/`：
+仅用 YOLO / transformers 任务可跳过。需要 VibeVoice 时，clone 官方推理代码：
 
 ```bash
-git clone --recursive https://github.com/FunAudioLLM/CosyVoice third_party/CosyVoice
-git clone           https://github.com/microsoft/VibeVoice  third_party/VibeVoice
+git clone https://github.com/microsoft/VibeVoice  backend/uploads/models/third_party/VibeVoice
 ```
-运行时由 `inference._ensure_cosyvoice_path` / `_ensure_vibevoice_path` 自动注入 `sys.path`。
+运行时由 `inference._ensure_vibevoice_path` 自动注入 `sys.path`。
 
 ## 本地运行
 
@@ -153,7 +151,7 @@ waitress-serve --listen=0.0.0.0:5001 app:app
 部署要点：
 - **worker 数宜小**（推理吃内存，模型按进程缓存）；用线程（`--threads`）承载并发，`timeout` 设 0（推理耗时长）。
 - 视频检测 / 数字人为**异步后台任务**（内存任务表 + 轮询进度），多 worker 下任务表不共享 —— 单 worker 或外置任务队列。
-- `uploads/`、`third_party/`、`.env` 需随部署保留 / 挂载；权重 / 视频文件大，注意磁盘与上传体积上限（默认 500MB）。
+- `uploads/models/third_party/`（VibeVoice）、`.env` 需随部署保留；权重 / 视频文件大，注意磁盘与上传体积上限（默认 500MB）。
 - 首次推理会下载 / 加载模型，存在冷启动延迟；模型按 `model_dir` 进程内缓存复用。
 
 ## API 速览

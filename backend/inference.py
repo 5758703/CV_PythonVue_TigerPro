@@ -490,6 +490,120 @@ def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detec
             "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
 
 
+# ------------------------------------------------------------ RF-DETR 目标检测（Roboflow rfdetr 包）
+_rfdetr_cache = {}
+
+_RFDETR_CLASS = {
+    "rf-detr-nano": "RFDETRNano",
+    "rf-detr-small": "RFDETRSmall",
+    "rf-detr-medium": "RFDETRMedium",
+    "rf-detr-large": "RFDETRLarge",
+}
+
+_RFDETR_WEIGHT = {
+    "rf-detr-nano": "rf-detr-nano.pth",
+    "rf-detr-small": "rf-detr-small.pth",
+    "rf-detr-medium": "rf-detr-medium.pth",
+    "rf-detr-large": "rf-detr-large-2026.pth",
+}
+
+
+def rfdetr_weight_filename(model_key):
+    """model_key -> 官方预训练权重文件名。"""
+    return _RFDETR_WEIGHT.get((model_key or "rf-detr-medium").lower(), "rf-detr-medium.pth")
+
+
+def _get_rfdetr_model(abs_weight_path, model_key="rf-detr-medium"):
+    mtime = os.path.getmtime(abs_weight_path)
+    cache_key = (abs_weight_path, mtime, model_key)
+    with _lock:
+        if cache_key in _rfdetr_cache:
+            return _rfdetr_cache[cache_key]
+        import importlib
+        from rfdetr.assets.coco_classes import COCO_CLASS_NAMES
+        cls_name = _RFDETR_CLASS.get((model_key or "rf-detr-medium").lower(), "RFDETRMedium")
+        rfdetr_mod = importlib.import_module("rfdetr")
+        cls = getattr(rfdetr_mod, cls_name)
+        model = cls(pretrain_weights=abs_weight_path)
+        names = list(COCO_CLASS_NAMES)
+        _rfdetr_cache[cache_key] = (model, names)
+        return _rfdetr_cache[cache_key]
+
+
+def _rfdetr_to_detections(sv_det, class_names):
+    dets = []
+    if sv_det is None or len(sv_det) == 0:
+        return dets
+    for i in range(len(sv_det)):
+        x1, y1, x2, y2 = sv_det.xyxy[i]
+        cid = int(sv_det.class_id[i])
+        cname = class_names[cid] if 0 <= cid < len(class_names) else str(cid)
+        dets.append({
+            "className": cname,
+            "classId": cid,
+            "confidence": round(float(sv_det.confidence[i]), 4),
+            "bbox": [round(float(x1), 1), round(float(y1), 1),
+                     round(float(x2), 1), round(float(y2), 1)],
+        })
+    return dets
+
+
+def detect_image_rfdetr(abs_path, image_bytes, conf=0.25, draw=True, model_key="rf-detr-medium"):
+    """RF-DETR 图片检测（Roboflow/rf-detr-medium 等），输出格式与 YOLO 一致。"""
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    model, class_names = _get_rfdetr_model(abs_path, model_key)
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    sv_det = model.predict(rgb, threshold=conf)
+    detections = _rfdetr_to_detections(sv_det, class_names)
+    if draw:
+        _draw_dets(img, detections)
+        ok, buf = cv2.imencode(".jpg", img)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    else:
+        image_b64 = None
+    h, w = img.shape[:2]
+    return {"detections": detections, "count": len(detections),
+            "imageBase64": image_b64, "width": w, "height": h}
+
+
+def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-detr-medium", progress_cb=None):
+    """RF-DETR 逐帧视频检测。"""
+    model, class_names = _get_rfdetr_model(abs_path, model_key)
+    cap = cv2.VideoCapture(src_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频文件")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    writer, ew, eh = _open_h264(dst_path, fps, w, h)
+    class_counts, total_det, frames = {}, 0, 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            sv_det = model.predict(rgb, threshold=conf)
+            dets = _rfdetr_to_detections(sv_det, class_names)
+            for d in dets:
+                class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
+                total_det += 1
+            _draw_dets(frame, dets)
+            _write_bgr(writer, frame, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        cap.release()
+        writer.close()
+    return {"frames": frames, "totalFrames": total, "totalDetections": total_det,
+            "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+
+
 def classify_image(model_dir, image_bytes, task="image-classification", top_k=5):
     """transformers 图像分类，返回 results=[{label, score}] 降序 + top。"""
     from PIL import Image
@@ -738,53 +852,6 @@ def synthesize_talking_head(model_dir, image_path, audio_path, out_path, progres
     )
 
 
-# ------------------------------------------------------------ CosyVoice 文本转语音（TTS）
-_cosyvoice_cache = {}  # model_dir -> CosyVoice 实例
-
-# CosyVoice-300M-SFT 预置音色
-COSYVOICE_SFT_SPEAKERS = ["中文女", "中文男", "日语男", "粤语女", "英文女", "英文男", "韩语女"]
-
-
-def _get_cosyvoice(model_dir):
-    """加载/缓存 CosyVoice 模型（依赖官方 cosyvoice 推理代码在 PYTHONPATH 中）。"""
-    with _lock:
-        if model_dir in _cosyvoice_cache:
-            return _cosyvoice_cache[model_dir]
-        try:
-            from cosyvoice.cli.cosyvoice import CosyVoice  # 官方推理代码（非 pypi 壳包）
-        except ImportError as e:
-            raise RuntimeError(
-                "CosyVoice 本地推理需官方推理代码（pypi 包不含）：请执行 "
-                "git clone --recursive https://github.com/FunAudioLLM/CosyVoice，"
-                "将其根目录与 third_party/Matcha-TTS 加入 PYTHONPATH 后再使用。"
-            ) from e
-        model = CosyVoice(model_dir)
-        _cosyvoice_cache[model_dir] = model
-        return model
-
-
-def synthesize_speech(model_dir, text, speaker="中文女"):
-    """CosyVoice SFT 文本转语音：文本 + 预置音色 -> wav。
-
-    返回 {audio(base64 wav), sampleRate, speaker}。
-    """
-    import io
-    import base64
-    import torchaudio
-
-    model = _get_cosyvoice(model_dir)
-    chunks = [o["tts_speech"] for o in model.inference_sft(text, speaker)]
-    if not chunks:
-        raise ValueError("合成结果为空")
-    import torch as _torch
-    wav = _torch.concat(chunks, dim=1)
-    sr = int(getattr(model, "sample_rate", 22050))
-    buf = io.BytesIO()
-    torchaudio.save(buf, wav, sr, format="wav")
-    audio_b64 = base64.b64encode(buf.getvalue()).decode()
-    return {"audio": audio_b64, "sampleRate": sr, "speaker": speaker}
-
-
 def synthesize_speech_hf(model_dir, text, task="text-to-speech"):
     """transformers 文本转语音（VITS/MMS-TTS 等），CPU 原生 pipeline。
 
@@ -805,119 +872,19 @@ def synthesize_speech_hf(model_dir, text, task="text-to-speech"):
     return {"audio": audio_b64, "sampleRate": sr, "speaker": None}
 
 
-# ------------------------------------------------------------ CosyVoice2 零样本音色克隆（TTS）
-_cosyvoice2_cache = {}  # model_dir -> CosyVoice2 实例
-
-
-def _ensure_cosyvoice_path():
-    """把 vendored 官方 CosyVoice 仓库 + Matcha-TTS 加入 sys.path（幂等）。"""
-    base = os.path.dirname(os.path.abspath(__file__))
-    repo = os.path.abspath(os.path.join(base, "..", "third_party", "CosyVoice"))
-    for p in (repo, os.path.join(repo, "third_party", "Matcha-TTS")):
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.insert(0, p)
-    _patch_torchaudio_backend()
-
-
-def _patch_torchaudio_backend():
-    """torchaudio 2.11 的 load() 无条件走 torchcodec(Windows 难装)且忽略 backend 参数。
-
-    CosyVoice 内部多处调用 torchaudio.load，此处整体替换为 soundfile 实现（幂等）。
-    返回 (waveform[C,T] float32, sample_rate)，与 torchaudio.load 契约一致。
-    """
-    import torchaudio
-    if getattr(torchaudio, "_sf_loader_patched", False):
-        return
-    import soundfile as _sf
-    import torch as _t
-
-    def _load_sf(uri, frame_offset=0, num_frames=-1, normalize=True,
-                 channels_first=True, format=None, buffer_size=4096, backend=None):
-        data, sr = _sf.read(uri, dtype="float32", always_2d=True)  # [T, C]
-        if frame_offset:
-            data = data[frame_offset:]
-        if num_frames is not None and num_frames > 0:
-            data = data[:num_frames]
-        wav = _t.from_numpy(data.T.copy())  # [C, T]
-        if not channels_first:
-            wav = wav.transpose(0, 1)
-        return wav, sr
-
-    torchaudio.load = _load_sf
-    torchaudio._sf_loader_patched = True
-
-
-def _get_cosyvoice2(model_dir):
-    """加载/缓存 CosyVoice2 模型（依赖 third_party/CosyVoice 官方代码）。"""
-    with _lock:
-        if model_dir in _cosyvoice2_cache:
-            return _cosyvoice2_cache[model_dir]
-        _ensure_cosyvoice_path()
-        try:
-            from cosyvoice.cli.cosyvoice import CosyVoice2
-        except ImportError as e:
-            raise RuntimeError(
-                "CosyVoice2 本地推理需官方代码：请确认 third_party/CosyVoice 已 "
-                "git clone --recursive（含 third_party/Matcha-TTS）。"
-            ) from e
-        model = CosyVoice2(model_dir, load_jit=False, load_trt=False, fp16=False)
-        _cosyvoice2_cache[model_dir] = model
-        return model
-
-
-def synthesize_speech_v2(model_dir, text, prompt_text, prompt_audio_path):
-    """CosyVoice2 零样本音色克隆：参考音频(+其文本) → 用该音色读新文本。
-
-    返回 {audio(base64 wav), sampleRate, speaker}。
-    """
-    import io
-    import os as _os
-    import base64 as _b64
-    import torch as _torch
-    import torchaudio.functional as _AF
-    import soundfile as _sf
-
-    _ensure_cosyvoice_path()  # 注入 sys.path + 替换 torchaudio.load
-    model = _get_cosyvoice2(model_dir)
-
-    # 参考音频统一预处理为 24kHz 单声道 wav：
-    # CosyVoice frontend 会用该路径分别按 16k/24k 各加载一次，24k 源可同时满足两者及 min_sr 约束。
-    data, in_sr = _sf.read(prompt_audio_path, dtype="float32", always_2d=False)
-    if getattr(data, "ndim", 1) > 1:
-        data = data.mean(axis=1)
-    t = _torch.from_numpy(data).unsqueeze(0)
-    if in_sr != 24000:
-        t = _AF.resample(t, in_sr, 24000)
-    prompt_24k_path = prompt_audio_path + ".24k.wav"
-    _sf.write(prompt_24k_path, t.squeeze(0).numpy(), 24000, format="WAV")
-
-    try:
-        chunks = [o["tts_speech"] for o in
-                  model.inference_zero_shot(text, prompt_text, prompt_24k_path, stream=False)]
-    finally:
-        if _os.path.isfile(prompt_24k_path):
-            try:
-                _os.remove(prompt_24k_path)
-            except OSError:
-                pass
-    if not chunks:
-        raise ValueError("合成结果为空")
-    wav = _torch.concat(chunks, dim=1)
-    sr = int(model.sample_rate)
-    buf = io.BytesIO()
-    _sf.write(buf, wav.squeeze(0).numpy(), sr, format="WAV")  # 用 soundfile 写，避开 torchaudio.save
-    audio_b64 = _b64.b64encode(buf.getvalue()).decode()
-    return {"audio": audio_b64, "sampleRate": sr, "speaker": "克隆音色"}
-
-
 # ------------------------------------------------------------ VibeVoice-Realtime 文本转语音（预置音色）
 _vibevoice_cache = {}  # model_dir -> (processor, model)
 
 
+def _vibevoice_repo_path():
+    """VibeVoice 官方推理代码目录（位于 uploads/models/third_party/VibeVoice）。"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(base, "uploads", "models", "third_party", "VibeVoice"))
+
+
 def _ensure_vibevoice_path():
     """注入 vendored 官方 VibeVoice 仓库到 sys.path（含 streaming 推理代码）。返回仓库根。"""
-    base = os.path.dirname(os.path.abspath(__file__))
-    repo = os.path.abspath(os.path.join(base, "..", "third_party", "VibeVoice"))
+    repo = _vibevoice_repo_path()
     if os.path.isdir(repo) and repo not in sys.path:
         sys.path.insert(0, repo)
     return repo
@@ -944,7 +911,9 @@ def _resolve_vibevoice_voice(speaker):
         return exact
     pts = sorted(glob.glob(os.path.join(vdir, "*.pt")))
     if not pts:
-        raise RuntimeError("VibeVoice 无可用音色预设（third_party/VibeVoice/demo/voices/streaming_model）")
+        raise RuntimeError(
+            f"VibeVoice 无可用音色预设（{os.path.join(_vibevoice_repo_path(), 'demo', 'voices', 'streaming_model')}）"
+        )
     s = (speaker or "").lower()
     match = [p for p in pts if s and s in os.path.basename(p).lower()]
     if match:
@@ -954,7 +923,7 @@ def _resolve_vibevoice_voice(speaker):
 
 
 def _get_vibevoice(model_dir):
-    """加载/缓存 VibeVoice-Realtime streaming 模型（依赖 third_party/VibeVoice 官方代码，CPU）。"""
+    """加载/缓存 VibeVoice-Realtime streaming 模型（依赖 uploads/models/third_party/VibeVoice，CPU）。"""
     with _lock:
         if model_dir in _vibevoice_cache:
             return _vibevoice_cache[model_dir]
@@ -967,7 +936,8 @@ def _get_vibevoice(model_dir):
                 VibeVoiceStreamingProcessor
         except ImportError as e:
             raise RuntimeError(
-                "VibeVoice 本地推理需官方代码：请确认 third_party/VibeVoice 已 git clone。") from e
+                f"VibeVoice 本地推理需官方代码：请确认 {_vibevoice_repo_path()} 已 git clone。"
+            ) from e
         processor = VibeVoiceStreamingProcessor.from_pretrained(model_dir)
         model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
             model_dir, torch_dtype=torch.float32, device_map="cpu", attn_implementation="sdpa")

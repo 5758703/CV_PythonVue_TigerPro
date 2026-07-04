@@ -59,6 +59,16 @@ def _migrate(db):
         with db.engine.begin() as conn:
             conn.execute(text(f"ALTER TABLE ai_model {', '.join(adds)}"))
 
+    if "training_dataset" not in insp.get_table_names():
+        return
+    ds_cols = {c["name"] for c in insp.get_columns("training_dataset")}
+    ds_adds = []
+    if "source_path" not in ds_cols:
+        ds_adds.append("ADD COLUMN source_path VARCHAR(500) NULL")
+    if ds_adds:
+        with db.engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE training_dataset {', '.join(ds_adds)}"))
+
 
 app = create_app()
 

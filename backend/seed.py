@@ -3,6 +3,9 @@
 可独立运行： python seed.py
 启动时 app.py 也会自动调用 init_seed()。
 """
+import os
+import shutil
+
 from extensions import db
 from models import User, Role, Dept, Job, Menu, AiModel
 
@@ -43,7 +46,7 @@ def _seed_jobs():
 def _seed_menus():
     menus = []
     # 目录
-    menus.append(_menu(1, 0, "系统管理", "M", path="/system", icon="Setting", order=1))
+    menus.append(_menu(1, 0, "系统管理", "M", path="/system", icon="Setting", order=2))
     # 菜单 + 按钮 + API
     modules = [
         # (mid, name, biz, icon)
@@ -97,6 +100,7 @@ def _regroup_ai_menus():
     moves = [
         (202, 230, "/ai/image"), (203, 230, "/ai/video"), (204, 230, "/ai/camera"),
         (206, 230, "/ai/imgcls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
+        (250, 230, "/ai/water"), (270, 230, "/ai/badminton"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -168,6 +172,25 @@ def _regroup_model_menus():
         m260.order_num = 2
         changed = True
 
+    if changed:
+        db.session.commit()
+
+
+def _patch_video_surveillance_menu():
+    """「摄像头」目录更名为「视频监控」，并排在系统管理上方（幂等）。"""
+    changed = False
+    m245 = Menu.query.get(245)
+    if m245:
+        if m245.menu_name != "视频监控":
+            m245.menu_name = "视频监控"
+            changed = True
+        if m245.order_num != 1:
+            m245.order_num = 1
+            changed = True
+    m1 = Menu.query.get(1)
+    if m1 and m1.order_num != 2:
+        m1.order_num = 2
+        changed = True
     if changed:
         db.session.commit()
 
@@ -262,17 +285,17 @@ def seed_ai_menus():
     _ensure_ai_menu(216, 230, "PaddleOCR 识别", "C", "ai:paddleocr:list",
                     path="/ai/paddleocr", component="ai/paddleocr/index", icon="Document",
                     order=8, grant_common=True)
-    # 摄像头管理（顶级菜单，order=2 排在 AI(0)/系统(1) 之后）
+    # 视频监控（顶级目录，order=1 排在 AI(0) 与系统管理(2) 之间）
     _ensure_ai_menu(240, 0, "摄像头管理", "C", "camera:list",
                     path="/camera", component="camera/index", icon="VideoCamera",
-                    order=2, grant_common=True)
+                    order=1, grant_common=True)
     _ensure_ai_menu(2401, 240, "摄像头查询", "F", "camera:query", grant_common=True)
     _ensure_ai_menu(2402, 240, "摄像头新增", "F", "camera:add")
     _ensure_ai_menu(2403, 240, "摄像头修改", "F", "camera:edit")
     _ensure_ai_menu(2404, 240, "摄像头删除", "F", "camera:remove")
-    # 升级为「摄像头」目录，下挂 摄像头管理(240) + 实时监控大屏(241)
-    _ensure_ai_menu(245, 0, "摄像头", "M", None, path="/camera-center",
-                    icon="VideoCamera", order=2, grant_common=True)
+    # 升级为「视频监控」目录，下挂 摄像头管理(240) + 实时监控大屏(241)
+    _ensure_ai_menu(245, 0, "视频监控", "M", None, path="/camera-center",
+                    icon="VideoCamera", order=1, grant_common=True)
     _m240 = Menu.query.get(240)
     if _m240 and _m240.parent_id != 245:   # 把已存在的「摄像头管理」归入分组（幂等）
         _m240.parent_id = 245
@@ -280,11 +303,17 @@ def seed_ai_menus():
     _ensure_ai_menu(241, 245, "实时监控大屏", "C", "camera:list",
                     path="/camera/wall", component="camera/wall/index", icon="Monitor",
                     order=2, grant_common=True)
+    _patch_video_surveillance_menu()
     # 水位检测（视觉识别分组 230 下，order=9）
     _ensure_ai_menu(250, 230, "水位检测", "C", "ai:water:list",
                     path="/ai/water", component="ai/water/index", icon="Pouring",
                     order=9, grant_common=True)
     _ensure_ai_menu(2501, 250, "水位检测查询", "F", "ai:water:query", grant_common=True)
+    # 羽毛球视频分析（视觉识别 230 下，order=10）
+    _ensure_ai_menu(270, 230, "羽毛球分析", "C", "ai:badminton:list",
+                    path="/ai/badminton", component="ai/badminton/index", icon="Trophy",
+                    order=10, grant_common=True)
+    _ensure_ai_menu(2701, 270, "羽毛球分析查询", "F", "ai:badminton:query", grant_common=True)
     # 老库曾误写 WaterMelon（非 Element Plus 图标名），修正为 Pouring
     _m250 = Menu.query.get(250)
     if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
@@ -311,8 +340,34 @@ def _ensure_ai_model(key, fields):
     return True
 
 
+def _purge_cosyvoice_models():
+    """删除 CosyVoice 模型记录及本地权重（幂等）。"""
+    keys = ("cosyvoice-300m-sft", "cosyvoice2-0.5b")
+    rows = AiModel.query.filter(
+        (AiModel.model_key.in_(keys)) | (AiModel.library == "cosyvoice")
+    ).all()
+    if not rows:
+        return False
+    base = os.path.dirname(os.path.abspath(__file__))
+    upload = os.path.join(base, "uploads")
+    for m in rows:
+        if m.file_path:
+            abs_path = os.path.join(upload, m.file_path)
+            try:
+                if os.path.isdir(abs_path):
+                    shutil.rmtree(abs_path, ignore_errors=True)
+                elif os.path.isfile(abs_path):
+                    os.remove(abs_path)
+            except OSError:
+                pass
+        db.session.delete(m)
+    db.session.commit()
+    return True
+
+
 def seed_ai_models():
     """AI 模型种子（按标识幂等，老库也会补齐新增的范例模型）。"""
+    _purge_cosyvoice_models()
     created = False
     created |= _ensure_ai_model("fire-smoke-detection", dict(
         model_name="烟雾探测", category="烟火检测",
@@ -358,6 +413,12 @@ def seed_ai_models():
         task="object-detection", library="transformers", version="v1",
         source_url="https://huggingface.co/facebook/detr-resnet-50",
         description="Facebook DETR 通用目标检测(COCO 80类)，transformers 引擎，可用于图片/视频/摄像头检测页。", status="0",
+    ))
+    created |= _ensure_ai_model("rf-detr-medium", dict(
+        model_name="RF-DETR Medium 目标检测", category="通用目标检测",
+        task="object-detection", library="rfdetr", version="v1",
+        source_url="https://huggingface.co/Roboflow/rf-detr-medium",
+        description="Roboflow RF-DETR Medium(COCO 80类)，rfdetr 引擎，可用于图片/视频/摄像头检测页。", status="0",
     ))
     # 阶段C 示例：transformers 图像分类
     created |= _ensure_ai_model("vit-base", dict(
@@ -437,34 +498,19 @@ def seed_ai_models():
         source_url="https://huggingface.co/Kedreamix/Linly-Talker",
         description="人像图 + 驱动音频 → 说话头像视频(SadTalker)。需 GPU 运行环境，当前为脚手架。", status="0",
     ))
-    # 文本转语音（CosyVoice-300M-SFT，ModelScope 来源；本地推理需官方 CosyVoice 代码）
-    created |= _ensure_ai_model("cosyvoice-300m-sft", dict(
-        model_name="CosyVoice 文本转语音", category="语音合成",
-        task="text-to-speech", library="cosyvoice", version="v1",
-        source_url="https://modelscope.cn/models/iic/CosyVoice-300M-SFT",
-        description="文本 + 预置音色(中/英/粤/日/韩) → 语音(SFT)。需官方 CosyVoice 推理代码接入 PYTHONPATH。", status="0",
-    ))
-    # 文本转语音 / 零样本音色克隆（CosyVoice2-0.5B，ModelScope；需 third_party/CosyVoice 官方代码）
-    created |= _ensure_ai_model("cosyvoice2-0.5b", dict(
-        model_name="CosyVoice2 零样本克隆", category="语音合成",
-        task="text-to-speech", library="cosyvoice", version="v2",
-        source_url="https://modelscope.cn/models/iic/CosyVoice2-0.5B",
-        description="零样本音色克隆：上传参考音频(+其文本) → 用该音色读新文本(中/英/粤/日/韩)。需官方 CosyVoice 代码(third_party/CosyVoice)。", status="0",
-    ))
     # 文本转语音（MMS-TTS / VITS，transformers 原生 pipeline，CPU 直接可用）
-    # 注：Facebook MMS-TTS 无 Mandarin(cmn) 仓库，中文 TTS 走 CosyVoice。
     created |= _ensure_ai_model("mms-tts-eng", dict(
         model_name="MMS-TTS 英文语音合成", category="语音合成",
         task="text-to-speech", library="transformers", version="v1",
         source_url="https://huggingface.co/facebook/mms-tts-eng",
         description="Facebook MMS-TTS 英文(VITS)文本转语音，transformers 引擎，CPU 可用。文本转语音页使用。", status="0",
     ))
-    # 文本转语音（VibeVoice-Realtime-0.5B，预置音色，~300ms 首字延迟；需 third_party/VibeVoice 官方代码）
+    # 文本转语音（VibeVoice-Realtime-0.5B；需 uploads/models/third_party/VibeVoice 官方代码）
     created |= _ensure_ai_model("vibevoice-realtime", dict(
         model_name="VibeVoice 实时语音合成", category="语音合成",
         task="text-to-speech", library="vibevoice", version="v1",
         source_url="https://modelscope.cn/models/microsoft/VibeVoice-Realtime-0.5B",
-        description="微软 VibeVoice-Realtime-0.5B，预置多音色(en/de/fr/jp/kr 等)，实时高拟真。需官方代码(third_party/VibeVoice)。", status="0",
+        description="微软 VibeVoice-Realtime-0.5B，预置多音色(en/de/fr/jp/kr 等)，实时高拟真。需官方代码(uploads/models/third_party/VibeVoice)。", status="0",
     ))
     # 文本转语音（MeloTTS 中英混合 onnx，sherpa-onnx 引擎，纯 onnx、小而快、CPU）
     created |= _ensure_ai_model("melotts-zh-en", dict(
@@ -472,6 +518,13 @@ def seed_ai_models():
         task="text-to-speech", library="sherpa-onnx", version="v1",
         source_url="https://huggingface.co/wolfofbackstreet/melotts_chinese_mix_english_onnx",
         description="MeloTTS 中英混合 onnx(sherpa-onnx 引擎)，纯 onnx、小而快、CPU 秒级，中英混读。文本转语音页使用。", status="0",
+    ))
+    # 姿态估计（YOLO11n Pose，羽毛球分析等页使用）
+    created |= _ensure_ai_model("yolo11n-pose", dict(
+        model_name="YOLO11n 姿态估计", category="姿态估计",
+        task="pose-estimation", library="ultralytics", version="v11",
+        source_url="https://huggingface.co/Ultralytics/YOLO11#yolo11n-pose.pt",
+        description="Ultralytics YOLO11n Pose，球员骨架检测。姿态估计页 / 羽毛球分析页使用。", status="0",
     ))
     return created
     return True

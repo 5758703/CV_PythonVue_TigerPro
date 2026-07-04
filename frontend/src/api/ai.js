@@ -114,12 +114,12 @@ export const modelApi = {
     }),
   // 查询数字人合成进度
   talkingProgress: (id, jobId) => request.get(`/ai/model/${id}/talking-progress/${jobId}`),
-  // 文本转语音（CosyVoice）：可用音色
+  // 文本转语音：可用音色
   ttsSpeakers: (id) => request.get(`/ai/model/${id}/tts-speakers`),
-  // 文本转语音（CosyVoice）：文本 + 音色 -> wav(base64)
+  // 文本转语音：文本 + 音色 -> wav(base64)
   tts: (id, text, speaker) =>
     request.post(`/ai/model/${id}/tts`, { text, speaker }, { timeout: 0 }),
-  // 零样本音色克隆（CosyVoice2）：参考音频 + 参考文本 + 目标文本 -> wav(base64)
+  // 零样本音色克隆（VoxCPM）：参考音频 + 参考文本 + 目标文本 -> wav(base64)
   ttsClone: (id, formData) =>
     request.post(`/ai/model/${id}/tts-clone`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -139,6 +139,23 @@ export const waterLevelApi = {
     }),
 }
 
+// ---------------- 羽毛球视频分析
+export const badmintonApi = {
+  extractFrame: (formData) =>
+    request.post('/ai/badminton/extract-frame', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+  analyze: (formData) =>
+    request.post('/ai/badminton/analyze', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+  progress: (jobId) => request.get(`/ai/badminton/progress/${jobId}`),
+  artifactBlob: (jobId, name) =>
+    request.get(`/ai/badminton/artifact/${jobId}/${name}`, { responseType: 'blob', timeout: 0 }),
+}
+
 // ---------------- 模型训练
 export const trainingApi = {
   // 数据集
@@ -154,6 +171,7 @@ export const trainingApi = {
     }),
   buildDataset: (id) => request.post(`/ai/training/datasets/${id}/build`, null, { timeout: 0 }),
   datasetSamples: (id) => request.get(`/ai/training/datasets/${id}/samples`),
+  datasetFormats: () => request.get('/ai/training/datasets/formats'),
   // 训练任务
   listJobs: (params) => request.get('/ai/training/jobs', { params }),
   getJob: (id) => request.get(`/ai/training/jobs/${id}`),

@@ -10,7 +10,8 @@ class TrainingDataset(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(128), nullable=False)
-    format = db.Column(db.String(16), default="voc")          # voc / yolo
+    format = db.Column(db.String(24), default="auto")         # auto/voc/voc_standard/yolo/yolo_flat/import
+    source_path = db.Column(db.String(500))                   # import 格式：本地数据集绝对路径
     class_names = db.Column(db.Text)                          # JSON 数组
     train_count = db.Column(db.Integer, default=0)
     val_count = db.Column(db.Integer, default=0)
@@ -38,6 +39,7 @@ class TrainingDataset(db.Model):
             "id": self.id,
             "name": self.name,
             "format": self.format,
+            "sourcePath": self.source_path,
             "classNames": self.class_list(),
             "trainCount": self.train_count,
             "valCount": self.val_count,
