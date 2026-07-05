@@ -100,7 +100,7 @@ def _regroup_ai_menus():
     moves = [
         (202, 230, "/ai/image"), (203, 230, "/ai/video"), (204, 230, "/ai/camera"),
         (206, 230, "/ai/imgcls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
-        (250, 230, "/ai/water"), (270, 230, "/ai/badminton"),
+        (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -314,6 +314,11 @@ def seed_ai_menus():
                     path="/ai/badminton", component="ai/badminton/index", icon="Trophy",
                     order=10, grant_common=True)
     _ensure_ai_menu(2701, 270, "羽毛球分析查询", "F", "ai:badminton:query", grant_common=True)
+
+    _ensure_ai_menu(272, 230, "图像分割", "C", "ai:segment:list",
+                    path="/ai/segment", component="ai/segment/index", icon="Crop",
+                    order=12, grant_common=True)
+    _ensure_ai_menu(2721, 272, "图像分割查询", "F", "ai:segment:query", grant_common=True)
     # 老库曾误写 WaterMelon（非 Element Plus 图标名），修正为 Pouring
     _m250 = Menu.query.get(250)
     if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
@@ -419,6 +424,18 @@ def seed_ai_models():
         task="object-detection", library="rfdetr", version="v1",
         source_url="https://huggingface.co/Roboflow/rf-detr-medium",
         description="Roboflow RF-DETR Medium(COCO 80类)，rfdetr 引擎，可用于图片/视频/摄像头检测页。", status="0",
+    ))
+    created |= _ensure_ai_model("rf-detr-seg-medium", dict(
+        model_name="RF-DETR Seg Medium 实例分割", category="实例分割",
+        task="instance-segmentation", library="rfdetr", version="v1",
+        source_url="https://huggingface.co/Roboflow/rf-detr-seg-medium",
+        description="Roboflow RF-DETR-Seg Medium(COCO 80类)，rfdetr 引擎，图像分割页。", status="0",
+    ))
+    created |= _ensure_ai_model("mobile-sam", dict(
+        model_name="MobileSAM 交互分割", category="交互分割",
+        task="interactive-segmentation", library="mobilesam", version="v1",
+        source_url="https://github.com/ChaoningZhang/MobileSAM",
+        description="MobileSAM 轻量 SAM，支持点击/框选/全自动分割，CPU 可用。图像分割页。", status="0",
     ))
     # 阶段C 示例：transformers 图像分类
     created |= _ensure_ai_model("vit-base", dict(
@@ -526,8 +543,20 @@ def seed_ai_models():
         source_url="https://huggingface.co/Ultralytics/YOLO11#yolo11n-pose.pt",
         description="Ultralytics YOLO11n Pose，球员骨架检测。姿态估计页 / 羽毛球分析页使用。", status="0",
     ))
+    # RTMO 姿态（rtmlib ONNX，羽毛球分析推荐）
+    created |= _ensure_ai_model("rtmo-s", dict(
+        model_name="RTMO-S 姿态估计", category="姿态估计",
+        task="pose-estimation", library="rtmlib", version="v1",
+        source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-s_8xb32-600e_body7-640x640-dac2bf74_20231211.zip",
+        description="OpenMMLab RTMO-S 单阶段姿态（rtmlib+ONNX），COCO-17 关键点。羽毛球分析页推荐使用。", status="0",
+    ))
+    created |= _ensure_ai_model("rtmo-m", dict(
+        model_name="RTMO-M 姿态估计", category="姿态估计",
+        task="pose-estimation", library="rtmlib", version="v1",
+        source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.zip",
+        description="OpenMMLab RTMO-M 单阶段姿态（rtmlib+ONNX），精度更高、略慢。羽毛球分析页可用。", status="0",
+    ))
     return created
-    return True
 
 
 def init_seed():

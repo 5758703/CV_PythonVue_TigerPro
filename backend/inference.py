@@ -232,6 +232,121 @@ def pose_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
     }
 
 
+# ------------------------------------------------------------ rtmlib RTMO 姿态（羽毛球分析等）
+_rtmlib_cache = {}  # (path_or_key, mtime, model_key) -> RTMO
+
+_RTMO_WEIGHT_URLS = {
+    "rtmo-s": (
+        "https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/"
+        "rtmo-s_8xb32-600e_body7-640x640-dac2bf74_20231211.zip"
+    ),
+    "rtmo-m": (
+        "https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/"
+        "rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.zip"
+    ),
+}
+
+
+def rtmlib_weight_url(model_key):
+    key = (model_key or "rtmo-s").lower()
+    return _RTMO_WEIGHT_URLS.get(key, _RTMO_WEIGHT_URLS["rtmo-s"])
+
+
+def extract_rtmlib_onnx_from_zip(zip_path):
+    """解压 OpenMMLab ONNX SDK zip，提取 end2end.onnx 到同目录。"""
+    import shutil
+    import zipfile
+
+    zip_path = os.path.abspath(zip_path)
+    if not zip_path.lower().endswith(".zip"):
+        return zip_path
+    if not os.path.isfile(zip_path):
+        raise ValueError(f"权重 zip 不存在：{zip_path}")
+
+    model_dir = os.path.dirname(zip_path)
+    base = os.path.splitext(os.path.basename(zip_path))[0]
+    onnx_out = os.path.join(model_dir, f"{base}.onnx")
+    if os.path.isfile(onnx_out) and os.path.getmtime(onnx_out) >= os.path.getmtime(zip_path):
+        return onnx_out
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        names = zf.namelist()
+        target = next((n for n in names if n.endswith("end2end.onnx")), None)
+        if target is None:
+            onnx_names = [n for n in names if n.lower().endswith(".onnx")]
+            if not onnx_names:
+                raise ValueError(f"zip 内未找到 ONNX 模型：{zip_path}")
+            target = onnx_names[0]
+        with zf.open(target) as src, open(onnx_out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    return onnx_out
+
+
+def resolve_rtmlib_onnx(path_or_url=None, model_key="rtmo-s"):
+    """URL / 本地 zip / 本地 onnx -> ONNX Runtime 可加载的 .onnx 路径。"""
+    if path_or_url and str(path_or_url).startswith(("http://", "https://")):
+        from rtmlib.tools.file import download_checkpoint
+        downloaded = download_checkpoint(path_or_url)
+        if downloaded.lower().endswith(".zip"):
+            return extract_rtmlib_onnx_from_zip(downloaded)
+        return downloaded
+
+    if path_or_url and os.path.isfile(os.path.abspath(path_or_url)):
+        p = os.path.abspath(path_or_url)
+        if p.lower().endswith(".zip"):
+            return extract_rtmlib_onnx_from_zip(p)
+        return p
+
+    from rtmlib.tools.file import download_checkpoint
+    downloaded = download_checkpoint(rtmlib_weight_url(model_key))
+    if downloaded.lower().endswith(".zip"):
+        return extract_rtmlib_onnx_from_zip(downloaded)
+    return downloaded
+
+
+def _rtmlib_device():
+    import torch
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _get_rtmo_model(abs_weight_path=None, model_key="rtmo-s"):
+    """加载 RTMO（rtmlib ONNX），自动解压 zip 为 end2end.onnx。"""
+    key = (model_key or "rtmo-s").lower()
+    onnx_src = resolve_rtmlib_onnx(abs_weight_path, key)
+    mtime = os.path.getmtime(onnx_src) if os.path.isfile(onnx_src) else 0
+    cache_key = (onnx_src, mtime, key)
+    with _lock:
+        if cache_key in _rtmlib_cache:
+            return _rtmlib_cache[cache_key]
+        from rtmlib import RTMO
+        device = _rtmlib_device()
+        model = RTMO(onnx_model=onnx_src, backend="onnxruntime", device=device)
+        _rtmlib_cache[cache_key] = model
+        return model
+
+
+def infer_pose_rtmo(frame_bgr, model, conf=0.25):
+    """RTMO 单帧推理，返回 COCO-17 关键点列表 [[x,y,conf]×17]。"""
+    keypoints, scores = model(frame_bgr)
+    if keypoints is None or len(keypoints) == 0:
+        return []
+    persons = []
+    for kp, sc in zip(keypoints, scores):
+        kp_arr = np.asarray(kp, dtype=np.float32)
+        sc_arr = np.asarray(sc, dtype=np.float32).reshape(-1)
+        n = min(17, kp_arr.shape[0], sc_arr.shape[0])
+        if n < 5:
+            continue
+        mean_conf = float(np.mean(sc_arr[:n]))
+        if mean_conf < conf:
+            continue
+        persons.append([
+            [float(kp_arr[i, 0]), float(kp_arr[i, 1]), float(sc_arr[i])]
+            for i in range(n)
+        ])
+    return persons
+
+
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 progress_cb=None):
     """YOLO + ByteTrack 逐帧追踪，输出带框+ID 视频。
@@ -507,10 +622,37 @@ _RFDETR_WEIGHT = {
     "rf-detr-large": "rf-detr-large-2026.pth",
 }
 
+_RFDETR_SEG_CLASS = {
+    "rf-detr-seg-nano": "RFDETRSegNano",
+    "rf-detr-seg-small": "RFDETRSegSmall",
+    "rf-detr-seg-medium": "RFDETRSegMedium",
+    "rf-detr-seg-large": "RFDETRSegLarge",
+    "rf-detr-seg-xl": "RFDETRSegXLarge",
+    "rf-detr-seg-xlarge": "RFDETRSegXLarge",
+    "rf-detr-seg-2xl": "RFDETRSeg2XLarge",
+    "rf-detr-seg-xxlarge": "RFDETRSeg2XLarge",
+}
+
+_RFDETR_SEG_WEIGHT = {
+    "rf-detr-seg-nano": "rf-detr-seg-nano.pt",
+    "rf-detr-seg-small": "rf-detr-seg-small.pt",
+    "rf-detr-seg-medium": "rf-detr-seg-medium.pt",
+    "rf-detr-seg-large": "rf-detr-seg-large.pt",
+    "rf-detr-seg-xl": "rf-detr-seg-xlarge.pt",
+    "rf-detr-seg-xlarge": "rf-detr-seg-xlarge.pt",
+    "rf-detr-seg-2xl": "rf-detr-seg-xxlarge.pt",
+    "rf-detr-seg-xxlarge": "rf-detr-seg-xxlarge.pt",
+}
+
 
 def rfdetr_weight_filename(model_key):
-    """model_key -> 官方预训练权重文件名。"""
-    return _RFDETR_WEIGHT.get((model_key or "rf-detr-medium").lower(), "rf-detr-medium.pth")
+    """model_key -> 官方预训练权重文件名（检测或分割）。"""
+    key = (model_key or "rf-detr-medium").lower()
+    if key in _RFDETR_SEG_WEIGHT:
+        return _RFDETR_SEG_WEIGHT[key]
+    if "seg" in key:
+        return "rf-detr-seg-medium.pt"
+    return _RFDETR_WEIGHT.get(key, "rf-detr-medium.pth")
 
 
 def _get_rfdetr_model(abs_weight_path, model_key="rf-detr-medium"):
@@ -530,6 +672,26 @@ def _get_rfdetr_model(abs_weight_path, model_key="rf-detr-medium"):
         return _rfdetr_cache[cache_key]
 
 
+def _rfdetr_resolve_class_name(sv_det, index, cid, class_names):
+    """解析 RF-DETR 类别名。COCO 预训练模型 class_id 为 COCO 官方 cat id（1=person），非 0 索引。"""
+    data = getattr(sv_det, "data", None) or {}
+    names = data.get("class_name")
+    if names is not None and index < len(names):
+        n = names[index]
+        if n:
+            return str(n)
+    try:
+        from rfdetr.assets.coco_classes import COCO_CLASSES
+        if int(cid) in COCO_CLASSES:
+            return COCO_CLASSES[int(cid)]
+    except ImportError:
+        pass
+    cid = int(cid)
+    if 0 <= cid < len(class_names):
+        return class_names[cid]
+    return str(cid)
+
+
 def _rfdetr_to_detections(sv_det, class_names):
     dets = []
     if sv_det is None or len(sv_det) == 0:
@@ -537,7 +699,7 @@ def _rfdetr_to_detections(sv_det, class_names):
     for i in range(len(sv_det)):
         x1, y1, x2, y2 = sv_det.xyxy[i]
         cid = int(sv_det.class_id[i])
-        cname = class_names[cid] if 0 <= cid < len(class_names) else str(cid)
+        cname = _rfdetr_resolve_class_name(sv_det, i, cid, class_names)
         dets.append({
             "className": cname,
             "classId": cid,
@@ -602,6 +764,247 @@ def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-d
         writer.close()
     return {"frames": frames, "totalFrames": total, "totalDetections": total_det,
             "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+
+
+def _encode_mask_b64(mask):
+    """bool/uint8 (H,W) -> PNG base64。"""
+    if mask is None:
+        return None
+    m = (mask.astype(np.uint8) * 255) if mask.dtype == bool else mask.astype(np.uint8)
+    ok, buf = cv2.imencode(".png", m)
+    return base64.b64encode(buf.tobytes()).decode() if ok else None
+
+
+def _decode_mask_b64(b64):
+    """PNG base64 -> bool (H,W)。"""
+    arr = np.frombuffer(base64.b64decode(b64), np.uint8)
+    gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    return gray > 127 if gray is not None else None
+
+
+def _get_rfdetr_seg_model(abs_weight_path, model_key="rf-detr-seg-medium"):
+    mtime = os.path.getmtime(abs_weight_path)
+    cache_key = ("seg", abs_weight_path, mtime, model_key)
+    with _lock:
+        if cache_key in _rfdetr_cache:
+            return _rfdetr_cache[cache_key]
+        import importlib
+        from rfdetr.assets.coco_classes import COCO_CLASS_NAMES
+        key = (model_key or "rf-detr-seg-medium").lower()
+        cls_name = _RFDETR_SEG_CLASS.get(key, "RFDETRSegMedium")
+        rfdetr_mod = importlib.import_module("rfdetr")
+        cls = getattr(rfdetr_mod, cls_name)
+        model = cls(pretrain_weights=abs_weight_path)
+        names = list(COCO_CLASS_NAMES)
+        _rfdetr_cache[cache_key] = (model, names)
+        return _rfdetr_cache[cache_key]
+
+
+def _rfdetr_to_segmentations(sv_det, class_names, include_mask=True):
+    """RF-DETR-Seg supervision.Detections -> 带 mask 的分割结果列表。"""
+    dets = []
+    if sv_det is None or len(sv_det) == 0:
+        return dets
+    masks = getattr(sv_det, "mask", None)
+    for i in range(len(sv_det)):
+        x1, y1, x2, y2 = sv_det.xyxy[i]
+        cid = int(sv_det.class_id[i])
+        cname = _rfdetr_resolve_class_name(sv_det, i, cid, class_names)
+        item = {
+            "className": cname,
+            "classId": cid,
+            "confidence": round(float(sv_det.confidence[i]), 4),
+            "bbox": [round(float(x1), 1), round(float(y1), 1),
+                     round(float(x2), 1), round(float(y2), 1)],
+        }
+        if include_mask and masks is not None:
+            item["maskBase64"] = _encode_mask_b64(masks[i])
+        dets.append(item)
+    return dets
+
+
+def _annotate_sv_segmentation(img_bgr, sv_det, labels):
+    """supervision 实例分割可视化（mask + 框 + 标签）。"""
+    import supervision as sv
+    rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    out = rgb.copy()
+    if getattr(sv_det, "mask", None) is not None:
+        out = sv.MaskAnnotator().annotate(out, sv_det)
+    out = sv.BoxAnnotator().annotate(out, sv_det)
+    if labels:
+        out = sv.LabelAnnotator().annotate(out, sv_det, labels)
+    return cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+
+
+def _blend_mask_detections(img_bgr, detections, alpha=0.45):
+    """按 detections[].maskBase64 半透明叠色。"""
+    out = img_bgr.copy()
+    for i, d in enumerate(detections):
+        b64 = d.get("maskBase64")
+        if not b64:
+            continue
+        mask = _decode_mask_b64(b64)
+        if mask is None or not mask.any():
+            continue
+        if mask.shape[:2] != out.shape[:2]:
+            mask = cv2.resize(mask.astype(np.uint8), (out.shape[1], out.shape[0]),
+                              interpolation=cv2.INTER_NEAREST).astype(bool)
+        color = np.array(_DET_COLORS[i % len(_DET_COLORS)], dtype=np.float32)
+        region = mask
+        out[region] = (out[region].astype(np.float32) * (1 - alpha) + color * alpha).astype(np.uint8)
+    return out
+
+
+def segment_image_rfdetr(abs_path, image_bytes, conf=0.25, draw=True, model_key="rf-detr-seg-medium"):
+    """RF-DETR-Seg 图片实例分割。"""
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    model, class_names = _get_rfdetr_seg_model(abs_path, model_key)
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    sv_det = model.predict(rgb, threshold=conf)
+    detections = _rfdetr_to_segmentations(sv_det, class_names)
+    image_b64 = None
+    if draw:
+        labels = [d["className"] for d in detections]
+        plotted = _annotate_sv_segmentation(img, sv_det, labels)
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    h, w = img.shape[:2]
+    return {"detections": detections, "count": len(detections),
+            "imageBase64": image_b64, "width": w, "height": h}
+
+
+def segment_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-detr-seg-medium",
+                         progress_cb=None):
+    """RF-DETR-Seg 逐帧视频实例分割。"""
+    model, class_names = _get_rfdetr_seg_model(abs_path, model_key)
+    cap = cv2.VideoCapture(src_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频文件")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    writer, ew, eh = _open_h264(dst_path, fps, w, h)
+    class_counts, total_det, frames = {}, 0, 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            sv_det = model.predict(rgb, threshold=conf)
+            dets = _rfdetr_to_segmentations(sv_det, class_names, include_mask=False)
+            for d in dets:
+                class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
+                total_det += 1
+            labels = [d["className"] for d in dets]
+            frame = _annotate_sv_segmentation(frame, sv_det, labels)
+            _write_bgr(writer, frame, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        cap.release()
+        writer.close()
+    return {"frames": frames, "totalFrames": total, "totalDetections": total_det,
+            "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+
+
+# ------------------------------------------------------------ MobileSAM 交互式分割
+_mobilesam_cache = {}  # abs_path -> (mtime, SamPredictor)
+
+
+def _mobilesam_device():
+    import torch
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _get_mobile_sam_predictor(abs_weight_path):
+    mtime = os.path.getmtime(abs_weight_path)
+    with _lock:
+        cached = _mobilesam_cache.get(abs_weight_path)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        import torch
+        from mobile_sam import sam_model_registry, SamPredictor
+        device = _mobilesam_device()
+        sam = sam_model_registry["vit_t"](checkpoint=abs_weight_path)
+        sam.to(device=device)
+        sam.eval()
+        predictor = SamPredictor(sam)
+        _mobilesam_cache[abs_weight_path] = (mtime, predictor)
+        return predictor
+
+
+def segment_image_mobilesam(abs_path, image_bytes, points=None, point_labels=None, box=None,
+                            mode="prompt", draw=True):
+    """MobileSAM 图片分割。mode=prompt 需点/框；mode=auto 全自动分割全图。"""
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    h, w = img.shape[:2]
+    detections = []
+
+    if mode == "auto":
+        from mobile_sam import SamAutomaticMaskGenerator
+        predictor = _get_mobile_sam_predictor(abs_path)
+        gen = SamAutomaticMaskGenerator(
+            predictor.model, points_per_side=16, pred_iou_thresh=0.86,
+            stability_score_thresh=0.92, min_mask_region_area=100)
+        masks = gen.generate(rgb)
+        masks = sorted(masks, key=lambda x: -x.get("area", 0))[:40]
+        for i, m in enumerate(masks):
+            seg = m["segmentation"]
+            bx, by, bw, bh = m.get("bbox", [0, 0, w, h])
+            detections.append({
+                "className": f"region_{i + 1}",
+                "classId": i,
+                "confidence": round(float(m.get("predicted_iou", 0.9)), 4),
+                "bbox": [round(float(bx), 1), round(float(by), 1),
+                         round(float(bx + bw), 1), round(float(by + bh), 1)],
+                "maskBase64": _encode_mask_b64(seg),
+            })
+    else:
+        if not points and not box:
+            raise ValueError("交互分割请提供点击坐标 points 或框选 box")
+        predictor = _get_mobile_sam_predictor(abs_path)
+        predictor.set_image(rgb)
+        pt_coords = np.array(points, dtype=np.float32) if points else None
+        pt_labels = np.array(point_labels, dtype=np.int32) if point_labels else None
+        box_arr = np.array(box, dtype=np.float32) if box else None
+        masks, scores, _ = predictor.predict(
+            point_coords=pt_coords,
+            point_labels=pt_labels,
+            box=box_arr,
+            multimask_output=not box_arr,
+        )
+        best = int(np.argmax(scores))
+        mask = masks[best]
+        ys, xs = np.where(mask)
+        if len(xs):
+            bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+        else:
+            bbox = [0.0, 0.0, 0.0, 0.0]
+        detections.append({
+            "className": "segment",
+            "classId": 0,
+            "confidence": round(float(scores[best]), 4),
+            "bbox": [round(v, 1) for v in bbox],
+            "maskBase64": _encode_mask_b64(mask),
+        })
+
+    image_b64 = None
+    if draw:
+        plotted = _blend_mask_detections(img, detections)
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {"detections": detections, "count": len(detections),
+            "imageBase64": image_b64, "width": w, "height": h}
 
 
 def classify_image(model_dir, image_bytes, task="image-classification", top_k=5):

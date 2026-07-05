@@ -68,6 +68,8 @@ import { modelApi } from "../api/ai";
 
 const TASK_LABELS = {
   "object-detection": "目标检测",
+  "instance-segmentation": "实例分割",
+  "interactive-segmentation": "交互分割",
   "pose-estimation": "姿态估计",
   "image-classification": "图像分类",
   "ocr": "OCR(端到端)",

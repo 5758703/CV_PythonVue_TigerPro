@@ -1,6 +1,7 @@
 """羽毛球比赛视频分析 /api/ai/badminton
 
-POST /extract-frame   上传视频提取首帧（球场标注用）
+POST /extract-frame   上传视频提取首帧（球场标注用，可选 autoDetect=1）
+POST /detect-court    上传视频，提取首帧并自动检测球场四角
 POST /analyze         启动异步分析任务
 GET  /progress/<jobId> 查询进度与结果
 GET  /artifact/<jobId>/<name> 下载产物（视频/图片/json）
@@ -11,6 +12,7 @@ import threading
 import time
 import uuid
 
+import numpy as np
 from flask import Blueprint, current_app, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
@@ -21,6 +23,21 @@ badminton_bp = Blueprint("badminton", __name__, url_prefix="/api/ai/badminton")
 
 _jobs = {}
 _jobs_lock = threading.Lock()
+
+_POSE_LIBS = frozenset({"ultralytics", "rtmlib"})
+
+
+def _json_safe(obj):
+    """将 numpy 标量/数组转为 JSON 可序列化的 Python 原生类型。"""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, np.generic):
+        return obj.item()
+    return obj
 
 
 def _ensure_dir(p):
@@ -38,7 +55,26 @@ def _job_dir(job_id):
     return os.path.join(current_app.config["BADMINTON_FOLDER"], job_id)
 
 
-def _worker(job_id, pose_path, ball_path, src_path, out_dir, court_points, opts):
+def _flag(name, default=True):
+    v = (request.form.get(name) or str(default)).lower()
+    return v not in ("0", "false", "no")
+
+
+def _save_temp_video(file):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+        raise ValueError("不支持的视频格式")
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    _ensure_dir(video_folder)
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
+    src_path = os.path.join(video_folder, f"bdm_frame_{base}_{ts}{ext}")
+    file.save(src_path)
+    return src_path
+
+
+def _worker(job_id, pose_path, ball_path, src_path, out_dir, court_points, opts,
+            pose_library, model_key):
     def cb(processed, total):
         with _jobs_lock:
             j = _jobs.get(job_id)
@@ -52,6 +88,8 @@ def _worker(job_id, pose_path, ball_path, src_path, out_dir, court_points, opts)
             pose_path, src_path, out_dir,
             court_points=court_points,
             ball_model_path=ball_path,
+            pose_library=pose_library,
+            model_key=model_key,
             progress_cb=cb,
             **opts,
         )
@@ -72,32 +110,53 @@ def _worker(job_id, pose_path, ball_path, src_path, out_dir, court_points, opts)
 @badminton_bp.post("/extract-frame")
 @permission_required("ai:badminton:list")
 def extract_frame():
-    """提取视频首帧，用于球场四角标注。"""
+    """提取视频首帧，用于球场四角标注。form: autoDetect=1 时尝试自动检测四角。"""
     file = request.files.get("video")
     if file is None or not file.filename:
         return jsonify(code=400, message="请上传视频（field: video）"), 400
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
-        return jsonify(code=400, message="不支持的视频格式"), 400
-
-    video_folder = current_app.config["VIDEO_FOLDER"]
-    _ensure_dir(video_folder)
-    ts = int(time.time())
-    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
-    src_path = os.path.join(video_folder, f"bdm_frame_{base}_{ts}{ext}")
-    file.save(src_path)
+    auto_detect = _flag("autoDetect", False)
+    src_path = None
     try:
+        src_path = _save_temp_video(file)
         from services.badminton import extract_video_frame
-        data = extract_video_frame(src_path, 0)
+        data = extract_video_frame(src_path, 0, auto_detect_court=auto_detect)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"提取帧失败：{e}"), 500
     finally:
-        if os.path.isfile(src_path):
+        if src_path and os.path.isfile(src_path):
             try:
                 os.remove(src_path)
             except OSError:
                 pass
-    return jsonify(code=0, message="ok", data=data)
+    return jsonify(code=0, message="ok", data=_json_safe(data))
+
+
+@badminton_bp.post("/detect-court")
+@permission_required("ai:badminton:list")
+def detect_court():
+    """提取首帧并自动检测球场四角（0-1 归一化），失败时 courtPoints 为空。"""
+    file = request.files.get("video")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="请上传视频（field: video）"), 400
+    src_path = None
+    try:
+        src_path = _save_temp_video(file)
+        from services.badminton import extract_video_frame
+        data = extract_video_frame(src_path, 0, auto_detect_court=True)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"球场检测失败：{e}"), 500
+    finally:
+        if src_path and os.path.isfile(src_path):
+            try:
+                os.remove(src_path)
+            except OSError:
+                pass
+    msg = "自动检测成功" if data.get("autoDetected") else "未能可靠检测球场，请手动标注四角"
+    return jsonify(code=0, message=msg, data=_json_safe(data))
 
 
 @badminton_bp.post("/analyze")
@@ -113,16 +172,19 @@ def analyze():
     except (TypeError, ValueError):
         return jsonify(code=400, message="poseId 无效"), 400
     if pose_id <= 0:
-        return jsonify(code=400, message="请选择姿态模型（YOLO Pose）"), 400
+        return jsonify(code=400, message="请选择姿态模型"), 400
 
     pose_m = AiModel.query.get(pose_id)
     if pose_m is None:
         return jsonify(code=404, message="姿态模型不存在"), 404
-    if (pose_m.library or "") != "ultralytics":
-        return jsonify(code=400, message="姿态模型须为 ultralytics（YOLO Pose）"), 400
+    pose_lib = (pose_m.library or "ultralytics").lower()
+    if pose_lib not in _POSE_LIBS:
+        return jsonify(code=400, message="姿态模型须为 ultralytics 或 rtmlib"), 400
+    if (pose_m.task or "") != "pose-estimation":
+        return jsonify(code=400, message="所选模型任务类型须为 pose-estimation"), 400
 
     pose_path = _abs_model_path(pose_m)
-    if pose_path is None:
+    if pose_lib == "ultralytics" and pose_path is None:
         return jsonify(code=400, message="姿态模型暂无本地权重，请先拉取"), 400
 
     ball_path = None
@@ -153,10 +215,6 @@ def analyze():
     if language not in ("zh", "en"):
         language = "zh"
 
-    def _flag(name, default=True):
-        v = (request.form.get(name) or str(default)).lower()
-        return v not in ("0", "false", "no")
-
     opts = {
         "conf": conf,
         "show_skeleton": _flag("showSkeleton", True),
@@ -167,8 +225,11 @@ def analyze():
         "language": language,
     }
 
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+    try:
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+            return jsonify(code=400, message="不支持的视频格式"), 400
+    except Exception:
         return jsonify(code=400, message="不支持的视频格式"), 400
 
     video_folder = current_app.config["VIDEO_FOLDER"]
@@ -192,7 +253,8 @@ def analyze():
 
     threading.Thread(
         target=_worker,
-        args=(job_id, pose_path, ball_path, src_path, out_dir, court_pts, opts),
+        args=(job_id, pose_path, ball_path, src_path, out_dir, court_pts, opts,
+              pose_lib, pose_m.model_key or ""),
         daemon=True,
     ).start()
 
@@ -223,7 +285,7 @@ def progress(job_id):
             "detections": f"/api/ai/badminton/artifact/{job_id}/{stats['detections']}",
             "metadata": f"/api/ai/badminton/artifact/{job_id}/{stats['metadata']}",
         }
-    return jsonify(code=0, data=data)
+    return jsonify(code=0, data=_json_safe(data))
 
 
 @badminton_bp.get("/artifact/<job_id>/<path:name>")

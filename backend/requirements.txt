@@ -3,14 +3,20 @@ Flask-Cors==4.0.1
 Flask-SQLAlchemy==3.1.1
 Flask-JWT-Extended==4.6.0
 PyMySQL==1.1.1
-cryptography==42.0.8
+cryptography>=44.0.0,<50.0.0
 python-dotenv==1.0.1
 ultralytics==8.4.69
-huggingface_hub==0.36.2
+# transformers 5.x 要求 huggingface-hub>=1.5,<2.0（与旧版 0.36 不兼容）
+huggingface_hub>=1.5.0,<2.0.0
 # transformers 5.x：RF-DETR(rfdetr) 需要 BackboneConfigMixin；NLP/TTS/Whisper 等经回归仍可用。
 transformers>=5.1.0,<6.0.0
 # RF-DETR 实时目标检测（Roboflow/rf-detr-medium 等，COCO 80 类）
 rfdetr>=1.8.0
+# MobileSAM 交互式分割（CPU 可用，vit_t 约 40MB；import 名为 mobile_sam）
+mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git
+# RTMO 姿态估计（rtmlib + onnxruntime，羽毛球分析等）
+rtmlib>=0.0.15
+onnxruntime>=1.17.0
 timm==1.0.27
 sentencepiece==0.2.1
 imageio==2.37.3

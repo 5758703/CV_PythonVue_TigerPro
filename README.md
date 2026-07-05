@@ -87,6 +87,13 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 - 按钮级权限：`v-permission="'system:user:add'"`，无权限移除元素
 - 页面：登录、首页(统计卡+ECharts)、系统管理(用户/角色/部门/岗位/菜单)
 
+## 文档
+
+| 文档 | 说明 |
+|------|------|
+| [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、依赖、模型权重、API 与使用流程（YOLO Pose / RTMO、自动球场检测） |
+| [图像分割模块](docs/image-segmentation.md) | 技术栈、依赖、模型权重、API 与使用流程（RF-DETR-Seg / MobileSAM） |
+
 ## 启动顺序
 
 1. 启动 MySQL，建库 `cv_python_tigerpro`

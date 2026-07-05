@@ -58,6 +58,18 @@ export const modelApi = {
       timeout: 0,
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  // 实例/交互分割（图片）
+  segment: (id, formData) =>
+    request.post(`/ai/model/${id}/segment`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+  // RF-DETR-Seg 视频分割（异步）
+  segmentVideo: (id, formData) =>
+    request.post(`/ai/model/${id}/segment-video`, formData, {
+      timeout: 0,
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
   // 拉取带框输出视频（返回 Blob）
   outputVideo: (name) =>
     request.get(`/ai/model/output/${name}`, { responseType: 'blob', timeout: 0 }),
@@ -143,6 +155,11 @@ export const waterLevelApi = {
 export const badmintonApi = {
   extractFrame: (formData) =>
     request.post('/ai/badminton/extract-frame', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+  detectCourt: (formData) =>
+    request.post('/ai/badminton/detect-court', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
     }),

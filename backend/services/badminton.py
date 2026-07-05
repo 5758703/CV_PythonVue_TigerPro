@@ -342,34 +342,47 @@ def _draw_shuttle_trail(frame, shuttle_trail, frame_scale=1.0):
     _draw_shuttle_flight_trail(frame, shuttle_trail.hist, frame_scale=frame_scale)
 
 
-def _draw_hawkeye_minimap(frame, court_smooth_trails, shuttle_court=None, shuttle_trail_hist=None, margin=10):
-    """右上角鹰眼：俯视图 + 球员细线轨迹 + 羽毛球小点。"""
+def _draw_hawkeye_minimap(frame, court_smooth_trails, shuttle_court=None, shuttle_trail_hist=None,
+                          margin=10, lang="zh"):
+    """右上角鹰眼俯视图：标题栏 + 球场线 + 球员/羽毛球轨迹。"""
     fh, fw = frame.shape[:2]
-    panel_w = max(110, int(fw * 0.11))
-    panel_h = int(panel_w * COURT_L_M / COURT_W_M)
-    panel_h = min(panel_h, fh - margin * 2)
-    panel_w = int(panel_h * COURT_W_M / COURT_L_M)
+    header_h = 24
+    panel_w = max(128, int(fw * 0.12))
+    court_h = int(panel_w * COURT_L_M / COURT_W_M)
+    court_h = min(court_h, fh - margin * 2 - header_h)
+    panel_w = int(court_h * COURT_W_M / COURT_L_M)
+    total_h = court_h + header_h
     x0 = fw - panel_w - margin
     y0 = margin
+    x1, y1 = x0 + panel_w - 1, y0 + total_h - 1
 
-    roi = frame[y0:y0 + panel_h, x0:x0 + panel_w].copy()
-    tint = np.full_like(roi, (18, 18, 22))
-    cv2.addWeighted(tint, 0.78, roi, 0.22, 0, roi)
-    frame[y0:y0 + panel_h, x0:x0 + panel_w] = roi
+    accent = (255, 200, 0)  # BGR cyan
+    dim = (55, 62, 72)
+    bg = (12, 16, 24)
 
-    x1, y1 = x0 + panel_w - 1, y0 + panel_h - 1
-    cv2.rectangle(frame, (x0, y0), (x1, y1), (90, 90, 90), 1, cv2.LINE_AA)
-    pad = 4
-    ix0, iy0 = x0 + pad, y0 + pad
+    cv2.rectangle(frame, (x0, y0), (x1, y1), bg, -1, cv2.LINE_AA)
+    cv2.rectangle(frame, (x0, y0), (x1, y0 + header_h), (22, 28, 38), -1, cv2.LINE_AA)
+    cv2.line(frame, (x0, y0 + header_h), (x1, y0 + header_h), accent, 1, cv2.LINE_AA)
+    cv2.rectangle(frame, (x0, y0), (x1, y1), accent, 1, cv2.LINE_AA)
+
+    br = 8
+    for (cx, cy, dx, dy) in (
+        (x0, y0, br, br), (x1, y0, -br, br), (x0, y1, br, -br), (x1, y1, -br, -br),
+    ):
+        cv2.line(frame, (cx, cy), (cx + dx, cy), accent, 1, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy), (cx, cy + dy), accent, 1, cv2.LINE_AA)
+
+    pad = 5
+    ix0, iy0 = x0 + pad, y0 + header_h + pad
     ix1, iy1 = x1 - pad, y1 - pad
-    cv2.rectangle(frame, (ix0, iy0), (ix1, iy1), (60, 60, 60), 1, cv2.LINE_AA)
+    cv2.rectangle(frame, (ix0, iy0), (ix1, iy1), (35, 42, 52), 1, cv2.LINE_AA)
     mid_y = (iy0 + iy1) // 2
-    cv2.line(frame, (ix0, mid_y), (ix1, mid_y), (55, 55, 55), 1, cv2.LINE_AA)
+    cv2.line(frame, (ix0, mid_y), (ix1, mid_y), dim, 1, cv2.LINE_AA)
     service_y1 = iy0 + (iy1 - iy0) // 4
     service_y2 = iy1 - (iy1 - iy0) // 4
-    cv2.line(frame, (ix0, service_y1), (ix1, service_y1), (45, 45, 45), 1, cv2.LINE_AA)
-    cv2.line(frame, (ix0, service_y2), (ix1, service_y2), (45, 45, 45), 1, cv2.LINE_AA)
-    cv2.line(frame, (ix0 + (ix1 - ix0) // 2, iy0), (ix0 + (ix1 - ix0) // 2, iy1), (45, 45, 45), 1, cv2.LINE_AA)
+    cv2.line(frame, (ix0, service_y1), (ix1, service_y1), (40, 46, 56), 1, cv2.LINE_AA)
+    cv2.line(frame, (ix0, service_y2), (ix1, service_y2), (40, 46, 56), 1, cv2.LINE_AA)
+    cv2.line(frame, (ix0 + (ix1 - ix0) // 2, iy0), (ix0 + (ix1 - ix0) // 2, iy1), (40, 46, 56), 1, cv2.LINE_AA)
 
     inner_w, inner_h = ix1 - ix0, iy1 - iy0
 
@@ -386,103 +399,164 @@ def _draw_hawkeye_minimap(frame, court_smooth_trails, shuttle_court=None, shuttl
         color = _slot_color(slot)
         pts = [_court_to_panel(cx, cy) for cx, cy in hist]
         _draw_hawkeye_line_trail(frame, pts, color)
+        lx, ly = pts[-1]
+        cv2.circle(frame, (lx, ly), 3, color, -1, cv2.LINE_AA)
+        cv2.circle(frame, (lx, ly), 5, color, 1, cv2.LINE_AA)
 
     if shuttle_court is not None:
         if shuttle_trail_hist and len(shuttle_trail_hist) > 1:
             spts = [_court_to_panel(cx, cy) for cx, cy in shuttle_trail_hist]
             for i in range(1, len(spts)):
                 t = i / len(spts)
-                c = _blend_color_bgr((0, 255, 255), 0.15 + 0.85 * t)
+                c = _blend_color_bgr((0, 255, 255), 0.2 + 0.8 * t)
                 cv2.line(frame, spts[i - 1], spts[i], c, 1, cv2.LINE_AA)
         sx, sy = _court_to_panel(shuttle_court[0], shuttle_court[1])
-        cv2.circle(frame, (sx, sy), 3, (0, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(frame, (sx, sy), 4, (0, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(frame, (sx, sy), 6, (255, 255, 255), 1, cv2.LINE_AA)
 
-    # 鹰眼角标
     from PIL import Image, ImageDraw
     pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(pil)
-    font = _get_overlay_font(max(11, panel_w // 11))
-    draw.text((x0 + 6, y0 + 4), "Hawk-eye", font=font, fill=(170, 170, 170))
+    font_title = _get_overlay_font(max(11, panel_w // 12))
+    font_sub = _get_overlay_font(9)
+    title = _hud_palette(lang)["hawkeye"]
+    draw.text((x0 + 8, y0 + 5), title, font=font_title, fill=(0, 210, 255))
+    draw.text((x1 - 8, y0 + 7), "TOP", font=font_sub, fill=(100, 120, 140), anchor="ra")
     frame[:] = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
 
 
-def _player_stat_lines(st, lang):
-    u = "m/s" if lang == "en" else "米/秒"
-    um = "m" if lang == "en" else "米"
+def _hud_palette(lang):
+    """HUD 文案与配色 token。"""
     if lang == "zh":
-        return [
-            f"当前速度：{st['current_speed']:.2f} {u}",
-            "当前回合：",
-            f"  移动距离：{st['rally_dist']:.2f} {um}",
-            f"  平均速度：{st['rally_avg']:.2f} {u}",
-            f"  最大速度：{st['max_speed_rally']:.2f} {u}",
-            "比赛总计：",
-            f"  总距离：{st['total_dist']:.2f} {um}",
-            f"  平均速度：{st['total_avg']:.2f} {u}",
-            f"  最大速度：{st['max_speed_total']:.2f} {u}",
-        ]
+        return {
+            "far_title": "上场球员",
+            "near_title": "下场球员",
+            "rally_label": "当前回合",
+            "section_rally": "本回合",
+            "section_match": "全场",
+            "lbl_speed": "当前速度",
+            "lbl_dist": "移动距离",
+            "lbl_avg": "平均速度",
+            "lbl_max": "最大速度",
+            "lbl_total_dist": "总距离",
+            "unit_speed": "m/s",
+            "unit_dist": "m",
+            "hawkeye": "HAWK-EYE",
+        }
+    return {
+        "far_title": "FAR COURT",
+        "near_title": "NEAR COURT",
+        "rally_label": "RALLY",
+        "section_rally": "RALLY",
+        "section_match": "MATCH",
+        "lbl_speed": "Speed",
+        "lbl_dist": "Distance",
+        "lbl_avg": "Avg Speed",
+        "lbl_max": "Max Speed",
+        "lbl_total_dist": "Total Dist",
+        "unit_speed": "m/s",
+        "unit_dist": "m",
+        "hawkeye": "HAWK-EYE",
+    }
+
+
+def _hud_player_rows(st, lang):
+    """返回 (section, label, value) 行；section 为 None 表示普通 KV 行。"""
+    t = _hud_palette(lang)
+    u, um = t["unit_speed"], t["unit_dist"]
     return [
-        f"Speed: {st['current_speed']:.2f} {u}",
-        "Rally:",
-        f"  Dist: {st['rally_dist']:.2f} {um}",
-        f"  Avg: {st['rally_avg']:.2f} {u}",
-        f"  Max: {st['max_speed_rally']:.2f} {u}",
-        "Match:",
-        f"  Dist: {st['total_dist']:.2f} {um}",
-        f"  Avg: {st['total_avg']:.2f} {u}",
-        f"  Max: {st['max_speed_total']:.2f} {u}",
+        (None, t["lbl_speed"], f"{st['current_speed']:.2f} {u}"),
+        ("rally", t["lbl_dist"], f"{st['rally_dist']:.2f} {um}"),
+        ("rally", t["lbl_avg"], f"{st['rally_avg']:.2f} {u}"),
+        ("rally", t["lbl_max"], f"{st['max_speed_rally']:.2f} {u}"),
+        ("match", t["lbl_total_dist"], f"{st['total_dist']:.2f} {um}"),
+        ("match", t["lbl_avg"], f"{st['total_avg']:.2f} {u}"),
+        ("match", t["lbl_max"], f"{st['max_speed_total']:.2f} {u}"),
     ]
 
 
+def _hud_section_title(section, lang):
+    t = _hud_palette(lang)
+    if section == "rally":
+        return t["section_rally"]
+    if section == "match":
+        return t["section_match"]
+    return None
+
+
+def _draw_hud_player_block(draw, panel_w, start_y, slot, player, lang, fonts):
+    """绘制单个球员统计块（固定标签宽）。"""
+    t = _hud_palette(lang)
+    font_title, font_label, font_value, font_section = fonts
+    title = t["far_title"] if slot == 0 else t["near_title"]
+    accent = (255, 220, 80) if slot == 0 else (255, 120, 200)
+
+    bar_h = 28
+    draw.rectangle((0, start_y, 3, start_y + bar_h), fill=accent)
+    draw.text((14, start_y + 4), title, font=font_title, fill=accent)
+
+    rows = _hud_player_rows(player, lang)
+    value_x = panel_w - 14
+    y = start_y + bar_h + 6
+    last_section = None
+    for section, label, value in rows:
+        if section != last_section and section is not None:
+            sec = _hud_section_title(section, lang)
+            draw.text((16, y), sec, font=font_section, fill=(90, 160, 200))
+            y += 20
+            last_section = section
+        draw.text((16, y), label, font=font_label, fill=(130, 145, 170))
+        draw.text((value_x, y), value, font=font_value, fill=(235, 245, 255), anchor="ra")
+        lb = draw.textbbox((16, y), label, font=font_label)
+        vb = draw.textbbox((value_x, y), value, font=font_value, anchor="ra")
+        y = max(lb[3], vb[3]) + 4
+    return y + 10
+
+
 def _overlay_match_hud(frame, hud, court_smooth_trails, shuttle_court=None, shuttle_trail_hist=None, lang="zh"):
-    """左侧双球员统计 + 中部回合 + 右上鹰眼。"""
+    """左侧球员统计 HUD + 右上鹰眼（标签固定、数值右对齐）。"""
     from PIL import Image, ImageDraw
     fh, fw = frame.shape[:2]
-    panel_w = max(240, min(320, int(fw * 0.24)))
+    panel_w = max(268, min(310, int(fw * 0.24)))
 
     pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
     layer = Image.new("RGBA", pil.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    draw.rectangle((0, 0, panel_w, fh), fill=(12, 14, 20, 185))
+    draw_bg = ImageDraw.Draw(layer)
+    draw_bg.rectangle((0, 0, panel_w, fh), fill=(6, 10, 18, 210))
+    draw_bg.rectangle((0, 0, 3, fh), fill=(0, 200, 255, 255))
     pil = Image.alpha_composite(pil, layer)
     draw = ImageDraw.Draw(pil)
 
-    font_title = _get_overlay_font(17)
-    font_body = _get_overlay_font(14)
-    font_rally = _get_overlay_font(24)
+    font_title = _get_overlay_font(16)
+    font_label = _get_overlay_font(13)
+    font_value = _get_overlay_font(13)
+    font_section = _get_overlay_font(12)
+    font_rally_l = _get_overlay_font(13)
+    font_rally_v = _get_overlay_font(28)
+    fonts = (font_title, font_label, font_value, font_section)
 
-    slot_titles = (
-        ("上场球员统计", "下场球员统计") if lang == "zh"
-        else ("Far Court Player", "Near Court Player")
-    )
+    t = _hud_palette(lang)
     players_by_slot = {p["slot"]: p for p in hud.get("players", [])}
 
-    def _draw_player_block(slot, start_y):
-        p = players_by_slot.get(slot)
-        if not p:
-            return start_y
-        y = start_y
-        draw.text((14, y), slot_titles[slot], font=font_title, fill=(255, 230, 80))
-        y += 26
-        for line in _player_stat_lines(p, lang):
-            draw.text((18, y), line, font=font_body, fill=(240, 240, 240))
-            bbox = draw.textbbox((18, y), line, font=font_body)
-            y = bbox[3] + 4
-        return y + 8
+    y_top = 12
+    if 0 in players_by_slot:
+        y_top = _draw_hud_player_block(draw, panel_w, y_top, 0, players_by_slot[0], lang, fonts)
 
-    _draw_player_block(0, 14)
+    rally_mid = fh // 2
+    draw.line((12, rally_mid - 28, panel_w - 12, rally_mid - 28), fill=(40, 55, 75), width=1)
+    draw.text((16, rally_mid - 22), t["rally_label"], font=font_rally_l, fill=(130, 145, 170))
+    rally_val = str(hud.get("rally", 0))
+    draw.text((panel_w - 14, rally_mid - 8), rally_val, font=font_rally_v,
+              fill=(255, 210, 60), anchor="ra")
+    draw.line((12, rally_mid + 28, panel_w - 12, rally_mid + 28), fill=(40, 55, 75), width=1)
 
-    rally_txt = f"回合：{hud['rally']}" if lang == "zh" else f"Rally: {hud['rally']}"
-    rally_bbox = draw.textbbox((0, 0), rally_txt, font=font_rally)
-    rally_h = rally_bbox[3] - rally_bbox[1]
-    draw.text((14, fh // 2 - rally_h // 2), rally_txt, font=font_rally, fill=(255, 220, 40))
-
-    bottom_start = fh // 2 + rally_h // 2 + 24
-    _draw_player_block(1, bottom_start)
+    y_bot = rally_mid + 36
+    if 1 in players_by_slot:
+        _draw_hud_player_block(draw, panel_w, y_bot, 1, players_by_slot[1], lang, fonts)
 
     frame[:] = cv2.cvtColor(np.asarray(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
     _draw_hawkeye_minimap(frame, court_smooth_trails, shuttle_court=shuttle_court,
-                          shuttle_trail_hist=shuttle_trail_hist)
+                          shuttle_trail_hist=shuttle_trail_hist, lang=lang)
 
 
 def _make_heatmap(court_positions, out_path, size=(260, 670)):
@@ -511,8 +585,8 @@ def _make_scatter(court_positions, out_path, size=(260, 670)):
     cv2.imwrite(out_path, canvas)
 
 
-def extract_video_frame(video_path, frame_index=0):
-    """提取视频指定帧为 JPEG base64。"""
+def extract_video_frame(video_path, frame_index=0, auto_detect_court=False):
+    """提取视频指定帧为 JPEG base64；可选自动球场四角检测。"""
     import base64
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -526,11 +600,53 @@ def extract_video_frame(video_path, frame_index=0):
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     if not ok:
         raise ValueError("帧编码失败")
-    return {
+    result = {
         "imageBase64": base64.b64encode(buf.tobytes()).decode(),
-        "width": w,
-        "height": h,
+        "width": int(w),
+        "height": int(h),
     }
+    if auto_detect_court:
+        from services.court_detector import detect_court_from_frame
+        result.update(detect_court_from_frame(frame))
+    return result
+
+
+def _infer_pose_yolo(pose_model, frame, conf, court_poly):
+    """Ultralytics YOLO Pose -> (persons_kp, centroids)。"""
+    persons = []
+    centroids = []
+    pr = pose_model.predict(frame, conf=conf, verbose=False)[0]
+    if pr.keypoints is not None and pr.keypoints.data is not None:
+        for kp_t in pr.keypoints.data.cpu().tolist():
+            kp = [[float(x), float(y), float(c)] for x, y, c in kp_t]
+            cxy = _foot_position_from_keypoints(kp)
+            if cxy is None:
+                cxy = _person_bbox_from_keypoints(kp)
+            if cxy is None:
+                continue
+            if not _in_court_polygon(cxy[0], cxy[1], court_poly):
+                continue
+            persons.append(kp)
+            centroids.append(cxy)
+    return persons, centroids
+
+
+def _infer_pose_rtmo(rtmo_model, frame, conf, court_poly):
+    """rtmlib RTMO -> (persons_kp, centroids)。"""
+    from inference import infer_pose_rtmo
+    persons = []
+    centroids = []
+    for kp in infer_pose_rtmo(frame, rtmo_model, conf=conf):
+        cxy = _foot_position_from_keypoints(kp)
+        if cxy is None:
+            cxy = _person_bbox_from_keypoints(kp)
+        if cxy is None:
+            continue
+        if not _in_court_polygon(cxy[0], cxy[1], court_poly):
+            continue
+        persons.append(kp)
+        centroids.append(cxy)
+    return persons, centroids
 
 
 def analyze_badminton_video(
@@ -540,6 +656,8 @@ def analyze_badminton_video(
     court_points,
     ball_model_path=None,
     conf=0.25,
+    pose_library="ultralytics",
+    model_key="",
     show_skeleton=True,
     show_trajectories=True,
     show_shuttle=True,
@@ -553,12 +671,18 @@ def analyze_badminton_video(
     Returns:
         dict: stats + output files relative names
     """
-    from inference import _get_model, _open_h264, _write_bgr
+    from inference import _get_model, _get_rtmo_model, _open_h264, _write_bgr
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pose_model = _get_model(pose_model_path)
+    lib = (pose_library or "ultralytics").lower()
+    pose_rtmo = None
+    pose_model = None
+    if lib == "rtmlib":
+        pose_rtmo = _get_rtmo_model(pose_model_path, model_key or "rtmo-s")
+    else:
+        pose_model = _get_model(pose_model_path)
     ball_model = _get_model(ball_model_path) if ball_model_path else None
 
     cap = cv2.VideoCapture(src_path)
@@ -620,21 +744,10 @@ def analyze_badminton_video(
             vis = frame.copy()
 
             # 姿态
-            pr = pose_model.predict(frame, conf=conf, verbose=False)[0]
-            persons = []
-            centroids = []
-            if pr.keypoints is not None and pr.keypoints.data is not None:
-                for kp_t in pr.keypoints.data.cpu().tolist():
-                    kp = [[float(x), float(y), float(c)] for x, y, c in kp_t]
-                    cxy = _foot_position_from_keypoints(kp)
-                    if cxy is None:
-                        cxy = _person_bbox_from_keypoints(kp)
-                    if cxy is None:
-                        continue
-                    if not _in_court_polygon(cxy[0], cxy[1], court_poly):
-                        continue
-                    persons.append(kp)
-                    centroids.append(cxy)
+            if lib == "rtmlib":
+                persons, centroids = _infer_pose_rtmo(pose_rtmo, frame, conf, court_poly)
+            else:
+                persons, centroids = _infer_pose_yolo(pose_model, frame, conf, court_poly)
 
             total_persons += len(persons)
             tracks = _match_tracks(centroids, tracks)
@@ -773,7 +886,7 @@ def analyze_badminton_video(
                 "frame": frames,
                 "rally": rally_id,
                 "players": frame_players,
-                "shuttle": {"image": list(shuttle_xy)} if shuttle_xy else None,
+                "shuttle": {"image": [float(shuttle_xy[0]), float(shuttle_xy[1])]} if shuttle_xy else None,
             }
             jl_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -798,8 +911,8 @@ def analyze_badminton_video(
         "totalPersons": total_persons,
         "shuttleDetections": shuttle_frames,
         "rallyCount": rally_id,
-        "playerDistances": {str(k): round(v, 2) for k, v in player_dist.items()},
-        "playerMaxSpeed": {str(k): round(v, 2) for k, v in player_speeds.items()},
+        "playerDistances": {str(k): round(float(v), 2) for k, v in player_dist.items()},
+        "playerMaxSpeed": {str(k): round(float(v), 2) for k, v in player_speeds.items()},
         "outputs": {
             "video": out_video.name,
             "detections": jsonl_path.name,

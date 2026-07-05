@@ -385,6 +385,49 @@ def _fetch_rfdetr_weight(folder, sub, model_key):
     return f"models/{sub}/{fname}", os.path.getsize(dest)
 
 
+MOBILESAM_WEIGHT_URL = (
+    "https://github.com/ChaoningZhang/MobileSAM/raw/master/weights/mobile_sam.pt"
+)
+
+
+def _fetch_mobilesam_weight(folder, sub):
+    """拉取 MobileSAM 官方 mobile_sam.pt（GitHub）。"""
+    import requests
+    fname = "mobile_sam.pt"
+    _ensure_dir(folder)
+    dest = os.path.join(folder, fname)
+    resp = requests.get(MOBILESAM_WEIGHT_URL, stream=True, timeout=600)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                f.write(chunk)
+    if not os.path.isfile(dest) or os.path.getsize(dest) < 1024:
+        raise ValueError("MobileSAM 权重下载失败")
+    return f"models/{sub}/{fname}", os.path.getsize(dest)
+
+
+def _fetch_rtmlib_weight(folder, sub, model_key):
+    """拉取 RTMO ONNX SDK zip（OpenMMLab）并解压为 .onnx。"""
+    import requests
+    from inference import extract_rtmlib_onnx_from_zip, rtmlib_weight_url
+    url = rtmlib_weight_url(model_key)
+    fname = os.path.basename(url.split("?")[0])
+    _ensure_dir(folder)
+    dest = os.path.join(folder, fname)
+    resp = requests.get(url, stream=True, timeout=600)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                f.write(chunk)
+    if not os.path.isfile(dest) or os.path.getsize(dest) < 1024 * 100:
+        raise ValueError("RTMO 权重下载失败")
+    onnx_path = extract_rtmlib_onnx_from_zip(dest)
+    onnx_fname = os.path.basename(onnx_path)
+    return f"models/{sub}/{onnx_fname}", os.path.getsize(onnx_path)
+
+
 def _detect_lib(m):
     return (m.library or "ultralytics").lower()
 
@@ -402,30 +445,35 @@ def _detect_model_path(m):
 def fetch_weight(mid):
     """从模型来源拉取权重到服务器（按来源 URL 自动分流 HuggingFace / ModelScope）。"""
     m = AiModel.query.get_or_404(mid)
-    repo_id = _repo_id_from_url(m.source_url)
-    if repo_id is None:
-        return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
-
-    hub = _hub_of(m.source_url)
     lib = _detect_lib(m)
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if lib == "rfdetr":
+        if lib == "mobilesam":
+            rel, size = _fetch_mobilesam_weight(folder, sub)
+        elif lib == "rfdetr":
             rel, size = _fetch_rfdetr_weight(folder, sub, m.model_key)
-        elif hub == "modelscope":
-            is_dir_model = lib != "ultralytics"
-            rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
+        elif lib == "rtmlib":
+            rel, size = _fetch_rtmlib_weight(folder, sub, m.model_key)
         else:
-            is_dir_model = lib != "ultralytics"
-            rel, size = _fetch_huggingface(
-                repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
+            repo_id = _repo_id_from_url(m.source_url)
+            if repo_id is None:
+                return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
+            hub = _hub_of(m.source_url)
+            if hub == "modelscope":
+                is_dir_model = lib != "ultralytics"
+                rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
+            else:
+                is_dir_model = lib != "ultralytics"
+                rel, size = _fetch_huggingface(
+                    repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
     except Exception as e:  # noqa: BLE001  网络/仓库错误统一回传
         msg = str(e)
         low = msg.lower()
         if "404" in msg or "not found" in low or "repositorynotfound" in low or "does not exist" in low:
             return jsonify(code=400, message="拉取失败：仓库不存在或来源地址有误，请核对模型链接(owner/name)"), 400
         if "401" in msg or "403" in msg or "gated" in low or "restricted" in low:
+            hub = _hub_of(m.source_url or "")
             if hub == "modelscope":
                 hint = ("该模型为受限/私有仓库，需先在 ModelScope 模型页申请访问权限，"
                         "再在后端 .env 配置 MODELSCOPE_TOKEN=<你的令牌> 并重启。")
@@ -853,6 +901,135 @@ def pose_route(mid):
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"姿态估计失败：{e}"), 500
     return jsonify(code=0, message="姿态估计完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/segment")
+@permission_required("ai:model:query")
+def segment_route(mid):
+    """实例/交互分割：RF-DETR-Seg 或 MobileSAM。"""
+    m = AiModel.query.get_or_404(mid)
+    lib = _detect_lib(m)
+    task = (m.task or "").lower()
+    if task not in ("instance-segmentation", "interactive-segmentation"):
+        return jsonify(code=400, message="该模型任务不是分割类型"), 400
+    abs_path = _detect_model_path(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+    draw = request.form.get("draw", "1") != "0"
+
+    try:
+        if lib == "rfdetr":
+            from inference import segment_image_rfdetr
+            result = segment_image_rfdetr(abs_path, file.read(), conf=conf, draw=draw,
+                                          model_key=m.model_key or "rf-detr-seg-medium")
+        elif lib == "mobilesam":
+            import json
+            from inference import segment_image_mobilesam
+            mode = (request.form.get("mode") or "prompt").strip().lower()
+            points = point_labels = box = None
+            raw_pts = request.form.get("points")
+            raw_lbl = request.form.get("pointLabels")
+            raw_box = request.form.get("box")
+            if raw_pts:
+                points = json.loads(raw_pts)
+            if raw_lbl:
+                point_labels = json.loads(raw_lbl)
+            if raw_box:
+                box = json.loads(raw_box)
+            result = segment_image_mobilesam(
+                abs_path, file.read(), points=points, point_labels=point_labels,
+                box=box, mode=mode, draw=draw)
+        else:
+            return jsonify(code=400, message="分割仅支持 rfdetr 或 mobilesam 引擎"), 400
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"分割失败：{e}"), 500
+    return jsonify(code=0, message="分割完成", data=result)
+
+
+def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_key):
+    """后台线程：RF-DETR-Seg 逐帧视频分割。"""
+    def cb(processed, total):
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j["processed"] = processed
+                j["total"] = total
+    try:
+        from inference import segment_video_rfdetr
+        stats = segment_video_rfdetr(abs_path, src_path, out_path, conf=conf,
+                                     model_key=model_key or "rf-detr-seg-medium", progress_cb=cb)
+        stats["output"] = out_name
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="done", stats=stats,
+                                       processed=stats["frames"], total=stats["frames"])
+    except Exception as e:  # noqa: BLE001
+        with _video_jobs_lock:
+            _video_jobs[job_id].update(status="error", error=str(e))
+    finally:
+        if os.path.isfile(src_path):
+            try:
+                os.remove(src_path)
+            except OSError:
+                pass
+
+
+@ai_model_bp.post("/<int:mid>/segment-video")
+@permission_required("ai:model:query")
+def segment_video_route(mid):
+    """RF-DETR-Seg 视频分割：异步任务，进度复用 video-progress。"""
+    m = AiModel.query.get_or_404(mid)
+    lib = _detect_lib(m)
+    if lib != "rfdetr" or (m.task or "") != "instance-segmentation":
+        return jsonify(code=400, message="视频分割仅支持 RF-DETR-Seg 实例分割模型"), 400
+    abs_path = _detect_model_path(m)
+    if abs_path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到视频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的视频格式"), 400
+
+    try:
+        conf = float(request.form.get("conf", 0.25))
+    except (TypeError, ValueError):
+        conf = 0.25
+
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    _ensure_dir(video_folder)
+    _ensure_dir(out_folder)
+
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
+    src_path = os.path.join(video_folder, f"{base}_{ts}{ext}")
+    out_name = f"{base}_{ts}_seg.mp4"
+    out_path = os.path.join(out_folder, out_name)
+    file.save(src_path)
+
+    job_id = uuid.uuid4().hex
+    with _video_jobs_lock:
+        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
+                               "stats": None, "error": None}
+    threading.Thread(
+        target=_segment_worker,
+        args=(job_id, abs_path, src_path, out_path, out_name, conf, m.model_key or ""),
+        daemon=True,
+    ).start()
+    return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
 @ai_model_bp.post("/<int:mid>/analyze-report")

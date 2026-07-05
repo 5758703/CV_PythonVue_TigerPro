@@ -6,8 +6,9 @@
         <el-card shadow="never" class="cfg-card">
           <el-form :inline="true" class="cfg-form">
             <el-form-item label="姿态模型">
-              <el-select v-model="poseId" placeholder="YOLO Pose" style="width:200px">
-                <el-option v-for="m in poseModels" :key="m.id" :label="m.modelName" :value="m.id" />
+              <el-select v-model="poseId" placeholder="YOLO / RTMO" style="width:220px">
+                <el-option v-for="m in poseModels" :key="m.id"
+                  :label="`${m.modelName}（${m.library}）`" :value="m.id" />
               </el-select>
             </el-form-item>
             <el-form-item label="羽毛球模型">
@@ -30,22 +31,21 @@
               </el-button>
               <el-button :icon="Refresh" @click="resetAll">清空</el-button>
             </el-form-item>
+            <el-form-item label="叠加层" class="vis-item">
+              <el-checkbox v-model="opts.showSkeleton">骨架</el-checkbox>
+              <el-checkbox v-model="opts.showTrajectories">球员轨迹</el-checkbox>
+              <el-checkbox v-model="opts.showShuttle">羽毛球轨迹</el-checkbox>
+              <el-checkbox v-model="opts.showStats">统计叠加</el-checkbox>
+              <el-checkbox v-model="opts.showCourt">球场边框</el-checkbox>
+              <el-radio-group v-model="opts.language" size="small" class="lang-radio">
+                <el-radio-button value="zh">中文</el-radio-button>
+                <el-radio-button value="en">EN</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
           </el-form>
 
-          <div class="vis-row">
-            <el-checkbox v-model="opts.showSkeleton">骨架</el-checkbox>
-            <el-checkbox v-model="opts.showTrajectories">球员轨迹</el-checkbox>
-            <el-checkbox v-model="opts.showShuttle">羽毛球轨迹</el-checkbox>
-            <el-checkbox v-model="opts.showStats">统计叠加</el-checkbox>
-            <el-checkbox v-model="opts.showCourt">球场边框</el-checkbox>
-            <el-radio-group v-model="opts.language" size="small" class="lang-radio">
-              <el-radio-button value="zh">中文</el-radio-button>
-              <el-radio-button value="en">EN</el-radio-button>
-            </el-radio-group>
-          </div>
-
           <el-alert v-if="!poseModels.length" type="warning" :closable="false" class="tip-alert"
-            title="暂无姿态模型：请到「模型管理」拉取 YOLO Pose 权重（如 YOLO11n 姿态估计）。" />
+            title="暂无姿态模型：请到「模型管理」拉取 YOLO Pose 或 RTMO（rtmlib）权重。" />
         </el-card>
 
         <el-empty v-if="!file && !running && !resultVideoUrl" description="选择姿态模型与比赛视频，标注球场四角后开始分析"
@@ -75,6 +75,8 @@
                     <el-icon><Aim /></el-icon> 球场四角标注
                   </span>
                   <span class="hint">{{ courtHint }}</span>
+                  <el-button v-if="file" link type="primary" size="small" :loading="detectingCourt"
+                    @click="runAutoDetect">自动检测</el-button>
                   <el-button v-if="courtPoints.length" link type="warning" size="small" @click="clearCourt">重标</el-button>
                 </div>
                 <div class="media-body dark">
@@ -83,7 +85,12 @@
                     <canvas ref="courtCanvas" class="court-canvas" @click="onCourtClick" />
                   </div>
                 </div>
-                <div class="court-tip">请依次点击：左上 → 右上 → 右下 → 左下</div>
+                <div class="court-tip">
+                  上传视频后将自动检测球场四角；检测失败请手动点击标注（左上 → 右上 → 右下 → 左下）
+                  <el-tag v-if="courtAutoDetected" type="success" size="small" effect="plain" class="court-tag">
+                    自动检测 {{ courtConfidenceText }}
+                  </el-tag>
+                </div>
               </div>
             </el-col>
           </el-row>
@@ -198,7 +205,7 @@
               </el-col>
             </el-row>
             <el-alert type="info" :closable="false" show-icon class="guide-alert"
-              title="参考 Good-Badminton：需标注球场四角（左上→右上→右下→左下），可选羽毛球 YOLO 权重（如 yolo11s-ball.pt）。" />
+              title="支持 YOLO Pose / RTMO（rtmlib）姿态引擎；上传视频后自动检测球场线，可手动修正四角；可选羽毛球 YOLO 权重。" />
           </section>
         </div>
       </el-tab-pane>
@@ -215,9 +222,9 @@ import { modelApi, badmintonApi } from '../../../api/ai'
 const COURT_LABELS = ['左上', '右上', '右下', '左下']
 
 const guideItems = [
-  { icon: '🏸', title: '球员姿态', desc: 'YOLO Pose 骨架检测，结合球场区域过滤场外干扰', color: 'c-blue' },
+  { icon: '🏸', title: '球员姿态', desc: 'YOLO Pose / RTMO 骨架检测，结合球场区域过滤场外干扰', color: 'c-blue' },
+  { icon: '📐', title: '球场映射', desc: '自动线检测预填四角，支持手动修正与单应性映射', color: 'c-orange' },
   { icon: '⚡', title: '羽毛球追踪', desc: '可选专用 YOLO 权重，追踪球路与落点', color: 'c-green' },
-  { icon: '📐', title: '球场映射', desc: '四角单应性变换，映射至标准场地坐标系', color: 'c-orange' },
   { icon: '📊', title: '分析输出', desc: '标注视频、detections.jsonl、热力图与散点图', color: 'c-purple' },
 ]
 
@@ -234,6 +241,9 @@ const frameW = ref(0)
 const frameH = ref(0)
 const courtPoints = ref([])
 const courtCanvas = ref(null)
+const detectingCourt = ref(false)
+const courtAutoDetected = ref(false)
+const courtConfidence = ref(0)
 
 const running = ref(false)
 const jobId = ref('')
@@ -257,7 +267,9 @@ let pollTimer = null
 
 const poseModels = computed(() =>
   allModels.value.filter(m =>
-    m.library === 'ultralytics' && m.task === 'pose-estimation' && m.filePath && m.status === '0')
+    (m.library === 'ultralytics' || m.library === 'rtmlib')
+    && m.task === 'pose-estimation' && m.status === '0'
+    && (m.library === 'rtmlib' || m.filePath))
 )
 const ballModels = computed(() =>
   allModels.value.filter(m =>
@@ -268,9 +280,14 @@ const percent = computed(() => {
   return Math.min(100, Math.round((processed.value / total.value) * 100))
 })
 const courtHint = computed(() => {
-  if (courtPoints.value.length >= 4) return '四角已标注完成'
+  if (detectingCourt.value) return '正在自动检测球场线…'
+  if (courtPoints.value.length >= 4) {
+    return courtAutoDetected.value ? '四角已自动检测，可点击修正' : '四角已标注完成'
+  }
   return `请依次点击：${COURT_LABELS[courtPoints.value.length] || '完成'}`
 })
+const courtConfidenceText = computed(() =>
+  courtConfidence.value ? `${Math.round(courtConfidence.value * 100)}%` : '')
 const distRows = computed(() => {
   if (!stats.value?.playerDistances) return []
   const speeds = stats.value.playerMaxSpeed || {}
@@ -287,7 +304,7 @@ async function loadModels() {
   allModels.value = res.data?.rows || []
   if (!poseId.value && poseModels.value.length) {
     const pref = poseModels.value.find(m =>
-      m.modelKey === 'yolo11s-pose' || m.modelName === 'yolo11s-pose')
+      m.modelKey === 'rtmo-s' || m.modelKey === 'yolo11s-pose' || m.modelName?.includes('RTMO'))
     poseId.value = pref?.id || poseModels.value[0].id
   }
   if (!ballId.value && ballModels.value.length) {
@@ -306,25 +323,44 @@ function onPickVideo(uploadFile) {
   file.value = uploadFile.raw
   fileName.value = uploadFile.name || '比赛视频'
   courtPoints.value = []
+  courtAutoDetected.value = false
+  courtConfidence.value = 0
   stats.value = null
   revokeUrls()
   revokeOriginalUrl()
   originalVideoUrl.value = URL.createObjectURL(uploadFile.raw)
-  loadFirstFrame(uploadFile.raw)
+  runAutoDetect(uploadFile.raw)
 }
 
-async function loadFirstFrame(raw) {
+async function runAutoDetect(raw) {
+  const video = raw || file.value
+  if (!video) return
+  detectingCourt.value = true
+  courtPoints.value = []
+  courtAutoDetected.value = false
+  courtConfidence.value = 0
   const fd = new FormData()
-  fd.append('video', raw)
+  fd.append('video', video)
   try {
-    const res = await badmintonApi.extractFrame(fd)
-    frameSrc.value = 'data:image/jpeg;base64,' + res.data.imageBase64
-    frameW.value = res.data.width
-    frameH.value = res.data.height
+    const res = await badmintonApi.detectCourt(fd)
+    const d = res.data
+    frameSrc.value = 'data:image/jpeg;base64,' + d.imageBase64
+    frameW.value = d.width
+    frameH.value = d.height
+    if (d.autoDetected && d.courtPoints?.length === 4) {
+      courtPoints.value = d.courtPoints
+      courtAutoDetected.value = true
+      courtConfidence.value = d.confidence || 0
+      ElMessage.success(`球场四角已自动检测（置信度 ${Math.round((d.confidence || 0) * 100)}%）`)
+    } else {
+      ElMessage.warning('未能自动识别球场，请手动标注四角')
+    }
     await nextTick()
     drawCourtCanvas()
   } catch (e) {
-    ElMessage.error(e.message || '提取首帧失败')
+    ElMessage.error(e?.response?.data?.message || e.message || '球场检测失败')
+  } finally {
+    detectingCourt.value = false
   }
 }
 
@@ -341,22 +377,43 @@ function drawCourtCanvas() {
     cv.height = dh
     const ctx = cv.getContext('2d')
     ctx.drawImage(img, 0, 0, dw, dh)
+
+    ctx.fillStyle = 'rgba(0, 180, 255, 0.04)'
+    const grid = 32
+    for (let gx = 0; gx < dw; gx += grid) {
+      ctx.fillRect(gx, 0, 1, dh)
+    }
+    for (let gy = 0; gy < dh; gy += grid) {
+      ctx.fillRect(0, gy, dw, 1)
+    }
+
     if (courtPoints.value.length) {
       const pts = courtPoints.value.map(p => [p[0] * dw, p[1] * dh])
-      ctx.strokeStyle = '#00dc00'
+      ctx.strokeStyle = 'rgba(0, 220, 255, 0.85)'
       ctx.lineWidth = 2
+      ctx.shadowColor = 'rgba(0, 220, 255, 0.6)'
+      ctx.shadowBlur = 8
       ctx.beginPath()
       pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])))
       if (pts.length === 4) ctx.closePath()
       ctx.stroke()
+      ctx.shadowBlur = 0
+
+      const colors = ['#00dcff', '#ff6bcb', '#ffd54f', '#7cffb2']
       pts.forEach((p, i) => {
-        ctx.fillStyle = '#ff3300'
         ctx.beginPath()
-        ctx.arc(p[0], p[1], 5, 0, Math.PI * 2)
+        ctx.arc(p[0], p[1], 7, 0, Math.PI * 2)
+        ctx.fillStyle = colors[i]
         ctx.fill()
-        ctx.fillStyle = '#fff'
-        ctx.font = '12px sans-serif'
-        ctx.fillText(COURT_LABELS[i], p[0] + 8, p[1] - 4)
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+        ctx.fillStyle = 'rgba(8, 12, 20, 0.75)'
+        ctx.font = '600 11px "Segoe UI", sans-serif'
+        const tw = ctx.measureText(COURT_LABELS[i]).width
+        ctx.fillRect(p[0] + 10, p[1] - 18, tw + 8, 16)
+        ctx.fillStyle = '#e8f4ff'
+        ctx.fillText(COURT_LABELS[i], p[0] + 14, p[1] - 6)
       })
     }
   }
@@ -365,6 +422,7 @@ function drawCourtCanvas() {
 
 function onCourtClick(e) {
   if (!frameSrc.value || courtPoints.value.length >= 4) return
+  courtAutoDetected.value = false
   const cv = courtCanvas.value
   const rect = cv.getBoundingClientRect()
   const x = (e.clientX - rect.left) / cv.width
@@ -375,6 +433,8 @@ function onCourtClick(e) {
 
 function clearCourt() {
   courtPoints.value = []
+  courtAutoDetected.value = false
+  courtConfidence.value = 0
   drawCourtCanvas()
 }
 
@@ -485,6 +545,8 @@ function resetAll() {
   fileName.value = ''
   frameSrc.value = ''
   courtPoints.value = []
+  courtAutoDetected.value = false
+  courtConfidence.value = 0
   running.value = false
   stats.value = null
   jobId.value = ''
@@ -505,66 +567,119 @@ onBeforeUnmount(() => { stopPoll(); revokeUrls(); revokeOriginalUrl() })
 
 .cfg-card { margin-bottom: 16px; border: none; }
 .cfg-form { flex-wrap: wrap; }
-.vis-row {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px;
-  padding: 10px 0 4px; border-top: 1px solid #ebeef5; margin-top: 4px;
+.vis-item :deep(.el-form-item__content) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
 }
 .lang-radio { margin-left: 4px; }
 .tip-alert { margin-top: 10px; }
 
 .work-row { margin-bottom: 16px; }
 .media-panel {
-  background: #fff; border: 1px solid #e4e7ed; border-radius: 10px;
-  overflow: hidden; height: 100%; display: flex; flex-direction: column;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 .panel-hd {
-  display: flex; align-items: center; gap: 10px;
-  padding: 12px 16px; background: linear-gradient(180deg, #f8fafc 0%, #f2f6fc 100%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #f8fafc 0%, #f2f6fc 100%);
   border-bottom: 1px solid #ebeef5;
 }
-.panel-title { font-weight: 600; color: #303133; display: inline-flex; align-items: center; gap: 6px; }
+.panel-title {
+  font-weight: 600;
+  color: #303133;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .panel-actions { margin-left: auto; display: flex; gap: 4px; }
 .file-tag {
-  margin-left: auto; font-size: 12px; color: #606266; max-width: 180px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-left: auto;
+  font-size: 12px;
+  color: #606266;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .hint { font-size: 12px; color: #909399; flex: 1; }
 .media-body {
-  flex: 1; min-height: 260px; display: flex; align-items: center; justify-content: center;
-  background: #0f0f14; padding: 10px;
+  flex: 1;
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f0f14;
+  padding: 10px;
 }
 .media-body.dark { background: #1a1a2e; }
 .media-placeholder { color: #909399; font-size: 14px; }
 .player { width: 100%; max-height: 420px; border-radius: 6px; background: #000; }
 .frame-box { width: 100%; text-align: center; }
 .court-canvas { max-width: 100%; cursor: crosshair; border-radius: 4px; }
-.court-tip { padding: 8px 16px 12px; font-size: 12px; color: #909399; background: #fafafa; }
+.court-tip {
+  padding: 8px 16px 12px;
+  font-size: 12px;
+  color: #909399;
+  background: #fafafa;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.court-tag { margin-left: 4px; }
 
 .progress-panel {
-  margin-bottom: 16px; padding: 16px 18px;
+  margin-bottom: 16px;
+  padding: 16px 18px;
   background: linear-gradient(135deg, #f0f7ff 0%, #f5f0ff 100%);
-  border: 1px solid #d9ecff; border-radius: 10px;
+  border: 1px solid #d9ecff;
+  border-radius: 10px;
 }
-.progress-head { display: flex; justify-content: space-between; margin-bottom: 10px; font-weight: 600; color: #303133; }
+.progress-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #303133;
+}
 .progress-num { font-size: 13px; color: #606266; font-weight: 500; }
 .result-panel { margin-bottom: 8px; }
 
-/* ── 分析结果页 ── */
 .results-page { display: flex; flex-direction: column; gap: 16px; }
 .result-section {
-  background: #fff; border: 1px solid #e4e7ed; border-radius: 10px; padding: 18px 20px;
+  background: #fff;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  padding: 18px 20px;
 }
 .section-head {
-  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
 }
 .section-head h3 { margin: 0; font-size: 16px; font-weight: 600; color: #303133; }
 
 .stat-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
 }
 @media (max-width: 992px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
 .stat-card {
-  text-align: center; padding: 18px 12px; border-radius: 10px;
+  text-align: center;
+  padding: 18px 12px;
+  border-radius: 10px;
   background: linear-gradient(145deg, #f5f7fa 0%, #eef2f7 100%);
   border: 1px solid #e4e7ed;
 }
@@ -581,20 +696,33 @@ onBeforeUnmount(() => { stopPoll(); revokeUrls(); revokeOriginalUrl() })
 .chart-row { margin: 0 !important; }
 .chart-section { height: 100%; min-height: 320px; }
 .chart-frame {
-  background: #fafafa; border-radius: 8px; padding: 10px;
-  border: 1px dashed #dcdfe6; text-align: center;
+  background: #fafafa;
+  border-radius: 8px;
+  padding: 10px;
+  border: 1px dashed #dcdfe6;
+  text-align: center;
 }
 .chart-img { width: 100%; max-height: 360px; object-fit: contain; border-radius: 6px; }
 
 .guide-grid { margin-bottom: 14px; }
 .guide-card {
-  padding: 16px; border-radius: 10px; background: #f8fafc;
-  border: 1px solid #ebeef5; height: 100%; transition: box-shadow .2s;
+  padding: 16px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #ebeef5;
+  height: 100%;
+  transition: box-shadow 0.2s;
 }
-.guide-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.06); }
+.guide-card:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06); }
 .guide-icon {
-  width: 40px; height: 40px; border-radius: 10px; display: flex;
-  align-items: center; justify-content: center; font-size: 20px; margin-bottom: 10px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  margin-bottom: 10px;
 }
 .guide-icon.c-blue { background: #ecf5ff; }
 .guide-icon.c-green { background: #f0f9eb; }

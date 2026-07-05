@@ -102,7 +102,9 @@
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="transformers（HF 模型目录）" value="transformers" />
-            <el-option label="rfdetr（RF-DETR 目标检测）" value="rfdetr" />
+            <el-option label="rfdetr（RF-DETR 目标检测/分割）" value="rfdetr" />
+            <el-option label="mobilesam（MobileSAM 交互分割）" value="mobilesam" />
+            <el-option label="rtmlib（RTMO/RTMPose ONNX）" value="rtmlib" />
             <el-option label="funasr（语音识别）" value="funasr" />
             <el-option label="funasr-onnx（语音识别 onnx）" value="funasr-onnx" />
             <el-option label="sherpa-onnx（语音合成 onnx）" value="sherpa-onnx" />
@@ -115,6 +117,8 @@
         <el-form-item label="任务类型" prop="task">
           <el-select v-model="form.task" style="width: 100%" filterable>
             <el-option label="目标检测 object-detection" value="object-detection" />
+            <el-option label="实例分割 instance-segmentation" value="instance-segmentation" />
+            <el-option label="交互分割 interactive-segmentation" value="interactive-segmentation" />
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
             <el-option label="图像分类 image-classification" value="image-classification" />
             <el-option label="文字识别 OCR" value="ocr" />
@@ -258,6 +262,8 @@ const emptyForm = () => ({
 // 切库时给个合理的默认任务
 const TASK_LABELS = {
   "object-detection": "目标检测",
+  "instance-segmentation": "实例分割",
+  "interactive-segmentation": "交互分割",
   "pose-estimation": "姿态估计",
   "image-classification": "图像分类",
   "ocr": "OCR(端到端)",
@@ -281,6 +287,8 @@ const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "ima
 const LIB_DEFAULT_TASK = {
   ultralytics: "object-detection",
   rfdetr: "object-detection",
+  mobilesam: "interactive-segmentation",
+  rtmlib: "pose-estimation",
   "funasr": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",
   "sherpa-onnx": "text-to-speech",
@@ -290,6 +298,9 @@ const LIB_DEFAULT_TASK = {
 };
 const onLibChange = (lib) => {
   if (lib === "transformers" && form.task === "object-detection") form.task = "text-classification";
+  else if (lib === "rfdetr" && form.task === "text-classification") form.task = "object-detection";
+  else if (lib === "mobilesam") form.task = "interactive-segmentation";
+  else if (lib === "rtmlib") form.task = "pose-estimation";
   else if (LIB_DEFAULT_TASK[lib]) form.task = LIB_DEFAULT_TASK[lib];
 };
 const form = reactive(emptyForm());
@@ -564,6 +575,9 @@ const TASK_PAGE = {
   "token-classification": { path: "/ai/ner", label: "实体识别" },
   "question-answering": { path: "/ai/qa", label: "智能问答" },
   "image-classification": { path: "/ai/imgcls", label: "图像分类" },
+  "instance-segmentation": { path: "/ai/segment", label: "图像分割" },
+  "interactive-segmentation": { path: "/ai/segment", label: "图像分割" },
+  "pose-estimation": { path: "/ai/pose", label: "姿态估计" },
   "automatic-speech-recognition": { path: "/ai/asr", label: "语音识别" },
   "text-to-speech": { path: "/ai/tts", label: "文本转语音" },
   "talking-head": { path: "/ai/talker", label: "数字人合成" }
