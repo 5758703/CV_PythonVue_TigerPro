@@ -7,6 +7,83 @@ DeepSeek 不可用时也作为建议兜底来源。案例按分类管理。
 # 内置案例库（模块级常量）。两分类：生产安全风险识别 / 通用。
 CASES = [
     {
+        "id": "medical-brain-no-tumor",
+        "category": "医学影像-脑肿瘤",
+        "title": "未见明显肿瘤高风险征象",
+        "scene": "检测结果以 no_tumor / normal 为主",
+        "keywords": ["no_tumor", "normal", "无肿瘤", "脑肿瘤"],
+        "match_classes": ["no_tumor", "normal"],
+        "risk_level": "低",
+        "suggestion": "当前图像未见明显肿瘤高风险征象。建议结合临床症状与既往史，"
+                      "按医嘱定期复查 MRI，并由影像科医生最终判读。",
+    },
+    {
+        "id": "medical-brain-suspected-tumor",
+        "category": "医学影像-脑肿瘤",
+        "title": "疑似脑肿瘤征象",
+        "scene": "检测到肿瘤相关类别（tumor/glioma/meningioma/pituitary）",
+        "keywords": ["tumor", "glioma", "meningioma", "pituitary", "脑肿瘤"],
+        "match_classes": ["tumor", "glioma", "meningioma", "pituitary"],
+        "risk_level": "高",
+        "suggestion": "存在疑似肿瘤征象，建议尽快由神经影像专科医生复核，必要时完善增强 MRI、"
+                      "弥散/灌注序列及相关实验室检查，综合评估后制定进一步诊疗方案。",
+    },
+    {
+        "id": "medical-brain-low-confidence",
+        "category": "医学影像-脑肿瘤",
+        "title": "医学影像结果置信度偏低",
+        "scene": "脑肿瘤检测结果整体置信度不足，存在误检/漏检风险",
+        "keywords": ["低置信度", "误检", "漏检", "脑肿瘤", "医学影像"],
+        "match_classes": [],
+        "risk_level": "中",
+        "suggestion": "建议复核原始 DICOM 质量并进行多序列、多切面判读；"
+                      "必要时更换更匹配的数据域模型，避免单次 AI 结果直接用于临床决策。",
+    },
+    {
+        "id": "rocket-landing-tracking",
+        "category": "航天-火箭回收",
+        "title": "火箭回收阶段目标跟踪",
+        "scene": "同时检测到 Rocket Body 与 Engine Flames，处于发射/着陆关键阶段",
+        "keywords": ["rocket body", "engine flames", "火箭", "回收", "着陆", "falcon"],
+        "match_classes": ["rocket body", "engine flames"],
+        "risk_level": "中",
+        "suggestion": "持续跟踪火箭本体与发动机火焰区域，记录帧间位移与姿态变化；"
+                      "结合遥测数据交叉验证视觉跟踪结果，关注着陆腿展开与减速点火时序。",
+    },
+    {
+        "id": "rocket-launch-flames",
+        "category": "航天-火箭回收",
+        "title": "发动机火焰显著",
+        "scene": "画面以 Engine Flames 为主，可能处于点火/反推阶段",
+        "keywords": ["engine flames", "火焰", "点火", "反推", "rocket"],
+        "match_classes": ["engine flames"],
+        "risk_level": "中",
+        "suggestion": "标注火焰区域时序与强度变化，用于判断推力阶段；"
+                      "注意曝光过饱和导致的框漂移，必要时降低置信度阈值并人工复核关键帧。",
+    },
+    {
+        "id": "rocket-body-only",
+        "category": "航天-火箭回收",
+        "title": "火箭本体可见（无火焰）",
+        "scene": "检测到 Rocket Body，未检出 Engine Flames",
+        "keywords": ["rocket body", "火箭本体", "滑翔", "回收"],
+        "match_classes": ["rocket body"],
+        "risk_level": "低",
+        "suggestion": "适用于自由落体/滑翔段跟踪；建议开启多目标追踪（目标追踪页）"
+                      "保持 ID 连续，并记录本体在画面中的尺度变化以估计距离趋势。",
+    },
+    {
+        "id": "rocket-no-target",
+        "category": "航天-火箭回收",
+        "title": "未检出火箭相关目标",
+        "scene": "仅背景 Space 或未检出 Rocket Body / Engine Flames",
+        "keywords": ["space", "背景", "未检出", "火箭"],
+        "match_classes": ["space"],
+        "risk_level": "低",
+        "suggestion": "检查视频时段是否处于火箭出画/遮挡阶段；"
+                      "可尝试降低置信度阈值或切换更高分辨率源；确认镜头视场是否覆盖回收走廊。",
+    },
+    {
         "id": "safety-no-helmet",
         "category": "生产安全风险识别",
         "title": "作业人员未佩戴安全帽",

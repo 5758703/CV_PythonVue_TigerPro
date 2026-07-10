@@ -96,8 +96,10 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 
 | 文档 | 说明 |
 |------|------|
-| [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、依赖、模型权重、API 与使用流程（YOLO Pose / RTMO、自动球场检测） |
+| [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、依赖、姿态/检测模型权重、球场自动检测、HUD 鹰眼、API 与使用流程 |
 | [图像分割模块](docs/image-segmentation.md) | 技术栈、依赖、模型权重、API 与使用流程（RF-DETR-Seg / MobileSAM） |
+
+> 文档内保留 **实测截图占位**，可在 `docs/images/` 下按章节补充项目截图后替换。
 
 ## 启动顺序
 

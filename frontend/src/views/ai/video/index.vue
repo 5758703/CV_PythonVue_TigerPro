@@ -74,6 +74,18 @@
           <el-statistic title="检出目标总数" :value="result.totalDetections" />
           <el-statistic title="帧率(FPS)" :value="result.fps" />
           <el-statistic title="分辨率" :value="`${result.width}×${result.height}`" />
+          <el-statistic
+            v-if="result.rocketTelemetry"
+            title="平均下降速度"
+            :value="result.rocketTelemetry.avgDescentSpeed"
+            suffix="米/秒"
+          />
+          <el-statistic
+            v-if="result.rocketTelemetry"
+            title="最大下降速度"
+            :value="result.rocketTelemetry.maxDescentSpeed"
+            suffix="米/秒"
+          />
           <el-button type="primary" :icon="Download" @click="downloadResult">下载结果视频</el-button>
         </div>
 

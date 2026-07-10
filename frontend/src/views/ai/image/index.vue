@@ -132,7 +132,9 @@
 
             <header class="doc-head">
               <div class="doc-org">TIGERPRO · 计算机视觉智能检测平台</div>
-              <h1 class="doc-title">智能检测分析报告</h1>
+              <h1 class="doc-title">
+                {{ reportDocTitle }}
+              </h1>
               <div class="doc-subtitle">Intelligent Detection Analysis Report</div>
               <div class="doc-no">报告编号　{{ reportNo }}</div>
             </header>
@@ -164,6 +166,7 @@
             </table>
 
             <div v-if="!report.meta.aiAvailable" class="doc-warn">{{ report.warning }}</div>
+            <div v-if="report.disclaimer" class="doc-disclaimer">{{ report.disclaimer }}</div>
 
             <div class="doc-figs">
               <figure class="fig">
@@ -490,6 +493,14 @@ const reportNo = computed(() => {
   return `AIDR-${digits || '------------'}`
 })
 
+const reportDocTitle = computed(() => {
+  const name = report.value?.meta?.modelName || ''
+  const category = report.value?.meta?.category || ''
+  if (name.includes('脑肿瘤')) return '脑肿瘤诊断辅助报告'
+  if (name.includes('火箭') || category.includes('火箭')) return '火箭回收跟踪分析报告'
+  return '智能检测分析报告'
+})
+
 const exportPdf = async () => {
   if (!reportEl.value) return
   try {
@@ -615,9 +626,10 @@ onBeforeUnmount(() => {
   justify-content: center;
   overflow: hidden;
 }
-.img-box :deep(.el-image) { max-width: 100%; max-height: 100%; }
+.img-box :deep(.el-image) { width: 100%; height: 100%; }
+.img-box :deep(.el-image__inner) { width: 100%; height: 100%; object-fit: contain; }
 .stage { position: relative; }
-.stage-img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.stage-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .stage-canvas { position: absolute; cursor: pointer; }
 .result-meta { margin-top: 16px; }
 .det-table { margin-top: 12px; }
@@ -761,6 +773,15 @@ onBeforeUnmount(() => {
   border-left: 3px solid #d98a00;
   background: #fff8ec;
   color: #8a5d00;
+  font-size: 13px;
+}
+
+.doc-disclaimer {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-left: 3px solid #2f9e44;
+  background: #f0fff5;
+  color: #1b5e20;
   font-size: 13px;
 }
 

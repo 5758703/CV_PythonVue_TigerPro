@@ -4,16 +4,24 @@ CRUD + 本地视频上传 + MJPEG 实时预览(ffmpeg 按需转流)。
 """
 import os
 
-from flask import Blueprint, request, jsonify, current_app, Response
+from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
 from flask_jwt_extended import verify_jwt_in_request
 from werkzeug.utils import secure_filename
 
 from extensions import db
 from models import Camera
 from security import permission_required, current_user, has_perm
-from services.camera_stream import mjpeg_stream, list_dshow_devices
+from services.camera_stream import mjpeg_stream, list_dshow_devices, check_source_ready
 
 camera_bp = Blueprint("camera", __name__, url_prefix="/api/camera")
+
+
+def _camera_dict(cam):
+    d = cam.to_dict()
+    d["sourceReady"] = check_source_ready(cam)
+    if cam.source_type == "file" and cam.source:
+        d["sourceFileName"] = os.path.basename(cam.source.replace("\\", "/"))
+    return d
 
 
 @camera_bp.get("")
@@ -31,7 +39,7 @@ def list_cameras():
     total = query.count()
     rows = (query.order_by(Camera.id.desc())
             .offset((page - 1) * size).limit(size).all())
-    return jsonify(code=0, data={"rows": [c.to_dict() for c in rows], "total": total})
+    return jsonify(code=0, data={"rows": [_camera_dict(c) for c in rows], "total": total})
 
 
 @camera_bp.get("/devices")
@@ -64,6 +72,8 @@ def _validate(cam):
         return "rtsp 地址须以 rtsp:// 开头"
     if not cam.source:
         return "请填写来源(本地视频/rtsp 地址/本机摄像头设备名)"
+    if cam.source_type == "file" and not check_source_ready(cam):
+        return f"视频文件不存在或未上传：{cam.source}"
     return None
 
 
@@ -78,7 +88,7 @@ def create_camera():
         return jsonify(code=400, message=err), 400
     db.session.add(cam)
     db.session.commit()
-    return jsonify(code=0, message="新增成功", data=cam.to_dict())
+    return jsonify(code=0, message="新增成功", data=_camera_dict(cam))
 
 
 @camera_bp.put("/<int:cid>")
@@ -91,7 +101,7 @@ def update_camera(cid):
     if err:
         return jsonify(code=400, message=err), 400
     db.session.commit()
-    return jsonify(code=0, message="修改成功", data=cam.to_dict())
+    return jsonify(code=0, message="修改成功", data=_camera_dict(cam))
 
 
 @camera_bp.delete("/<int:cid>")
@@ -145,7 +155,27 @@ def stream_camera(cid):
     cam = Camera.query.get_or_404(cid)
     if cam.status != "0":
         return jsonify(code=409, message="摄像头已停用"), 409
-    resp = Response(mjpeg_stream(cam),
-                    mimetype="multipart/x-mixed-replace; boundary=frame")
+    check_only = request.args.get("check") == "1"
+    upload_folder = current_app.config["UPLOAD_FOLDER"]
+    try:
+        from services.camera_stream import _resolve_source, probe_file_mjpeg
+        source = _resolve_source(cam, upload_folder)
+        if cam.source_type == "file" and check_only:
+            probe_err = probe_file_mjpeg(cam, upload_folder)
+            if probe_err:
+                return jsonify(code=500, message=f"本地视频转流失败：{probe_err}"), 500
+            return jsonify(code=0, message="ok")
+    except FileNotFoundError as e:
+        return jsonify(code=404, message=str(e)), 404
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    if check_only:
+        return jsonify(code=0, message="ok")
+    resp = Response(
+        stream_with_context(mjpeg_stream(
+            cam.source_type, source, cam.resolution, cam.fps)),
+        mimetype="multipart/x-mixed-replace; boundary=frame",
+    )
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["X-Accel-Buffering"] = "no"
     return resp

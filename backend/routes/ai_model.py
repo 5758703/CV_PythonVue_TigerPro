@@ -2,6 +2,7 @@
 
 提供模型元信息 CRUD、权重文件上传、分类查询、启用/停用。
 """
+import json
 import os
 import shutil
 import threading
@@ -266,9 +267,30 @@ def download_weight(mid):
 
 
 def _hub_of(url):
-    """按来源 URL 主机名判定下载源：modelscope / huggingface。"""
+    """按来源 URL 主机名判定下载源：modelscope / roboflow / huggingface。"""
     host = urlparse(url or "").netloc.lower()
-    return "modelscope" if "modelscope" in host else "huggingface"
+    if "modelscope" in host:
+        return "modelscope"
+    if "roboflow.com" in host:
+        return "roboflow"
+    return "huggingface"
+
+
+def _roboflow_project_from_url(url):
+    """解析 Roboflow Universe/App 链接 -> (workspace, project, version|None)。"""
+    if "roboflow.com" not in urlparse(url or "").netloc.lower():
+        return None
+    parts = [p for p in urlparse(url).path.split("/") if p]
+    if len(parts) < 2:
+        return None
+    workspace, project = parts[0], parts[1]
+    version = None
+    if len(parts) >= 4 and parts[2] == "model":
+        try:
+            version = int(parts[3])
+        except ValueError:
+            pass
+    return workspace, project, version
 
 
 def _repo_id_from_url(url):
@@ -311,6 +333,76 @@ def _pick_local_weight(folder):
         return None
     cands.sort(key=lambda p: (not os.path.basename(p).lower().endswith("best.pt"), len(p)))
     return cands[0]
+
+
+def _is_valid_transformers_dir(path):
+    """目录是否为可加载的 transformers 模型（config.json 含 model_type）。"""
+    cfg_path = os.path.join(path, "config.json")
+    if not os.path.isfile(cfg_path):
+        return False
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return bool(data.get("model_type"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _looks_like_diffusers_lora_dir(path):
+    """目录是否像 Diffusers/LoRA 文生图权重（非检测模型）。"""
+    if not os.path.isdir(path):
+        return False
+    files = os.listdir(path)
+    has_safetensors = any(f.lower().endswith(".safetensors") for f in files)
+    if not has_safetensors or _is_valid_transformers_dir(path):
+        return False
+    if _pick_local_weight(path):
+        return False
+    readme = os.path.join(path, "README.md")
+    if os.path.isfile(readme):
+        try:
+            text = open(readme, encoding="utf-8", errors="ignore").read().lower()
+        except OSError:
+            text = ""
+        if any(k in text for k in ("diffusers", "lora", "text-to-image", "pipeline_tag")):
+            return True
+    return True
+
+
+def _resolve_detect_runtime(m):
+    """解析检测/视频检测应使用的推理库与权重路径；不可用则抛 ValueError。"""
+    if not m.file_path:
+        raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
+    lib = _detect_lib(m)
+    base = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+
+    if os.path.isfile(base):
+        if lib == "transformers":
+            raise ValueError("transformers 检测模型应为目录，当前为单文件权重")
+        return lib, base
+
+    if os.path.isdir(base):
+        if _looks_like_diffusers_lora_dir(base):
+            raise ValueError(
+                "该模型为 Diffusers/LoRA 文生图权重，不支持图片/视频目标检测。"
+                "请改用 YOLO 等检测模型（例如 DaniilMako-spacecraft-detection）。"
+            )
+        if lib == "transformers":
+            if _is_valid_transformers_dir(base):
+                return lib, base
+            yolo = _pick_local_weight(base)
+            if yolo:
+                return "ultralytics", yolo
+            raise ValueError(
+                "本地模型目录缺少有效的 transformers config.json（需含 model_type），"
+                "且未找到 .pt/.onnx/.pth 检测权重。"
+            )
+        yolo = _pick_local_weight(base)
+        if yolo:
+            return lib if lib in ("rfdetr", "rtmlib") else "ultralytics", yolo
+        raise ValueError("目录内未找到可用检测权重（.pt/.onnx/.pth）")
+
+    raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
 
 
 def _fetch_huggingface(repo_id, folder, sub, is_dir_model, want=None):
@@ -407,6 +499,75 @@ def _fetch_mobilesam_weight(folder, sub):
     return f"models/{sub}/{fname}", os.path.getsize(dest)
 
 
+def _roboflow_inference_model_id(api_key, workspace, project, version_num):
+    """从 Roboflow 项目 API 解析 Inference 用的 model_id（如 rocket-detect/2）。"""
+    import requests
+    ver = version_num or 2
+    r = requests.get(
+        f"https://api.roboflow.com/{workspace}/{project}/{ver}",
+        params={"api_key": api_key},
+        timeout=60,
+    )
+    r.raise_for_status()
+    data = r.json()
+    model = (data.get("version") or {}).get("model") or {}
+    mid = model.get("id")
+    if mid:
+        return mid
+    return f"{project}/{ver}"
+
+
+def _fetch_roboflow(source_url, folder, sub):
+    """从 Roboflow Universe 拉取推理权重（ONNX），返回 (rel_path, size)。
+
+    Universe 公开模型不支持 ptFile 直链下载，需走 Inference ORT 接口获取签名权重 URL。
+    """
+    import requests
+    api_key = current_app.config.get("ROBOFLOW_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "请在后端 .env 配置 ROBOFLOW_API_KEY（https://app.roboflow.com/settings/api）后重启服务"
+        )
+    parsed = _roboflow_project_from_url(source_url)
+    if not parsed:
+        raise ValueError("无效的 Roboflow 来源地址，示例："
+                         "https://universe.roboflow.com/nasaspaceflight/rocket-detect/model/2")
+    workspace, project, version_num = parsed
+    model_id = _roboflow_inference_model_id(api_key, workspace, project, version_num)
+    ort_resp = requests.get(
+        f"https://api.roboflow.com/serverless/ort/{model_id}",
+        params={
+            "api_key": api_key,
+            "device": "tigerpro-fetch",
+            "dynamic": "true",
+            "nocache": "true",
+        },
+        timeout=60,
+    )
+    ort_resp.raise_for_status()
+    ort = (ort_resp.json() or {}).get("ort") or {}
+    weights_url = ort.get("model")
+    if not weights_url:
+        raise ValueError(f"Roboflow 未返回可下载权重（model_id={model_id}）")
+    classes = ort.get("classes") or ["Engine Flames", "Rocket Body", "Space"]
+    _ensure_dir(folder)
+    url_lower = weights_url.lower()
+    fname = "best.onnx" if ".onnx" in url_lower else "best.pt"
+    dest = os.path.join(folder, fname)
+    resp = requests.get(weights_url, stream=True, timeout=600)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                f.write(chunk)
+    if not os.path.isfile(dest) or os.path.getsize(dest) < 1024:
+        raise ValueError("Roboflow 权重下载失败：文件无效或过小")
+    from inference import save_roboflow_meta
+    save_roboflow_meta(folder, model_id, classes=classes)
+    total_size = os.path.getsize(dest) + os.path.getsize(os.path.join(folder, "roboflow_meta.json"))
+    return f"models/{sub}/{fname}", total_size
+
+
 def _fetch_rtmlib_weight(folder, sub, model_key):
     """拉取 RTMO ONNX SDK zip（OpenMMLab）并解压为 .onnx。"""
     import requests
@@ -443,7 +604,7 @@ def _detect_model_path(m):
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
-    """从模型来源拉取权重到服务器（按来源 URL 自动分流 HuggingFace / ModelScope）。"""
+    """从模型来源拉取权重到服务器（按来源 URL 自动分流 HuggingFace / ModelScope / Roboflow）。"""
     m = AiModel.query.get_or_404(mid)
     lib = _detect_lib(m)
     sub = secure_filename(m.model_key or f"model{m.id}")
@@ -456,25 +617,38 @@ def fetch_weight(mid):
         elif lib == "rtmlib":
             rel, size = _fetch_rtmlib_weight(folder, sub, m.model_key)
         else:
-            repo_id = _repo_id_from_url(m.source_url)
-            if repo_id is None:
-                return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
             hub = _hub_of(m.source_url)
-            if hub == "modelscope":
-                is_dir_model = lib != "ultralytics"
-                rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
+            if hub == "roboflow":
+                rel, size = _fetch_roboflow(m.source_url, folder, sub)
             else:
-                is_dir_model = lib != "ultralytics"
-                rel, size = _fetch_huggingface(
-                    repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
+                repo_id = _repo_id_from_url(m.source_url)
+                if repo_id is None:
+                    return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
+                if hub == "modelscope":
+                    is_dir_model = lib != "ultralytics"
+                    rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
+                else:
+                    is_dir_model = lib != "ultralytics"
+                    rel, size = _fetch_huggingface(
+                        repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
     except Exception as e:  # noqa: BLE001  网络/仓库错误统一回传
         msg = str(e)
         low = msg.lower()
+        hub = _hub_of(m.source_url or "")
+        if hub == "roboflow":
+            if "404" in msg or "not found" in low:
+                return jsonify(code=400, message=f"拉取失败：Roboflow 模型不存在或版本无效，请核对来源链接。{msg}"), 400
+            if "401" in msg or "403" in msg or "not authorized" in low:
+                return jsonify(code=403, message="拉取失败：Roboflow API Key 无效或无权限，请检查 .env 中 ROBOFLOW_API_KEY。"), 403
+            return jsonify(code=500, message=f"拉取失败：{e}"), 500
         if "404" in msg or "not found" in low or "repositorynotfound" in low or "does not exist" in low:
             return jsonify(code=400, message="拉取失败：仓库不存在或来源地址有误，请核对模型链接(owner/name)"), 400
         if "401" in msg or "403" in msg or "gated" in low or "restricted" in low:
             hub = _hub_of(m.source_url or "")
-            if hub == "modelscope":
+            if hub == "roboflow":
+                hint = ("Roboflow 认证失败，请检查 .env 中 ROBOFLOW_API_KEY 是否有效，"
+                        "并在 https://app.roboflow.com/settings/api 获取。")
+            elif hub == "modelscope":
                 hint = ("该模型为受限/私有仓库，需先在 ModelScope 模型页申请访问权限，"
                         "再在后端 .env 配置 MODELSCOPE_TOKEN=<你的令牌> 并重启。")
             else:
@@ -843,10 +1017,10 @@ def answer_question_route(mid):
 def detect(mid):
     """在线测试：用模型权重对上传图片做检测（YOLO 或 transformers）。"""
     m = AiModel.query.get_or_404(mid)
-    lib = _detect_lib(m)
-    abs_path = _detect_model_path(m)
-    if abs_path is None:
-        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+    try:
+        lib, abs_path = _resolve_detect_runtime(m)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
 
     file = request.files.get("file")
     if file is None or not file.filename:
@@ -1108,10 +1282,10 @@ def _video_worker(job_id, library, task, abs_path, src_path, out_path, out_name,
 def detect_video_route(mid):
     """视频检测：启动异步逐帧任务，立即返回 jobId（前端轮询进度）。"""
     m = AiModel.query.get_or_404(mid)
-    lib = _detect_lib(m)
-    abs_path = _detect_model_path(m)
-    if abs_path is None:
-        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+    try:
+        lib, abs_path = _resolve_detect_runtime(m)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
 
     file = request.files.get("file")
     if file is None or not file.filename:

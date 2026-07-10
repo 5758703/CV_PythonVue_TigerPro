@@ -345,6 +345,113 @@ def _ensure_ai_model(key, fields):
     return True
 
 
+def _bind_local_brain_tumor_weight():
+    """绑定本地已下载的脑肿瘤模型目录（幂等更新 file_path/file_size/status）。"""
+    m = AiModel.query.filter_by(model_key="brain-tumor-yolo-opennoor").first()
+    if not m:
+        return False
+    rel = "models/OpenNoorIlmNoor-Ul-Ilm-Brain-Tumor-Yolo"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    if not os.path.isdir(abs_dir):
+        # 权重目录不存在：先停用，避免前端显示后再报“暂无本地权重”
+        if m.status != "1":
+            m.status = "1"
+            db.session.commit()
+            return True
+        return False
+    size = 0
+    for root, _dirs, files in os.walk(abs_dir):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    changed = False
+    if m.file_path != rel:
+        m.file_path = rel
+        changed = True
+    # 允许补齐分类/名称等元信息，保证报告提示词触发“医学场景”
+    if m.model_name != "脑肿瘤医学影像检测（OpenNoorIlm）":
+        m.model_name = "脑肿瘤医学影像检测（OpenNoorIlm）"
+        changed = True
+    if m.category != "医学影像-脑肿瘤":
+        m.category = "医学影像-脑肿瘤"
+        changed = True
+    if size > 0 and m.file_size != size:
+        m.file_size = size
+        changed = True
+    # 根据权重目录大小决定是否启用
+    if size <= 0:
+        if m.status != "1":
+            m.status = "1"
+            changed = True
+    else:
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def _bind_local_rocket_detect_weight():
+    """绑定本地 NASASpaceflight Rocket Detect 权重目录（幂等）。"""
+    m = AiModel.query.filter_by(model_key="rocket-detect-nasaspaceflight").first()
+    if not m:
+        return False
+    rel = "models/rocket-detect-nasaspaceflight"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    if not os.path.isdir(abs_dir):
+        if m.status != "1":
+            m.status = "1"
+            db.session.commit()
+            return True
+        return False
+    wp = None
+    for root, _dirs, files in os.walk(abs_dir):
+        for f in files:
+            if f.lower().endswith((".pt", ".onnx", ".pth")):
+                wp = os.path.join(root, f)
+                break
+        if wp:
+            break
+    if not wp:
+        if m.status != "1":
+            m.status = "1"
+            db.session.commit()
+            return True
+        return False
+    rel_file = os.path.relpath(wp, os.path.join(base, "uploads")).replace(os.sep, "/")
+    size = os.path.getsize(wp)
+    changed = False
+    if m.file_path != rel_file:
+        m.file_path = rel_file
+        changed = True
+    if m.model_name != "火箭回收跟踪检测（NASASpaceflight）":
+        m.model_name = "火箭回收跟踪检测（NASASpaceflight）"
+        changed = True
+    if m.category != "航天-火箭回收":
+        m.category = "航天-火箭回收"
+        changed = True
+    if size > 0 and m.file_size != size:
+        m.file_size = size
+        changed = True
+    if m.status != "0":
+        m.status = "0"
+        changed = True
+    # 补齐 Roboflow 推理元信息（老库仅有 onnx 权重时自动写入）
+    meta_path = os.path.join(abs_dir, "roboflow_meta.json")
+    if not os.path.isfile(meta_path):
+        from inference import save_roboflow_meta
+        save_roboflow_meta(abs_dir, "rocket-detect/2",
+                           classes=["Engine Flames", "Rocket Body", "Space"])
+        changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
 def _purge_cosyvoice_models():
     """删除 CosyVoice 模型记录及本地权重（幂等）。"""
     keys = ("cosyvoice-300m-sft", "cosyvoice2-0.5b")
@@ -405,6 +512,20 @@ def seed_ai_models():
         task="object-detection", library="ultralytics", version="v26",
         source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26s.pt",
         description="Ultralytics YOLO26 small 通用目标检测权重（精度更高），用于检测/追踪/视频页。", status="0",
+    ))
+    created |= _ensure_ai_model("brain-tumor-yolo-opennoor", dict(
+        model_name="脑肿瘤医学影像检测（OpenNoorIlm）", category="医学影像-脑肿瘤",
+        task="object-detection", library="ultralytics", version="v1",
+        source_url="https://huggingface.co/OpenNoorIlm/Noor-Ul-Ilm-Brain-Tumor-Yolo-1.0-24-06-2026",
+        file_path="models/OpenNoorIlmNoor-Ul-Ilm-Brain-Tumor-Yolo",
+        description="脑肿瘤医学影像检测模型（best.pt / best.onnx），用于图片检测并生成 DeepSeek 诊断辅助报告。", status="0",
+    ))
+    created |= _ensure_ai_model("rocket-detect-nasaspaceflight", dict(
+        model_name="火箭回收跟踪检测（NASASpaceflight）", category="航天-火箭回收",
+        task="object-detection", library="ultralytics", version="v2",
+        source_url="https://universe.roboflow.com/nasaspaceflight/rocket-detect/model/2",
+        description="NASASpaceflight Rocket Detect（YOLOv5）：识别 Engine Flames、Rocket Body 等，"
+                    "适用于 Falcon 9 等火箭发射与回收过程视觉跟踪。权重为 Roboflow ONNX 格式。", status="0",
     ))
     created |= _ensure_ai_model("finbert", dict(
         model_name="FinBERT 金融情感分析", category="文本分类",
@@ -556,6 +677,8 @@ def seed_ai_models():
         source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.zip",
         description="OpenMMLab RTMO-M 单阶段姿态（rtmlib+ONNX），精度更高、略慢。羽毛球分析页可用。", status="0",
     ))
+    _bind_local_brain_tumor_weight()
+    _bind_local_rocket_detect_weight()
     return created
 
 

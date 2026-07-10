@@ -101,6 +101,7 @@ DB_PASSWORD=你的密码
 DB_NAME=cv_python_tigerpro
 HF_TOKEN=            # 可选：拉取 HuggingFace 受限模型
 MODELSCOPE_TOKEN=    # 可选：拉取 ModelScope 受限模型
+ROBOFLOW_API_KEY=    # 可选：拉取 Roboflow Universe 模型（如 Rocket Detect）
 ```
 
 ### 4. 语音 / 数字人引擎（按需，可选）
@@ -129,7 +130,7 @@ python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 ## 使用流程
 
 1. 前端「模型管理」新增模型（填 `task` / `library` / `source_url`），或用内置示例模型。
-2. 点「拉取权重」从 HuggingFace / ModelScope 下载到 `uploads/models/<标识>/`。
+2. 点「拉取权重」从 HuggingFace / ModelScope / Roboflow 下载到 `uploads/models/<标识>/`。
 3. 到对应任务页在线测试（检测 / 分类 / 文本 / 语音识别 / 语音合成 / 数字人）。
 
 ## 部署

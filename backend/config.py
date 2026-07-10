@@ -45,6 +45,8 @@ class Config:
     HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
     # ModelScope（模搭社区）访问令牌（拉取受限模型权重时用）
     MODELSCOPE_TOKEN = os.getenv("MODELSCOPE_TOKEN") or os.getenv("MODELSCOPE_API_TOKEN")
+    # Roboflow API Key（拉取 Universe 公开模型权重，如 NASASpaceflight Rocket Detect）
+    ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY")
 
     # DeepSeek（检测结果 AI 分析报告）：OpenAI 兼容接口
     DEEPSEEK_API_KEY = os.getenv(

@@ -12,8 +12,10 @@ export const cameraApi = {
   upload: (formData) =>
     request.post('/camera/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   // MJPEG 预览：<img> 不能带 header，token 走 query
-  streamUrl: (id) => {
+  streamUrl: (id, bust = '', check = false) => {
     const token = useUserStore().token
-    return `/api/camera/${id}/stream?jwt=${encodeURIComponent(token)}`
+    const q = bust ? `&_=${encodeURIComponent(bust)}` : ''
+    const chk = check ? '&check=1' : ''
+    return `/api/camera/${id}/stream?jwt=${encodeURIComponent(token)}${q}${chk}`
   },
 }

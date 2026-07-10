@@ -4,6 +4,8 @@
 ultralytics / torch 体积大，全部惰性导入，加快应用启动。
 """
 import base64
+import json
+import math
 import os
 import sys
 import threading
@@ -14,6 +16,16 @@ import numpy as np
 _cache = {}            # abs_path -> (mtime, YOLO 实例)
 _pipe_cache = {}       # (task, model_dir) -> transformers pipeline
 _lock = threading.Lock()
+ROBOFLOW_META_FILE = "roboflow_meta.json"
+_ROBOFLOW_COLORS = {
+    "Engine Flames": (0, 255, 255),
+    "Rocket Body": (134, 34, 255),
+    "Space": (100, 200, 255),
+}
+_roboflow_session = None
+_rocket_font_cache = {}
+# 一级箭体参考高度（米），用于像素位移换算下降速度
+ROCKET_STAGE_HEIGHT_M = float(os.getenv("ROCKET_STAGE_HEIGHT_M", "47"))
 
 
 def _open_h264(dst_path, fps, w, h):
@@ -36,6 +48,484 @@ def _write_bgr(writer, bgr, ew, eh):
     writer.append_data(cv2.cvtColor(bgr[:eh, :ew], cv2.COLOR_BGR2RGB))
 
 
+def load_roboflow_meta(abs_path):
+    """读取权重同目录下的 Roboflow 元信息（存在则走云端推理）。"""
+    folder = os.path.dirname(os.path.abspath(abs_path))
+    meta_path = os.path.join(folder, ROBOFLOW_META_FILE)
+    if not os.path.isfile(meta_path):
+        return None
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if data.get("model_id") else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def save_roboflow_meta(folder, model_id, classes=None):
+    """写入 Roboflow 推理元信息（与权重同目录）。"""
+    os.makedirs(folder, exist_ok=True)
+    meta = {
+        "model_id": model_id,
+        "classes": classes or ["Engine Flames", "Rocket Body", "Space"],
+        "inference": "serverless",
+    }
+    path = os.path.join(folder, ROBOFLOW_META_FILE)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+    return path
+
+
+def _roboflow_api_key():
+    return os.getenv("ROBOFLOW_API_KEY")
+
+
+def _roboflow_http_session():
+    global _roboflow_session
+    if _roboflow_session is None:
+        import requests
+        _roboflow_session = requests.Session()
+    return _roboflow_session
+
+
+def _roboflow_preds_to_detections(preds):
+    detections = []
+    for i, p in enumerate(preds or []):
+        cx, cy = float(p.get("x", 0)), float(p.get("y", 0))
+        bw, bh = float(p.get("width", 0)), float(p.get("height", 0))
+        x1, y1 = cx - bw / 2, cy - bh / 2
+        x2, y2 = cx + bw / 2, cy + bh / 2
+        detections.append({
+            "className": p.get("class", "unknown"),
+            "classId": i,
+            "confidence": round(float(p.get("confidence", 0) or 0), 4),
+            "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+        })
+    return detections
+
+
+def _bbox_center_xy(bbox):
+    x1, y1, x2, y2 = bbox
+    return (x1 + x2) / 2, (y1 + y2) / 2
+
+
+def _bbox_wh(bbox):
+    x1, y1, x2, y2 = bbox
+    return x2 - x1, y2 - y1
+
+
+def _refine_rocket_detect_detections(detections, img_w, img_h):
+    """Rocket Detect 近景落台后处理：剔除平台钢架误检，并按火焰位置补全箭体框。"""
+    flames = [d for d in detections if d.get("className") == "Engine Flames"]
+    bodies = [d for d in detections if d.get("className") == "Rocket Body"]
+    others = [
+        d for d in detections
+        if d.get("className") not in ("Engine Flames", "Rocket Body")
+    ]
+
+    max_dx = max(45.0, img_w * 0.12)
+    flame_cxs = [_bbox_center_xy(f["bbox"])[0] for f in flames]
+    kept_bodies = []
+
+    for body in bodies:
+        bcx, _ = _bbox_center_xy(body["bbox"])
+        bw, _ = _bbox_wh(body["bbox"])
+        # 着陆平台左右竖梁常被误检为箭体：窄条 + 靠边
+        if bw < img_w * 0.04 and (bcx < img_w * 0.2 or bcx > img_w * 0.8):
+            continue
+        if flames:
+            if any(abs(bcx - fcx) <= max_dx for fcx in flame_cxs):
+                kept_bodies.append(body)
+        elif img_w * 0.25 <= bcx <= img_w * 0.75:
+            kept_bodies.append(body)
+
+    if len(kept_bodies) > 1:
+        if flames:
+            primary_fcx = _bbox_center_xy(
+                max(flames, key=lambda f: f["confidence"])["bbox"]
+            )[0]
+            kept_bodies.sort(
+                key=lambda b: (
+                    abs(_bbox_center_xy(b["bbox"])[0] - primary_fcx),
+                    -b["confidence"],
+                )
+            )
+            kept_bodies = [kept_bodies[0]]
+        else:
+            kept_bodies = [max(kept_bodies, key=lambda b: b["confidence"])]
+
+    if flames and not kept_bodies:
+        flame = max(flames, key=lambda f: f["confidence"])
+        fx1, fy1, fx2, fy2 = flame["bbox"]
+        fc_x, _ = _bbox_center_xy(flame["bbox"])
+        flame_w, flame_h = fx2 - fx1, fy2 - fy1
+        body_w = max(flame_w * 2.8, img_w * 0.055)
+        body_h = max(flame_h * 8, img_h * 0.35)
+        body_h = min(body_h, max(fy1 - img_h * 0.05, flame_h * 4))
+        by2 = fy1 + flame_h * 0.15
+        by1 = max(img_h * 0.05, by2 - body_h)
+        kept_bodies.append({
+            "className": "Rocket Body",
+            "classId": -1,
+            "confidence": round(float(flame["confidence"]) * 0.9, 4),
+            "bbox": [
+                round(fc_x - body_w / 2, 1),
+                round(by1, 1),
+                round(fc_x + body_w / 2, 1),
+                round(by2, 1),
+            ],
+        })
+
+    return others + flames + kept_bodies
+
+
+def _rocket_overlay_font(size=18):
+    if size in _rocket_font_cache:
+        return _rocket_font_cache[size]
+    from PIL import ImageFont
+    win = os.environ.get("WINDIR", r"C:\Windows")
+    candidates = [
+        os.path.join(win, "Fonts", "msyh.ttc"),
+        os.path.join(win, "Fonts", "msyhbd.ttc"),
+        os.path.join(win, "Fonts", "simhei.ttf"),
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                font = ImageFont.truetype(path, size)
+                _rocket_font_cache[size] = font
+                return font
+            except OSError:
+                continue
+    font = ImageFont.load_default()
+    _rocket_font_cache[size] = font
+    return font
+
+
+class _RocketTelemetryTracker:
+    """根据逐帧箭体/火焰检测框估算下降速度与姿态角。"""
+
+    def __init__(self, img_w, img_h, fps):
+        self.img_w = img_w
+        self.img_h = img_h
+        self.fps = max(float(fps or 25.0), 1.0)
+        self.prev_track_y = None
+        self.prev_body_h = None
+        self.speed_ema = None
+        self.vert_ema = None
+        self.horiz_ema = None
+        self.alpha = 0.28
+
+    @staticmethod
+    def _pick_target(detections):
+        bodies = [d for d in detections if d.get("className") == "Rocket Body"]
+        flames = [d for d in detections if d.get("className") == "Engine Flames"]
+        if bodies:
+            return max(bodies, key=lambda d: d.get("confidence", 0))
+        if flames:
+            return max(flames, key=lambda d: d.get("confidence", 0))
+        return None
+
+    def _smooth(self, prev, value):
+        if prev is None:
+            return value
+        return prev * (1 - self.alpha) + value * self.alpha
+
+    def update(self, detections):
+        target = self._pick_target(detections)
+        if not target:
+            return {
+                "valid": bool(self.speed_ema is not None),
+                "descent_speed": round(self.speed_ema or 0.0, 1),
+                "vertical_angle": round(self.vert_ema or 0.0, 1),
+                "horizontal_angle": round(self.horiz_ema or 0.0, 1),
+            }
+
+        x1, y1, x2, y2 = target["bbox"]
+        cx = (x1 + x2) / 2
+        track_y = y2
+        bw = max(x2 - x1, 1.0)
+        bh = max(y2 - y1, 1.0)
+
+        vertical_angle = max(0.0, min(90.0, 90.0 - math.degrees(math.atan2(bw, bh))))
+        horizontal_angle = abs(
+            math.degrees(math.atan2(cx - self.img_w / 2, max(self.img_h - track_y, 1.0)))
+        )
+
+        descent_speed = 0.0
+        if self.prev_track_y is not None:
+            dy = track_y - self.prev_track_y
+            ref_h = bh if target.get("className") == "Rocket Body" else (self.prev_body_h or bh)
+            m_per_px = ROCKET_STAGE_HEIGHT_M / max(ref_h, 1.0)
+            if dy > 0:
+                descent_speed = min(dy * self.fps * m_per_px, 80.0)
+
+        self.prev_track_y = track_y
+        if target.get("className") == "Rocket Body":
+            self.prev_body_h = bh
+
+        self.speed_ema = self._smooth(self.speed_ema, descent_speed)
+        self.vert_ema = self._smooth(self.vert_ema, vertical_angle)
+        self.horiz_ema = self._smooth(self.horiz_ema, horizontal_angle)
+
+        return {
+            "valid": True,
+            "descent_speed": round(self.speed_ema, 1),
+            "vertical_angle": round(self.vert_ema, 1),
+            "horizontal_angle": round(self.horiz_ema, 1),
+        }
+
+
+def _draw_rocket_telemetry_overlay(frame, metrics, img_w, img_h):
+    """在视频左侧中上绘制火箭遥测 HUD（科技感布局）。"""
+    from PIL import Image, ImageDraw
+
+    if metrics.get("valid"):
+        items = [
+            ("下降速度", f"{metrics['descent_speed']:.1f}", "m/s"),
+            ("垂直角度", f"{metrics['vertical_angle']:.1f}", "°"),
+            ("水平角度", f"{metrics['horizontal_angle']:.1f}", "°"),
+        ]
+    else:
+        items = [
+            ("下降速度", "--", "m/s"),
+            ("垂直角度", "--", "°"),
+            ("水平角度", "--", "°"),
+        ]
+
+    font_size = max(14, int(img_w * 0.024))
+    title_size = max(13, int(font_size * 0.88))
+    value_size = max(16, int(font_size * 1.08))
+    font = _rocket_overlay_font(font_size)
+    font_title = _rocket_overlay_font(title_size)
+    font_value = _rocket_overlay_font(value_size)
+
+    bg = (4, 12, 28, 205)
+    border = (0, 196, 255, 210)
+    accent = (0, 214, 255, 255)
+    title_c = (72, 228, 255, 255)
+    label_c = (130, 188, 228, 255)
+    value_c = (240, 250, 255, 255)
+    unit_c = (88, 168, 210, 230)
+    divider_c = (0, 150, 210, 110)
+    dot_c = (0, 230, 255, 200)
+
+    pad_x = max(14, int(img_w * 0.024))
+    pad_y = max(10, int(img_h * 0.012))
+    row_h = max(28, int(font_size * 1.6))
+    title_h = max(24, int(title_size * 1.65))
+    accent_w = 3
+    row_gap = max(5, int(font_size * 0.32))
+    margin = max(12, int(img_w * 0.028))
+    bracket = min(20, max(12, int(img_w * 0.028)))
+
+    title = "◈ ROCKET TELEMETRY"
+    probe = Image.new("RGBA", (4, 4))
+    probe_draw = ImageDraw.Draw(probe)
+    title_bbox = probe_draw.textbbox((0, 0), title, font=font_title)
+    inner_w = title_bbox[2] - title_bbox[0]
+    for label, val, unit in items:
+        lb = probe_draw.textbbox((0, 0), label, font=font)
+        vb = probe_draw.textbbox((0, 0), val, font=font_value)
+        ub = probe_draw.textbbox((0, 0), unit, font=font)
+        inner_w = max(inner_w, (lb[2] - lb[0]) + row_gap * 4 + (vb[2] - vb[0]) + (ub[2] - ub[0]))
+
+    box_w = inner_w + pad_x * 2 + accent_w + 10
+    box_h = pad_y * 2 + title_h + row_gap + len(items) * row_h + (len(items) - 1) * row_gap
+
+    # 左侧中上：靠左留白，垂直位于画面上部 1/3 区域中部
+    x0 = margin
+    y0 = max(margin, int(img_h * 0.22 - box_h * 0.35))
+
+    pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    draw = ImageDraw.Draw(pil)
+
+    draw.rectangle([x0, y0, x0 + box_w, y0 + box_h], fill=bg, outline=border, width=1)
+    draw.rectangle([x0, y0, x0 + accent_w, y0 + box_h], fill=accent)
+
+    def _corner_brackets(bx, by, bw, bh):
+        t = 2
+        b = bracket
+        draw.line([(bx + b, by), (bx, by), (bx, by + b)], fill=accent, width=t)
+        draw.line([(bx + bw - b, by), (bx + bw, by), (bx + bw, by + b)], fill=accent, width=t)
+        draw.line([(bx, by + bh - b), (bx, by + bh), (bx + b, by + bh)], fill=accent, width=t)
+        draw.line([(bx + bw, by + bh - b), (bx + bw, by + bh), (bx + bw - b, by + bh)], fill=accent, width=t)
+
+    _corner_brackets(x0, y0, box_w, box_h)
+
+    tx = x0 + pad_x + accent_w + 4
+    ty = y0 + pad_y
+    draw.text((tx, ty), title, font=font_title, fill=title_c)
+
+    div_y = ty + title_h - 6
+    draw.line([(tx, div_y), (x0 + box_w - pad_x, div_y)], fill=divider_c, width=1)
+    draw.line([(tx, div_y + 1), (tx + 42, div_y + 1)], fill=accent, width=2)
+
+    ry = div_y + row_gap + 2
+    right_edge = x0 + box_w - pad_x
+    for label, val, unit in items:
+        dot_y = ry + row_h // 2
+        draw.ellipse([tx - 11, dot_y - 2, tx - 7, dot_y + 2], fill=dot_c)
+        draw.text((tx, ry), label, font=font, fill=label_c)
+
+        unit_bbox = draw.textbbox((0, 0), unit, font=font)
+        val_bbox = draw.textbbox((0, 0), val, font=font_value)
+        unit_w = unit_bbox[2] - unit_bbox[0]
+        val_w = val_bbox[2] - val_bbox[0]
+        draw.text((right_edge - unit_w, ry + 1), unit, font=font, fill=unit_c)
+        draw.text((right_edge - unit_w - row_gap - val_w, ry - 1), val, font=font_value, fill=value_c)
+
+        sep_y = ry + row_h - 2
+        if sep_y < y0 + box_h - pad_y:
+            draw.line([(tx, sep_y), (right_edge, sep_y)], fill=(0, 100, 150, 60), width=1)
+        ry += row_h + row_gap
+
+    status = "LIVE" if metrics.get("valid") else "STANDBY"
+    status_bbox = draw.textbbox((0, 0), status, font=font_title)
+    status_w = status_bbox[2] - status_bbox[0]
+    sx = x0 + box_w - pad_x - status_w
+    sy = y0 + pad_y
+    draw.text((sx + 1, sy + 1), status, font=font_title, fill=(0, 40, 60, 180))
+    draw.text((sx, sy), status, font=font_title, fill=accent if metrics.get("valid") else unit_c)
+
+    return cv2.cvtColor(np.asarray(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
+def _predict_roboflow(model_id, image_bgr, conf=0.25):
+    """调用 Roboflow serverless 推理，返回 detections 列表。"""
+    api_key = _roboflow_api_key()
+    if not api_key:
+        raise ValueError("请在后端 .env 配置 ROBOFLOW_API_KEY 后重启服务")
+    ok, buf = cv2.imencode(".jpg", image_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        raise ValueError("图片编码失败")
+    # Roboflow legacy 模型的 confidence 参数并非 0~1 线性阈值，过高会导致整帧 0 检出；
+    # 固定用较低 API 阈值取候选，再按用户 conf(0~1) 在本地过滤。
+    sess = _roboflow_http_session()
+    resp = sess.post(
+        f"https://serverless.roboflow.com/{model_id}",
+        params={"api_key": api_key, "confidence": 10, "overlap": 30},
+        files={"file": ("frame.jpg", buf.tobytes(), "image/jpeg")},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    min_conf = float(conf or 0.25)
+    preds = [
+        p for p in resp.json().get("predictions", [])
+        if float(p.get("confidence", 0) or 0) >= min_conf
+    ]
+    detections = _roboflow_preds_to_detections(preds)
+    h, w = image_bgr.shape[:2]
+    if "rocket-detect" in str(model_id).lower():
+        detections = _refine_rocket_detect_detections(detections, w, h)
+    return detections
+
+
+def _draw_roboflow_detections(frame, detections):
+    canvas = frame.copy()
+    for d in detections:
+        x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
+        name = d.get("className", "unknown")
+        color = _ROBOFLOW_COLORS.get(name, (0, 255, 0))
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+        label = f"{name} {d.get('confidence', 0):.2f}"
+        cv2.putText(canvas, label, (x1, max(16, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
+    return canvas
+
+
+def detect_image_roboflow(abs_path, image_bytes, conf=0.25, draw=True, meta=None):
+    """Roboflow Universe 模型图片检测（走 serverless API，类别与框坐标准确）。"""
+    meta = meta or load_roboflow_meta(abs_path)
+    if not meta:
+        raise ValueError("缺少 Roboflow 元信息 roboflow_meta.json")
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    detections = _predict_roboflow(meta["model_id"], img, conf=conf)
+    h, w = img.shape[:2]
+    image_b64 = None
+    if draw:
+        plotted = _draw_roboflow_detections(img, detections)
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+    }
+
+
+def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, meta=None):
+    """Roboflow Universe 模型视频检测（逐帧 serverless 推理 + 画框）。"""
+    meta = meta or load_roboflow_meta(abs_path)
+    if not meta:
+        raise ValueError("缺少 Roboflow 元信息 roboflow_meta.json")
+    model_id = meta["model_id"]
+
+    cap = cv2.VideoCapture(src_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频文件")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+    writer, ew, eh = _open_h264(dst_path, fps, w, h)
+    class_counts = {}
+    total_det = 0
+    frames = 0
+    is_rocket = "rocket-detect" in str(model_id).lower()
+    tracker = _RocketTelemetryTracker(w, h, fps) if is_rocket else None
+    speed_samples = []
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            detections = _predict_roboflow(model_id, frame, conf=conf)
+            for d in detections:
+                name = d["className"]
+                class_counts[name] = class_counts.get(name, 0) + 1
+                total_det += 1
+            plotted = _draw_roboflow_detections(frame, detections)
+            if tracker:
+                metrics = tracker.update(detections)
+                if metrics.get("valid"):
+                    speed_samples.append(metrics["descent_speed"])
+                plotted = _draw_rocket_telemetry_overlay(plotted, metrics, w, h)
+            _write_bgr(writer, plotted, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        cap.release()
+        writer.close()
+
+    result = {
+        "frames": frames,
+        "totalFrames": total,
+        "totalDetections": total_det,
+        "classCounts": class_counts,
+        "fps": round(float(fps), 2),
+        "width": ew,
+        "height": eh,
+    }
+    if is_rocket and speed_samples:
+        result["rocketTelemetry"] = {
+            "avgDescentSpeed": round(sum(speed_samples) / len(speed_samples), 1),
+            "maxDescentSpeed": round(max(speed_samples), 1),
+            "rocketStageHeightM": ROCKET_STAGE_HEIGHT_M,
+        }
+    return result
+
+
 def _get_model(abs_path):
     mtime = os.path.getmtime(abs_path)
     with _lock:
@@ -48,41 +538,119 @@ def _get_model(abs_path):
         return model
 
 
+def _safe_class_name(names, cls_id: int) -> str:
+    """稳健获取类别名：异常映射时回退到 classId 字符串。"""
+    if isinstance(names, dict):
+        return str(names.get(cls_id, cls_id))
+    try:
+        return str(names[cls_id])
+    except Exception:  # noqa: BLE001
+        return str(cls_id)
+
+
+def _safe_plot(result, fallback_frame=None):
+    """稳健绘制：类别名映射异常时回退为手工画框。"""
+    try:
+        return result.plot()
+    except Exception:  # noqa: BLE001
+        if fallback_frame is None:
+            raise
+        canvas = fallback_frame.copy()
+        boxes = getattr(result, "boxes", None)
+        names = getattr(result, "names", None) or {}
+        if boxes is None:
+            return canvas
+        for b in boxes:
+            x1, y1, x2, y2 = [int(float(v)) for v in b.xyxy[0].tolist()]
+            cid = int(b.cls[0]) if getattr(b, "cls", None) is not None else -1
+            conf = float(b.conf[0]) if getattr(b, "conf", None) is not None else 0.0
+            label = f"{_safe_class_name(names, cid)} {conf:.2f}"
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(canvas, label, (x1, max(16, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+        return canvas
+
+
 def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
     """对图片字节做检测。
 
     draw=True  返回带框 jpg(base64)；False 仅返回检测框坐标(实时场景省编码)。
     返回 dict：detections / imageBase64 / width / height。
     """
+    meta = load_roboflow_meta(abs_path)
+    if meta:
+        return detect_image_roboflow(abs_path, image_bytes, conf=conf, draw=draw, meta=meta)
     arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("无法解析图片")
 
     model = _get_model(abs_path)
+    h, w = img.shape[:2]
+
     results = model.predict(img, conf=conf, verbose=False)
     r = results[0]
 
-    names = r.names
+    names = getattr(r, "names", None) or getattr(model, "names", None) or {}
+    def _class_name(cls_id: int) -> str:
+        return _safe_class_name(names, cls_id)
+
     detections = []
     if r.boxes is not None:
         for b in r.boxes:
             cls_id = int(b.cls[0])
             xyxy = [round(float(v), 1) for v in b.xyxy[0].tolist()]
             detections.append({
-                "className": names.get(cls_id, str(cls_id)),
+                "className": _class_name(cls_id),
                 "classId": cls_id,
                 "confidence": round(float(b.conf[0]), 4),
                 "bbox": xyxy,
             })
+    # 有些仓库权重是「图像分类」而不是「目标检测」：此时 r.boxes 为空，但 r.probs 有类别概率。
+    # 为了复用现有 UI/报告链路，给全图一个 bbox，把 topK 概率转成 detections。
+    if (not detections) and getattr(r, "probs", None) is not None:
+        probs = r.probs
+        data = getattr(probs, "data", None)
+        if data is not None:
+            try:
+                if hasattr(data, "detach"):
+                    data = data.detach().cpu().numpy()
+                elif hasattr(data, "cpu"):
+                    data = data.cpu().numpy()
+                data = np.asarray(data, dtype=np.float32).reshape(-1)
+                if data.size > 0:
+                    topk = int(min(5, data.shape[0]))
+                    idxs = data.argsort()[::-1][:topk]
+                    for idx in idxs:
+                        c = float(data[int(idx)])
+                        if c < float(conf or 0):
+                            continue
+                        class_id = int(idx)
+                        detections.append({
+                            "className": _class_name(class_id),
+                            "classId": class_id,
+                            "confidence": round(c, 4),
+                            "bbox": [0.0, 0.0, float(w), float(h)],
+                        })
+                    # 若阈值太高导致为空，仍保底放 top1，避免后续报告全是空壳
+                    if not detections and topk > 0:
+                        idx = int(idxs[0])
+                        detections.append({
+                            "className": _class_name(idx),
+                            "classId": idx,
+                            "confidence": round(float(data[idx]), 4),
+                            "bbox": [0.0, 0.0, float(w), float(h)],
+                        })
+            except Exception:  # noqa: BLE001
+                # 分类解析失败时退回空检测结果（前端会显示尚未检测/风险兜底）
+                pass
 
     image_b64 = None
     if draw:
-        plotted = r.plot()  # BGR ndarray，带框
+        plotted = _safe_plot(r, img)  # BGR ndarray，带框（异常类名映射时自动降级）
         ok, buf = cv2.imencode(".jpg", plotted)
         image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
 
-    h, w = img.shape[:2]
     return {
         "detections": detections,
         "count": len(detections),
@@ -98,6 +666,10 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
     progress_cb(processed, total) 每帧回调，用于上报进度。
     返回统计：帧数 / 检出目标总数 / 各类别计数 / 分辨率 / fps。
     """
+    meta = load_roboflow_meta(abs_path)
+    if meta:
+        return detect_video_roboflow(abs_path, src_path, dst_path, conf=conf,
+                                     progress_cb=progress_cb, meta=meta)
     model = _get_model(abs_path)
 
     cap = cv2.VideoCapture(src_path)
@@ -124,10 +696,10 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
                 names = r.names
                 for b in r.boxes:
                     cid = int(b.cls[0])
-                    name = names.get(cid, str(cid))
+                    name = _safe_class_name(names, cid)
                     class_counts[name] = class_counts.get(name, 0) + 1
                     total_det += 1
-            _write_bgr(writer, r.plot(), ew, eh)
+            _write_bgr(writer, _safe_plot(r, frame), ew, eh)
             frames += 1
             if progress_cb:
                 progress_cb(frames, total)

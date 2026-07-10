@@ -5,6 +5,8 @@
 import os
 import re
 import subprocess
+import threading
+import time
 
 from flask import current_app
 
@@ -14,19 +16,28 @@ BOUNDARY = b"frame"
 
 
 def build_ffmpeg_cmd(ffmpeg_exe, source_type, source, width, fps):
-    """构造 ffmpeg 命令(参数列表)。file 源循环+实时；rtsp 源走 tcp。输出裸 MJPEG 到 stdout。"""
+    """构造 ffmpeg 命令(参数列表)。file 源循环；rtsp 源走 tcp。输出裸 MJPEG 到 stdout。"""
     common_in = ["-hide_banner", "-loglevel", "error"]
     if source_type == "rtsp":
         src = ["-rtsp_transport", "tcp", "-i", source]
     elif source_type == "device":  # 本机摄像头(Windows DirectShow)，source 为设备名
         src = ["-f", "dshow", "-i", f"video={source}"]
-    else:  # file：循环 + 按真实速率，模拟直播
-        src = ["-stream_loop", "-1", "-re", "-i", source]
+    else:
+        # 本地文件：循环播放，由输出 -r 控制帧率（不用 -re，避免首帧极慢或卡死）
+        src = [
+            "-stream_loop", "-1",
+            "-fflags", "+genpts",
+            "-i", source,
+        ]
+    w = max(160, min(int(width or 640), 1920))
+    f = max(1, min(int(fps or 15), 30))
     return [
         ffmpeg_exe, *common_in, *src,
-        "-vf", f"scale={width}:-2",
-        "-r", str(fps),
-        "-f", "mjpeg", "-q:v", "7",
+        "-an",
+        "-vf", f"scale={w}:-2:flags=fast_bilinear,format=yuvj420p",
+        "-r", str(f),
+        "-c:v", "mjpeg",
+        "-f", "mjpeg", "-q:v", "5",
         "pipe:1",
     ]
 
@@ -67,42 +78,141 @@ def list_dshow_devices(ffmpeg_exe=None):
     return parse_dshow_video_names(proc.stderr)
 
 
-def _resolve_source(camera):
+def _resolve_source(camera, upload_folder=None):
     """file 源相对路径 -> 绝对路径(限定 UPLOAD_FOLDER 内防穿越)；rtsp/device 源原样返回。"""
     if camera.source_type in ("rtsp", "device"):
         return camera.source
-    base = os.path.abspath(current_app.config["UPLOAD_FOLDER"])
+    base = os.path.abspath(upload_folder or current_app.config["UPLOAD_FOLDER"])
     p = os.path.abspath(os.path.join(base, camera.source or ""))
     if not p.startswith(base):
         raise ValueError("非法的视频路径")
+    if not os.path.isfile(p):
+        raise FileNotFoundError(f"视频文件不存在：{camera.source}")
     return p
 
 
-def mjpeg_stream(camera):
-    """生成 multipart MJPEG 字节流；按需 spawn ffmpeg，结束/断开时 kill。"""
+def check_source_ready(camera, upload_folder=None):
+    """检查摄像头来源是否可用（列表展示 / 保存校验 / 开流前检查）。"""
+    if not camera.source:
+        return False
+    try:
+        if camera.source_type == "file":
+            _resolve_source(camera, upload_folder)
+            return True
+        if camera.source_type == "rtsp":
+            return camera.source.startswith("rtsp://")
+        if camera.source_type == "device":
+            return bool(camera.source.strip())
+    except (ValueError, FileNotFoundError, OSError):
+        return False
+    return False
+
+
+def _drain_stderr(proc, bucket):
+    """后台读 stderr，避免 PIPE 塞满导致 ffmpeg 死锁。"""
+    try:
+        if proc.stderr:
+            bucket.append(proc.stderr.read())
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _first_jpeg_from_buf(buf):
+    """从缓冲区提取第一帧完整 JPEG，无则返回 None。"""
+    start = buf.find(_SOI)
+    if start < 0:
+        return None, buf
+    end = buf.find(_EOI, start + 2)
+    if end < 0:
+        return None, buf[start:] if start > 0 else buf
+    return buf[start:end + 2], buf[end + 2:]
+
+
+def probe_file_mjpeg(camera, upload_folder=None, timeout=18):
+    """预检本地视频能否产出 MJPEG 帧；失败返回错误信息字符串，成功返回 None。"""
+    if camera.source_type != "file":
+        return None
     import imageio_ffmpeg
     exe = imageio_ffmpeg.get_ffmpeg_exe()
-    source = _resolve_source(camera)
-    cmd = build_ffmpeg_cmd(exe, camera.source_type, source,
-                           camera.resolution or 640, camera.fps or 15)
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, bufsize=0)
+    source = _resolve_source(camera, upload_folder)
+    cmd = build_ffmpeg_cmd(exe, "file", source, camera.resolution or 640, camera.fps or 15)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    err_bucket = []
+    threading.Thread(target=_drain_stderr, args=(proc, err_bucket), daemon=True).start()
+    buf = b""
+    deadline = time.time() + timeout
+    try:
+        while time.time() < deadline:
+            chunk = proc.stdout.read(4096)
+            if chunk:
+                buf += chunk
+                frame, buf = _first_jpeg_from_buf(buf)
+                if frame:
+                    return None
+            elif proc.poll() is not None:
+                break
+            else:
+                time.sleep(0.05)
+    finally:
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            proc.wait(timeout=2)
+        except Exception:  # noqa: BLE001
+            pass
+    err = b"".join(err_bucket).decode("utf-8", errors="ignore").strip()
+    if err:
+        # 只保留最后几行关键信息
+        lines = [ln.strip() for ln in err.splitlines() if ln.strip()]
+        return lines[-1] if lines else err
+    return "无法从视频生成 MJPEG 帧（请确认 MP4 可播放，或降低分辨率/帧率）"
+
+
+def mjpeg_stream(source_type, source, width=640, fps=15):
+    """生成 multipart MJPEG 字节流；按需 spawn ffmpeg，结束/断开时 kill。
+
+    source 须为已解析的绝对路径(file)或 rtsp/device 地址；勿在生成器内访问 Flask 上下文。
+    """
+    import imageio_ffmpeg
+    import logging
+    log = logging.getLogger(__name__)
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = build_ffmpeg_cmd(exe, source_type, source, width or 640, fps or 15)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+    err_bucket = []
+    threading.Thread(target=_drain_stderr, args=(proc, err_bucket), daemon=True).start()
 
     def _chunks():
         while True:
             data = proc.stdout.read(4096)
             if not data:
+                if proc.poll() is not None:
+                    err = b"".join(err_bucket).decode("utf-8", errors="ignore").strip()
+                if err:
+                    log.warning("camera ffmpeg exit: %s", err)
                 return
             yield data
 
     try:
+        yielded = False
         for frame in iter_jpeg_frames(_chunks()):
+            yielded = True
             yield (b"--" + BOUNDARY + b"\r\n"
                    b"Content-Type: image/jpeg\r\n"
                    b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
                    + frame + b"\r\n")
+        if not yielded:
+            err = b"".join(err_bucket).decode("utf-8", errors="ignore").strip()
+            if err:
+                log.warning("camera ffmpeg no frame: %s", err)
     finally:
         try:
             proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            proc.wait(timeout=2)
         except Exception:  # noqa: BLE001
             pass
