@@ -32,6 +32,16 @@ from services.training import (
     run_validate_worker,
     IMG_EXTENSIONS,
 )
+from services.dataset_annotation import (
+    ensure_annotation_dirs,
+    extract_frames_from_video,
+    list_annotation_samples,
+    annotation_stats,
+    read_yolo_labels,
+    write_yolo_labels,
+    get_sample_image_path,
+    get_sample_label_path,
+)
 
 training_bp = Blueprint("training", __name__, url_prefix="/api/ai/training")
 
@@ -245,6 +255,12 @@ def upload_dataset_files(did):
         rel_path = rel_path.replace("\\", "/").lstrip("/")
         if ".." in rel_path:
             continue
+        # yolo_flat 在线标注：图片/标签分别放入 images/、labels/
+        if ds.format == "yolo_flat" and "/" not in rel_path:
+            if ext in IMG_EXTENSIONS:
+                rel_path = f"images/{fname}"
+            elif ext == ".txt":
+                rel_path = f"labels/{fname}"
         target = raw_dir / rel_path
         target.parent.mkdir(parents=True, exist_ok=True)
         f.save(str(target))
@@ -351,7 +367,170 @@ def dataset_samples(did):
     else:
         scan_dir = _dataset_dir(did) / "raw"
     info = scan_dataset_structure(scan_dir)
+    if scan_dir.exists() and ds.format != "import":
+        info["annotation"] = annotation_stats(scan_dir)
     return jsonify(code=0, data={"dataset": ds.to_dict(), **info})
+
+
+# ── 视频抽帧 & 在线标注 ───────────────────────────────
+
+@training_bp.post("/datasets/<int:did>/extract-frames")
+@permission_required("ai:training:add")
+def extract_dataset_frames(did):
+    """上传视频并按间隔抽帧到 raw/images/（用于后续在线标注）。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    if ds.format == "import":
+        return jsonify(code=400, message="import 格式不支持视频抽帧"), 400
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到视频"), 400
+    ext = Path(file.filename).suffix.lower()
+    allowed = current_app.config.get("VIDEO_ALLOWED_EXT") or {".mp4", ".avi", ".mov", ".mkv"}
+    if ext not in allowed:
+        return jsonify(code=400, message="不支持的视频格式"), 400
+
+    try:
+        frame_interval = int(request.form.get("frameInterval") or 1)
+        max_frames = int(request.form.get("maxFrames") or 250)
+        start_sec = float(request.form.get("startSec") or 0)
+        end_sec_raw = request.form.get("endSec")
+        end_sec = float(end_sec_raw) if end_sec_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify(code=400, message="抽帧参数无效"), 400
+
+    raw_dir = _dataset_dir(did) / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    ensure_annotation_dirs(raw_dir)
+
+    tmp_name = secure_filename(f"extract_{did}{ext}") or f"extract_{did}{ext}"
+    tmp_path = raw_dir / tmp_name
+    file.save(str(tmp_path))
+
+    try:
+        result = extract_frames_from_video(
+            tmp_path,
+            raw_dir,
+            frame_interval=frame_interval,
+            max_frames=max_frames,
+            start_sec=start_sec,
+            end_sec=end_sec,
+        )
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"抽帧失败：{e}"), 500
+    finally:
+        if tmp_path.is_file():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+    if ds.format in ("auto", "voc", "voc_standard", "coco", "labelme"):
+        ds.format = "yolo_flat"
+    ds.status = "draft"
+    db.session.commit()
+
+    stats = annotation_stats(raw_dir)
+    return jsonify(
+        code=0,
+        message=f"抽帧完成，新增 {result['saved']} 张图片",
+        data={**result, "annotation": stats, "dataset": ds.to_dict()},
+    )
+
+
+@training_bp.get("/datasets/<int:did>/annotate/samples")
+@permission_required("ai:training:query")
+def annotate_samples(did):
+    """在线标注：样本列表（含已标/未标统计）。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    if ds.format == "import":
+        return jsonify(code=400, message="import 格式请使用外部标注工具"), 400
+    raw_dir = _dataset_dir(did) / "raw"
+    if not raw_dir.exists():
+        return jsonify(code=400, message="数据集目录不存在，请先抽帧或上传图片"), 400
+    samples = list_annotation_samples(raw_dir)
+    stats = annotation_stats(raw_dir)
+    return jsonify(code=0, data={
+        "dataset": ds.to_dict(),
+        "samples": samples,
+        "stats": stats,
+    })
+
+
+@training_bp.get("/datasets/<int:did>/annotate/image/<stem>")
+@permission_required("ai:training:query")
+def annotate_image(did, stem):
+    """在线标注：获取样本原图。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    raw_dir = _dataset_dir(did) / "raw"
+    try:
+        img_path = get_sample_image_path(raw_dir, stem)
+    except FileNotFoundError:
+        return jsonify(code=404, message="图片不存在"), 404
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    return send_file(img_path, mimetype=f"image/{img_path.suffix.lstrip('.').lower()}")
+
+
+@training_bp.get("/datasets/<int:did>/annotate/labels/<stem>")
+@permission_required("ai:training:query")
+def annotate_labels_get(did, stem):
+    """在线标注：读取 YOLO 标签。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    raw_dir = _dataset_dir(did) / "raw"
+    try:
+        get_sample_image_path(raw_dir, stem)
+    except FileNotFoundError:
+        return jsonify(code=404, message="图片不存在"), 404
+    lbl_path = get_sample_label_path(raw_dir, stem)
+    class_names = ds.class_list()
+    boxes = read_yolo_labels(lbl_path, class_names)
+    return jsonify(code=0, data={"stem": stem, "boxes": boxes, "classNames": class_names})
+
+
+@training_bp.put("/datasets/<int:did>/annotate/labels/<stem>")
+@permission_required("ai:training:edit")
+def annotate_labels_put(did, stem):
+    """在线标注：保存 YOLO 标签。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    raw_dir = _dataset_dir(did) / "raw"
+    class_names = ds.class_list()
+    if not class_names:
+        return jsonify(code=400, message="请先在数据集中配置类别名称"), 400
+    try:
+        get_sample_image_path(raw_dir, stem)
+    except FileNotFoundError:
+        return jsonify(code=404, message="图片不存在"), 404
+    data = request.get_json(silent=True) or {}
+    boxes = data.get("boxes") or []
+    lbl_path = get_sample_label_path(raw_dir, stem)
+    try:
+        count = write_yolo_labels(lbl_path, boxes, class_names)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    ds.status = "draft"
+    db.session.commit()
+    stats = annotation_stats(raw_dir)
+    return jsonify(code=0, message=f"已保存 {count} 个标注框", data={
+        "stem": stem,
+        "boxCount": count,
+        "stats": stats,
+    })
+
+
+@training_bp.delete("/datasets/<int:did>/annotate/labels/<stem>")
+@permission_required("ai:training:edit")
+def annotate_labels_delete(did, stem):
+    """在线标注：删除样本标签文件。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    raw_dir = _dataset_dir(did) / "raw"
+    lbl_path = get_sample_label_path(raw_dir, stem)
+    if lbl_path.is_file():
+        lbl_path.unlink()
+    stats = annotation_stats(raw_dir)
+    return jsonify(code=0, message="标签已清除", data={"stats": stats})
 
 
 # ── 训练任务 ──────────────────────────────────────────

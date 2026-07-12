@@ -677,6 +677,20 @@ def seed_ai_models():
         source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmo/onnx_sdk/rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.zip",
         description="OpenMMLab RTMO-M 单阶段姿态（rtmlib+ONNX），精度更高、略慢。羽毛球分析页可用。", status="0",
     ))
+    # RTMPose Top-Down 姿态（rtmlib Body + YOLOX，姿态估计页推荐高精度）
+    created |= _ensure_ai_model("rtmpose-m", dict(
+        model_name="RTMPose-M 姿态估计", category="姿态估计",
+        task="pose-estimation", library="rtmlib", version="v1",
+        source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip",
+        description="OpenMMLab RTMPose-M Top-Down（rtmlib+YOLOX），COCO-17，精度高于 RTMO/YOLO。", status="0",
+    ))
+    # DWPose 全身 133 关键点（rtmlib Wholebody）
+    created |= _ensure_ai_model("dwpose-m", dict(
+        model_name="DWPose-M 全身姿态", category="姿态估计",
+        task="wholebody-pose-estimation", library="rtmlib", version="v1",
+        source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-ucoco_dw-ucoco_270e-256x192-c8b76419_20230728.zip",
+        description="DWPose-M 全身 133 关键点（rtmlib Wholebody），含手/脸/脚。姿态估计页全身模式。", status="0",
+    ))
     _bind_local_brain_tumor_weight()
     _bind_local_rocket_detect_weight()
     return created

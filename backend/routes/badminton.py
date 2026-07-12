@@ -181,7 +181,10 @@ def analyze():
     if pose_lib not in _POSE_LIBS:
         return jsonify(code=400, message="姿态模型须为 ultralytics 或 rtmlib"), 400
     if (pose_m.task or "") != "pose-estimation":
-        return jsonify(code=400, message="所选模型任务类型须为 pose-estimation"), 400
+        return jsonify(code=400, message="羽毛球分析请选用 COCO-17 姿态模型（YOLO/RTMO/RTMPose）"), 400
+    pose_key = (pose_m.model_key or "").lower()
+    if pose_key.startswith("dwpose"):
+        return jsonify(code=400, message="DWPose 全身模型不适用于羽毛球分析，请选 RTMO/RTMPose/YOLO"), 400
 
     pose_path = _abs_model_path(pose_m)
     if pose_lib == "ultralytics" and pose_path is None:

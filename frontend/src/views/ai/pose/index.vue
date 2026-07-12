@@ -15,9 +15,9 @@
           </el-select>
         </el-form-item>
         <el-form-item label="姿态模型">
-          <el-select v-model="modelId" placeholder="选择 pose 模型" style="width: 220px">
+          <el-select v-model="modelId" placeholder="选择 pose 模型" style="width: 280px">
             <el-option v-for="m in filteredModels" :key="m.id"
-                       :label="`${m.modelName}（${m.category || '未分类'}）`" :value="m.id" />
+                       :label="modelLabel(m)" :value="m.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="置信度">
@@ -44,7 +44,9 @@
         </el-form-item>
       </el-form>
       <el-alert v-if="!modelOptions.length" type="warning" :closable="false"
-                title="暂无可用模型：姿态估计需 task=pose-estimation 的 YOLO 模型，请到「模型管理」上传/拉取并启用。" />
+                title="暂无可用模型：请到「模型管理」拉取 YOLO / RTMO / RTMPose / DWPose 权重并启用。" />
+      <el-alert v-if="isWholebody" type="info" :closable="false" class="tip-alert"
+                title="当前为 DWPose 全身 133 关键点模式：含身体、脚、脸、手部骨架。" />
     </el-card>
 
     <el-card v-if="mode === 'video' && previewUrl" shadow="never" class="cfg-card">
@@ -78,7 +80,8 @@
       <!-- 图片结果 -->
       <div v-else-if="mode === 'image' && resultImg">
         <div class="res-title">
-          姿态结果（检测到 {{ poseCount }} 个人体姿态）
+          姿态结果（检测到 {{ poseCount }} 个人体{{ isWholebody ? '（133点全身）' : '' }}）
+          <el-tag v-if="keypointCount > 17" size="small" type="warning">WholeBody {{ keypointCount }}点</el-tag>
           <el-button link type="primary" :icon="Download" @click="downloadImg">下载结果图</el-button>
         </div>
         <el-alert v-if="poseCount === 0" type="info" :closable="false"
@@ -121,6 +124,7 @@ const processed = ref(0)
 const total = ref(0)
 const resultImg = ref('')      // 图片模式：data:image/jpeg;base64
 const poseCount = ref(0)
+const keypointCount = ref(17)
 const resultUrl = ref('')      // 视频模式：blob url
 const stats = ref({})
 let blobUrl = null
@@ -143,7 +147,26 @@ const SKELETON = [
   [5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],
   [11,13],[13,15],[12,14],[14,16],[0,1],[0,2],[1,3],[2,4],[3,5],[4,6],
 ]
+// COCO-WholeBody 133 点主要连线（身体+脚+手，脸点仅画点不连线以减噪）
+const WHOLEBODY_SKELETON = [
+  ...SKELETON,
+  [15,17],[15,18],[15,19],[16,20],[16,21],[16,22],
+  [11,23],[12,24],
+  [91,92],[92,93],[93,94],[94,95],[95,96],[96,97],[97,98],[98,99],[99,100],[100,101],[101,102],[102,103],[103,104],[104,105],[105,106],[106,107],[107,108],[108,109],[109,110],[110,111],
+  [112,113],[113,114],[114,115],[115,116],[116,117],[117,118],[118,119],[119,120],[120,121],[121,122],[122,123],[123,124],[124,125],[125,126],[126,127],[127,128],[128,129],[129,130],[130,131],[131,132],
+]
 const KP_CONF = 0.3
+
+const POSE_TASKS = ['pose-estimation', 'wholebody-pose-estimation']
+
+const modelLabel = (m) => {
+  const tag = m.task === 'wholebody-pose-estimation' ? '133点' : (m.library === 'rtmlib' ? 'rtmlib' : 'YOLO')
+  return `${m.modelName}（${tag}）`
+}
+
+const selectedModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
+const isWholebody = computed(() => selectedModel.value?.task === 'wholebody-pose-estimation')
+const activeSkeleton = computed(() => (isWholebody.value ? WHOLEBODY_SKELETON : SKELETON))
 
 const categories = computed(() => [...new Set(modelOptions.value.map((m) => m.category).filter(Boolean))])
 const filteredModels = computed(() =>
@@ -155,9 +178,19 @@ const onCategoryChange = () => { modelId.value = filteredModels.value[0]?.id || 
 const loadModels = async () => {
   try {
     const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-    modelOptions.value = (res.data.rows || []).filter(
-      (m) => m.library === 'ultralytics' && m.task === 'pose-estimation' && m.filePath && m.status === '0')
-    if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
+    modelOptions.value = (res.data.rows || []).filter((m) => {
+      if (m.status !== '0' || !POSE_TASKS.includes(m.task)) return false
+      if (m.library === 'ultralytics') return !!m.filePath
+      if (m.library === 'rtmlib') {
+        return m.filePath || /^(rtmo|rtmpose|dwpose)-/.test(m.modelKey || '')
+      }
+      return false
+    })
+    if (modelOptions.value.length && !modelId.value) {
+      const pref = modelOptions.value.find((m) =>
+        m.modelKey === 'rtmpose-m' || m.modelKey === 'rtmo-s' || m.modelKey === 'yolo11n-pose')
+      modelId.value = pref?.id || modelOptions.value[0].id
+    }
   } catch (e) {
     ElMessage.error('加载模型列表失败')
   }
@@ -192,6 +225,7 @@ const runImage = async () => {
     const res = await modelApi.pose(modelId.value, fd)
     const d = res.data
     poseCount.value = d.count
+    keypointCount.value = d.keypointCount || 17
     resultImg.value = d.imageBase64 ? `data:image/jpeg;base64,${d.imageBase64}` : ''
   } catch (e) {
     ElMessage.error('姿态估计失败')
@@ -212,7 +246,6 @@ const runVideo = async () => {
     const res = await modelApi.poseVideo(modelId.value, fd)
     await poll(res.data.jobId)
   } catch (e) {
-    ElMessage.error('姿态估计启动失败')
     running.value = false
   }
 }
@@ -224,9 +257,17 @@ const poll = (jobId) => new Promise((resolve) => {
       const d = res.data
       processed.value = d.processed
       total.value = d.total
+      if (d.status === 'error') {
+        clearInterval(pollTimer); pollTimer = null
+        ElMessage.error(d.error || res.message || '姿态视频处理失败')
+        running.value = false
+        resolve()
+        return
+      }
       if (d.status === 'done') {
         clearInterval(pollTimer); pollTimer = null
         stats.value = d.stats
+        keypointCount.value = d.stats?.keypointCount || keypointCount.value
         const blob = await modelApi.outputVideo(d.stats.output)
         blobUrl = URL.createObjectURL(blob)
         resultUrl.value = blobUrl
@@ -235,7 +276,7 @@ const poll = (jobId) => new Promise((resolve) => {
       }
     } catch (e) {
       clearInterval(pollTimer); pollTimer = null
-      ElMessage.error('姿态视频处理失败')
+      ElMessage.error(e?.message || '姿态视频处理失败')
       running.value = false
       resolve()
     }
@@ -268,6 +309,7 @@ const clearAll = () => {
   file.value = null
   resultImg.value = ''
   poseCount.value = 0
+  keypointCount.value = 17
   clearVideoOut()
   stats.value = {}
   processed.value = 0
@@ -333,10 +375,15 @@ const camLoop = () => {
       const fd = new FormData()
       fd.append('file', blob, 'frame.jpg')
       fd.append('conf', conf.value)
-      fd.append('draw', '0')
+      fd.append('draw', isWholebody.value ? '1' : '0')
       const res = await modelApi.pose(modelId.value, fd)
       camCount.value = res.data.count
-      camDraw(res.data.persons || [])
+      keypointCount.value = res.data.keypointCount || 17
+      if (isWholebody.value && res.data.imageBase64) {
+        camDrawFromBase64(res.data.imageBase64)
+      } else {
+        camDraw(res.data.persons || [])
+      }
       frameCount++
     } catch (e) { /* 单帧失败忽略 */ } finally {
       camBusy = false
@@ -348,20 +395,33 @@ const camLoop = () => {
 const camDraw = (persons) => {
   const cv = camCanvas.value, ctx = cv.getContext('2d')
   ctx.clearRect(0, 0, cv.width, cv.height)
-  ctx.drawImage(camVideo.value, 0, 0, cv.width, cv.height)  // 合成底图，供录制
+  ctx.drawImage(camVideo.value, 0, 0, cv.width, cv.height)
+  const sk = activeSkeleton.value
   for (const p of persons) {
     const kp = p.keypoints
-    ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2
-    for (const [a, b] of SKELETON) {
+    ctx.strokeStyle = isWholebody.value ? '#ffb300' : '#00e5ff'
+    ctx.lineWidth = isWholebody.value ? 1.5 : 2
+    for (const [a, b] of sk) {
       if (kp[a] && kp[b] && kp[a][2] > KP_CONF && kp[b][2] > KP_CONF) {
         ctx.beginPath(); ctx.moveTo(kp[a][0], kp[a][1]); ctx.lineTo(kp[b][0], kp[b][1]); ctx.stroke()
       }
     }
-    ctx.fillStyle = '#ff1744'
+    ctx.fillStyle = isWholebody.value ? '#76ff03' : '#ff1744'
+    const ptR = isWholebody.value ? 2 : 3
     for (const pt of kp) {
-      if (pt[2] > KP_CONF) { ctx.beginPath(); ctx.arc(pt[0], pt[1], 3, 0, Math.PI * 2); ctx.fill() }
+      if (pt[2] > KP_CONF) { ctx.beginPath(); ctx.arc(pt[0], pt[1], ptR, 0, Math.PI * 2); ctx.fill() }
     }
   }
+}
+
+const camDrawFromBase64 = (b64) => {
+  const cv = camCanvas.value, ctx = cv.getContext('2d')
+  const img = new Image()
+  img.onload = () => {
+    ctx.clearRect(0, 0, cv.width, cv.height)
+    ctx.drawImage(img, 0, 0, cv.width, cv.height)
+  }
+  img.src = `data:image/jpeg;base64,${b64}`
 }
 
 const camStop = () => {
@@ -398,6 +458,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .cfg-card { margin-bottom: 12px; }
+.tip-alert { margin-top: 8px; }
 .progress-box { padding: 22px 4px; }
 .progress-title { font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
 .res-title { display: flex; align-items: center; gap: 12px; font-weight: 600; color: #3a4a63; margin-bottom: 12px; }

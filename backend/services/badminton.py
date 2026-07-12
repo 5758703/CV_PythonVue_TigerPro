@@ -631,12 +631,12 @@ def _infer_pose_yolo(pose_model, frame, conf, court_poly):
     return persons, centroids
 
 
-def _infer_pose_rtmo(rtmo_model, frame, conf, court_poly):
-    """rtmlib RTMO -> (persons_kp, centroids)。"""
-    from inference import infer_pose_rtmo
+def _infer_pose_rtmlib(rtmlib_model, frame, conf, court_poly, model_key):
+    """rtmlib（RTMO/RTMPose/DWPose）-> (persons_kp, centroids)，取 COCO-17 body。"""
+    from inference import infer_pose_rtmlib_frame
     persons = []
     centroids = []
-    for kp in infer_pose_rtmo(frame, rtmo_model, conf=conf):
+    for kp in infer_pose_rtmlib_frame(frame, rtmlib_model, model_key, conf=conf):
         cxy = _foot_position_from_keypoints(kp)
         if cxy is None:
             cxy = _person_bbox_from_keypoints(kp)
@@ -671,16 +671,16 @@ def analyze_badminton_video(
     Returns:
         dict: stats + output files relative names
     """
-    from inference import _get_model, _get_rtmo_model, _open_h264, _write_bgr
+    from inference import _get_model, _get_rtmlib_solver, _open_h264, _write_bgr
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     lib = (pose_library or "ultralytics").lower()
-    pose_rtmo = None
+    pose_solver = None
     pose_model = None
     if lib == "rtmlib":
-        pose_rtmo = _get_rtmo_model(pose_model_path, model_key or "rtmo-s")
+        pose_solver = _get_rtmlib_solver(model_key or "rtmo-s", pose_model_path)
     else:
         pose_model = _get_model(pose_model_path)
     ball_model = _get_model(ball_model_path) if ball_model_path else None
@@ -745,7 +745,8 @@ def analyze_badminton_video(
 
             # 姿态
             if lib == "rtmlib":
-                persons, centroids = _infer_pose_rtmo(pose_rtmo, frame, conf, court_poly)
+                persons, centroids = _infer_pose_rtmlib(
+                    pose_solver, frame, conf, court_poly, model_key or "rtmo-s")
             else:
                 persons, centroids = _infer_pose_yolo(pose_model, frame, conf, court_poly)
 

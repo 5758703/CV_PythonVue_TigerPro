@@ -3,6 +3,7 @@
     <el-tabs v-model="activeTab" type="border-card">
       <!-- ── 数据集管理 ── -->
       <el-tab-pane label="数据集管理" name="dataset">
+        <el-alert class="workflow-alert" type="success" :closable="false" title="平台闭环：新建数据集(yolo_flat) → 视频抽帧 → 数据标注 → 构建 → 训练任务 → 部署到模型管理" />
         <div class="toolbar">
           <el-input v-model="dsQuery.name" placeholder="数据集名称" clearable style="width:200px" @keyup.enter="loadDatasets" />
           <el-button type="primary" :icon="Plus" @click="openDsDialog()">新建数据集</el-button>
@@ -29,7 +30,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="createTime" label="创建时间" width="170" />
-          <el-table-column label="操作" width="380" fixed="right" class-name="col-actions">
+          <el-table-column label="操作" width="460" fixed="right" class-name="col-actions">
             <template #default="{ row }">
               <div class="row-actions">
                 <el-upload v-if="row.format !== 'import'" :show-file-list="false" :auto-upload="false" multiple
@@ -37,6 +38,8 @@
                   :on-change="(f) => onDsUpload(row, f)">
                   <el-button size="small" :icon="Upload">上传</el-button>
                 </el-upload>
+                <el-button v-if="row.format !== 'import'" size="small" :icon="VideoCamera" @click="openExtractDialog(row)">抽帧</el-button>
+                <el-button v-if="row.format !== 'import'" size="small" type="warning" @click="openAnnotate(row)">标注</el-button>
                 <el-button size="small" @click="previewDs(row)">预览</el-button>
                 <el-button size="small" type="success" :loading="row._building" @click="buildDs(row)">构建</el-button>
                 <el-button size="small" :icon="Edit" @click="openDsDialog(row)">编辑</el-button>
@@ -47,6 +50,11 @@
         </el-table>
         <el-pagination class="pager" v-model:current-page="dsPage" v-model:page-size="dsSize"
           :total="dsTotal" layout="total, prev, pager, next" @current-change="loadDatasets" />
+      </el-tab-pane>
+
+      <!-- ── 数据标注 ── -->
+      <el-tab-pane label="数据标注" name="annotate">
+        <AnnotatePanel ref="annotateRef" :initial-dataset-id="annotateDatasetId" />
       </el-tab-pane>
 
       <!-- ── 训练任务 ── -->
@@ -182,6 +190,41 @@
       <template #footer>
         <el-button @click="dsDialog = false">取消</el-button>
         <el-button type="primary" :loading="dsSaving" @click="saveDs">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 视频抽帧 -->
+    <el-dialog v-model="extractDialog" title="视频抽帧" width="520px" @closed="resetExtractForm">
+      <el-form :model="extractForm" label-width="110px">
+        <el-form-item label="数据集">
+          <el-input :model-value="extractForm.datasetName" disabled />
+        </el-form-item>
+        <el-form-item label="选择视频" required>
+          <el-upload :show-file-list="true" :auto-upload="false" :limit="1" accept="video/*"
+            :on-change="onExtractVideoPick" :on-remove="() => { extractForm.file = null }">
+            <el-button :icon="VideoCamera">选择视频</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item label="抽帧间隔">
+          <el-input-number v-model="extractForm.frameInterval" :min="1" :max="30" />
+          <span class="field-hint-inline">每 N 帧保存 1 张（10s@30fps 间隔1≈300张）</span>
+        </el-form-item>
+        <el-form-item label="最大帧数">
+          <el-input-number v-model="extractForm.maxFrames" :min="10" :max="2000" :step="10" />
+        </el-form-item>
+        <el-form-item label="起始秒">
+          <el-input-number v-model="extractForm.startSec" :min="0" :max="600" :step="0.5" />
+        </el-form-item>
+        <el-form-item label="结束秒">
+          <el-input-number v-model="extractForm.endSec" :min="0" :max="600" :step="0.5" />
+          <span class="field-hint-inline">0 表示到视频末尾</span>
+        </el-form-item>
+        <el-alert type="info" :closable="false"
+          title="抽帧图片保存到 raw/images/，完成后请到「数据标注」页画框，再点击「构建」生成训练集。" />
+      </el-form>
+      <template #footer>
+        <el-button @click="extractDialog = false">取消</el-button>
+        <el-button type="primary" :loading="extracting" @click="submitExtract">开始抽帧</el-button>
       </template>
     </el-dialog>
 
@@ -470,6 +513,10 @@
           <el-descriptions-item label="COCO JSON">{{ previewData.cocoJsonCount ?? 0 }} 个</el-descriptions-item>
           <el-descriptions-item label="LabelMe 配对">{{ previewData.labelmePairs ?? 0 }} 组</el-descriptions-item>
           <el-descriptions-item label="文件数">{{ previewData.fileCount ?? 0 }}</el-descriptions-item>
+          <el-descriptions-item v-if="previewData.annotation" label="标注进度">
+            已标 {{ previewData.annotation.annotated }} / 共 {{ previewData.annotation.total }}
+            （{{ previewData.annotation.totalBoxes }} 框）
+          </el-descriptions-item>
           <el-descriptions-item v-if="previewData.yamlNames?.length" label="YAML 类别" :span="2">
             <el-tag v-for="n in previewData.yamlNames" :key="n" size="small" style="margin:2px">{{ n }}</el-tag>
           </el-descriptions-item>
@@ -488,10 +535,13 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Edit, Delete, Upload, Document } from '@element-plus/icons-vue'
+import { Plus, Refresh, Edit, Delete, Upload, Document, VideoCamera } from '@element-plus/icons-vue'
 import { trainingApi } from '../../../api/ai'
+import AnnotatePanel from './annotate.vue'
 
 const activeTab = ref('dataset')
+const annotateRef = ref(null)
+const annotateDatasetId = ref(null)
 
 const formatsLoading = ref(false)
 const dsLoading = ref(false)
@@ -509,6 +559,18 @@ const dsForm = reactive({
 })
 const previewOpen = ref(false)
 const previewData = ref(null)
+
+const extractDialog = ref(false)
+const extracting = ref(false)
+const extractForm = reactive({
+  datasetId: null,
+  datasetName: '',
+  file: null,
+  frameInterval: 1,
+  maxFrames: 250,
+  startSec: 0,
+  endSec: 0,
+})
 
 const needClassNames = computed(() => !['yolo', 'auto', 'coco', 'labelme', 'import'].includes(dsForm.format))
 const showSplitRatio = computed(() => !['yolo', 'import'].includes(dsForm.format))
@@ -667,6 +729,64 @@ async function previewDs(row) {
   } catch (e) {
     ElMessage.error(e.message || '预览失败')
   }
+}
+
+function openExtractDialog(row) {
+  extractForm.datasetId = row.id
+  extractForm.datasetName = row.name
+  extractForm.file = null
+  extractForm.frameInterval = 1
+  extractForm.maxFrames = 250
+  extractForm.startSec = 0
+  extractForm.endSec = 0
+  extractDialog.value = true
+}
+
+function resetExtractForm() {
+  extractForm.datasetId = null
+  extractForm.datasetName = ''
+  extractForm.file = null
+}
+
+function onExtractVideoPick(uploadFile) {
+  extractForm.file = uploadFile.raw
+}
+
+async function submitExtract() {
+  if (!extractForm.datasetId || !extractForm.file) {
+    ElMessage.warning('请选择视频文件')
+    return
+  }
+  extracting.value = true
+  try {
+    const fd = new FormData()
+    fd.append('file', extractForm.file)
+    fd.append('frameInterval', extractForm.frameInterval)
+    fd.append('maxFrames', extractForm.maxFrames)
+    fd.append('startSec', extractForm.startSec)
+    if (extractForm.endSec > 0) fd.append('endSec', extractForm.endSec)
+    const res = await trainingApi.extractFrames(extractForm.datasetId, fd)
+    ElMessage.success(res.message || '抽帧完成')
+    extractDialog.value = false
+    loadDatasets()
+    annotateDatasetId.value = extractForm.datasetId
+    activeTab.value = 'annotate'
+    annotateRef.value?.setDatasetId?.(extractForm.datasetId)
+  } catch (e) {
+    ElMessage.error(e.message || '抽帧失败')
+  } finally {
+    extracting.value = false
+  }
+}
+
+function openAnnotate(row) {
+  if (!row.classNames?.length) {
+    ElMessage.warning('请先编辑数据集并配置类别名称')
+    return
+  }
+  annotateDatasetId.value = row.id
+  activeTab.value = 'annotate'
+  annotateRef.value?.setDatasetId?.(row.id)
 }
 
 async function removeDs(row) {
@@ -1274,7 +1394,8 @@ onMounted(() => {
 }
 
 .mt12 { margin-top: 12px; }
-.field-hint { font-size: 12px; color: #909399; margin-top: 4px; }
+.workflow-alert { margin-bottom: 12px; }
+.field-hint-inline { font-size: 12px; color: #909399; margin-left: 8px; }
 .preview-desc { margin-bottom: 8px; }
 .format-guide { margin-bottom: 12px; }
 .guide-block { font-size: 13px; color: #606266; }

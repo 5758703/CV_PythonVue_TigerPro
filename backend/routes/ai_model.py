@@ -569,24 +569,41 @@ def _fetch_roboflow(source_url, folder, sub):
 
 
 def _fetch_rtmlib_weight(folder, sub, model_key):
-    """拉取 RTMO ONNX SDK zip（OpenMMLab）并解压为 .onnx。"""
+    """拉取 rtmlib ONNX SDK（RTMO 单文件；RTMPose/DWPose 写 manifest 并预热）。"""
     import requests
-    from inference import extract_rtmlib_onnx_from_zip, rtmlib_weight_url
-    url = rtmlib_weight_url(model_key)
-    fname = os.path.basename(url.split("?")[0])
+    from inference import (
+        extract_rtmlib_onnx_from_zip,
+        rtmlib_variant,
+        rtmlib_weight_url,
+        write_rtmlib_manifest,
+        _get_rtmlib_solver,
+    )
+    key = (model_key or "rtmo-s").lower()
+    variant, _ = rtmlib_variant(key)
     _ensure_dir(folder)
+
+    url = rtmlib_weight_url(key)
+    fname = os.path.basename(url.split("?")[0])
     dest = os.path.join(folder, fname)
-    resp = requests.get(url, stream=True, timeout=600)
-    resp.raise_for_status()
-    with open(dest, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=1024 * 1024):
-            if chunk:
-                f.write(chunk)
     if not os.path.isfile(dest) or os.path.getsize(dest) < 1024 * 100:
-        raise ValueError("RTMO 权重下载失败")
-    onnx_path = extract_rtmlib_onnx_from_zip(dest)
-    onnx_fname = os.path.basename(onnx_path)
-    return f"models/{sub}/{onnx_fname}", os.path.getsize(onnx_path)
+        resp = requests.get(url, stream=True, timeout=600)
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+    if not os.path.isfile(dest) or os.path.getsize(dest) < 1024 * 100:
+        raise ValueError("rtmlib 权重下载失败")
+
+    if variant == "rtmo":
+        onnx_path = extract_rtmlib_onnx_from_zip(dest)
+        onnx_fname = os.path.basename(onnx_path)
+        return f"models/{sub}/{onnx_fname}", os.path.getsize(onnx_path)
+
+    extract_rtmlib_onnx_from_zip(dest)
+    manifest = write_rtmlib_manifest(folder, key)
+    _get_rtmlib_solver(key, manifest)
+    return f"models/{sub}/rtmlib_manifest.json", os.path.getsize(manifest)
 
 
 def _detect_lib(m):
@@ -1049,16 +1066,42 @@ def detect(mid):
     return jsonify(code=0, message="检测完成", data=result)
 
 
+def _is_pose_task(task):
+    t = (task or "").lower()
+    return t in ("pose-estimation", "wholebody-pose-estimation")
+
+
+def _resolve_pose_runtime(m):
+    """解析姿态估计运行时：(library, abs_path, task)。"""
+    task = (m.task or "").lower()
+    if not _is_pose_task(task):
+        raise ValueError("该模型任务不是姿态估计类型")
+    lib = _detect_lib(m)
+    if lib == "ultralytics":
+        if task != "pose-estimation":
+            raise ValueError("全身姿态模型须使用 rtmlib（DWPose）")
+        path = _abs_weight(m)
+        if path is None:
+            raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
+        return lib, path, task
+    if lib == "rtmlib":
+        key = (m.model_key or "").lower()
+        if not key.startswith(("rtmo", "rtmpose", "dwpose")):
+            raise ValueError("rtmlib 姿态 model_key 须为 rtmo-* / rtmpose-* / dwpose-*")
+        path = _abs_model_path(m)
+        return lib, path, task
+    raise ValueError(f"姿态估计不支持 library={lib}")
+
+
 @ai_model_bp.post("/<int:mid>/pose")
 @permission_required("ai:model:query")
 def pose_route(mid):
     """姿态估计（图片）：上传图片 -> 关键点 + 骨架图(base64)。"""
     m = AiModel.query.get_or_404(mid)
-    if (m.task or "") != "pose-estimation" or (m.library or "ultralytics") != "ultralytics":
-        return jsonify(code=400, message="姿态估计仅支持 YOLO pose 模型"), 400
-    abs_path = _abs_weight(m)
-    if abs_path is None:
-        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+    try:
+        lib, abs_path, task = _resolve_pose_runtime(m)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
 
     file = request.files.get("file")
     if file is None or not file.filename:
@@ -1070,8 +1113,13 @@ def pose_route(mid):
     draw = request.form.get("draw", "1") != "0"
 
     try:
-        from inference import estimate_pose
-        result = estimate_pose(abs_path, file.read(), conf=conf, draw=draw)
+        if lib == "rtmlib":
+            from inference import estimate_pose_rtmlib
+            result = estimate_pose_rtmlib(
+                m.model_key or "rtmo-s", abs_path, file.read(), conf=conf, draw=draw)
+        else:
+            from inference import estimate_pose
+            result = estimate_pose(abs_path, file.read(), conf=conf, draw=draw)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"姿态估计失败：{e}"), 500
     return jsonify(code=0, message="姿态估计完成", data=result)
@@ -1261,7 +1309,8 @@ def _video_worker(job_id, library, task, abs_path, src_path, out_path, out_name,
                                         model_key=model_key, progress_cb=cb)
         else:
             from inference import detect_video
-            stats = detect_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
+            stats = detect_video(abs_path, src_path, out_path, conf=conf,
+                                 progress_cb=cb, model_key=model_key)
         stats["output"] = out_name
         with _video_jobs_lock:
             _video_jobs[job_id].update(status="done", stats=stats,
@@ -1333,12 +1382,13 @@ def video_progress(mid, job_id):
         if j is None:
             return jsonify(code=404, message="任务不存在或已过期"), 404
         data = dict(j)
+    # 进度轮询统一 HTTP 200，避免前端 axios 将业务失败误判为 Network Error
     if data["status"] == "error":
-        return jsonify(code=500, message=f"视频检测失败：{data['error']}"), 500
+        return jsonify(code=0, message=data.get("error") or "视频处理失败", data=data)
     return jsonify(code=0, data=data)
 
 
-def _pose_worker(job_id, abs_path, src_path, out_path, out_name, conf):
+def _pose_worker(job_id, library, model_key, abs_path, src_path, out_path, out_name, conf):
     """后台线程：逐帧姿态估计，按帧上报进度，完成写结果。"""
     def cb(processed, total):
         with _video_jobs_lock:
@@ -1347,8 +1397,13 @@ def _pose_worker(job_id, abs_path, src_path, out_path, out_name, conf):
                 j["processed"] = processed
                 j["total"] = total
     try:
-        from inference import pose_video
-        stats = pose_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
+        if (library or "ultralytics").lower() == "rtmlib":
+            from inference import pose_video_rtmlib
+            stats = pose_video_rtmlib(
+                model_key or "rtmo-s", abs_path, src_path, out_path, conf=conf, progress_cb=cb)
+        else:
+            from inference import pose_video
+            stats = pose_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
         stats["output"] = out_name
         with _video_jobs_lock:
             _video_jobs[job_id].update(status="done", stats=stats,
@@ -1369,11 +1424,10 @@ def _pose_worker(job_id, abs_path, src_path, out_path, out_name, conf):
 def pose_video_route(mid):
     """姿态估计（视频）：启动异步逐帧任务，返回 jobId（进度复用 video-progress）。"""
     m = AiModel.query.get_or_404(mid)
-    if (m.task or "") != "pose-estimation" or (m.library or "ultralytics") != "ultralytics":
-        return jsonify(code=400, message="姿态估计仅支持 YOLO pose 模型"), 400
-    abs_path = _abs_weight(m)
-    if abs_path is None:
-        return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
+    try:
+        lib, abs_path, _task = _resolve_pose_runtime(m)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
 
     file = request.files.get("file")
     if file is None or not file.filename:
@@ -1405,7 +1459,7 @@ def pose_video_route(mid):
                                "stats": None, "error": None}
     threading.Thread(
         target=_pose_worker,
-        args=(job_id, abs_path, src_path, out_path, out_name, conf),
+        args=(job_id, lib, m.model_key or "", abs_path, src_path, out_path, out_name, conf),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})

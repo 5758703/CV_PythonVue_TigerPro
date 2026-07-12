@@ -6,7 +6,7 @@
         <el-card shadow="never" class="cfg-card">
           <el-form :inline="true" class="cfg-form">
             <el-form-item label="姿态模型">
-              <el-select v-model="poseId" placeholder="YOLO / RTMO" style="width:220px">
+              <el-select v-model="poseId" placeholder="YOLO / RTMO / RTMPose" style="width:220px">
                 <el-option v-for="m in poseModels" :key="m.id"
                   :label="`${m.modelName}（${m.library}）`" :value="m.id" />
               </el-select>
@@ -45,7 +45,7 @@
           </el-form>
 
           <el-alert v-if="!poseModels.length" type="warning" :closable="false" class="tip-alert"
-            title="暂无姿态模型：请到「模型管理」拉取 YOLO Pose 或 RTMO（rtmlib）权重。" />
+            title="暂无姿态模型：请到「模型管理」拉取 YOLO Pose / RTMO / RTMPose（rtmlib）权重。" />
         </el-card>
 
         <el-empty v-if="!file && !running && !resultVideoUrl" description="选择姿态模型与比赛视频，标注球场四角后开始分析"
@@ -205,7 +205,7 @@
               </el-col>
             </el-row>
             <el-alert type="info" :closable="false" show-icon class="guide-alert"
-              title="支持 YOLO Pose / RTMO（rtmlib）姿态引擎；上传视频后自动检测球场线，可手动修正四角；可选羽毛球 YOLO 权重。" />
+              title="支持 YOLO Pose / RTMO / RTMPose（rtmlib）姿态引擎；上传视频后自动检测球场线，可手动修正四角；可选羽毛球 YOLO 权重。" />
           </section>
         </div>
       </el-tab-pane>
@@ -222,7 +222,7 @@ import { modelApi, badmintonApi } from '../../../api/ai'
 const COURT_LABELS = ['左上', '右上', '右下', '左下']
 
 const guideItems = [
-  { icon: '🏸', title: '球员姿态', desc: 'YOLO Pose / RTMO 骨架检测，结合球场区域过滤场外干扰', color: 'c-blue' },
+  { icon: '🏸', title: '球员姿态', desc: 'YOLO / RTMO / RTMPose 骨架检测，结合球场区域过滤场外干扰', color: 'c-blue' },
   { icon: '📐', title: '球场映射', desc: '自动线检测预填四角，支持手动修正与单应性映射', color: 'c-orange' },
   { icon: '⚡', title: '羽毛球追踪', desc: '可选专用 YOLO 权重，追踪球路与落点', color: 'c-green' },
   { icon: '📊', title: '分析输出', desc: '标注视频、detections.jsonl、热力图与散点图', color: 'c-purple' },
@@ -304,7 +304,7 @@ async function loadModels() {
   allModels.value = res.data?.rows || []
   if (!poseId.value && poseModels.value.length) {
     const pref = poseModels.value.find(m =>
-      m.modelKey === 'rtmo-s' || m.modelKey === 'yolo11s-pose' || m.modelName?.includes('RTMO'))
+      m.modelKey === 'rtmo-s' || m.modelKey === 'rtmpose-m' || m.modelKey === 'yolo11s-pose' || m.modelName?.includes('RTMO'))
     poseId.value = pref?.id || poseModels.value[0].id
   }
   if (!ballId.value && ballModels.value.length) {

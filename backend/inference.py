@@ -18,8 +18,8 @@ _pipe_cache = {}       # (task, model_dir) -> transformers pipeline
 _lock = threading.Lock()
 ROBOFLOW_META_FILE = "roboflow_meta.json"
 _ROBOFLOW_COLORS = {
-    "Engine Flames": (0, 255, 255),
-    "Rocket Body": (134, 34, 255),
+    "Engine Flames": (0, 0, 255),      # 红色（BGR）
+    "Rocket Body": (0, 255, 255),      # 黄色（BGR）
     "Space": (100, 200, 255),
 }
 _roboflow_session = None
@@ -114,13 +114,103 @@ def _bbox_wh(bbox):
     return x2 - x1, y2 - y1
 
 
+def _norm_class(name):
+    return str(name or "").strip().lower()
+
+
+def _is_rocket_body_class(name):
+    n = _norm_class(name)
+    return (
+        n == "rocket body"
+        or ("rocket" in n and "body" in n)
+        or n in ("箭体", "火箭本体", "火箭", "rocket")
+    )
+
+
+def _is_engine_flames_class(name):
+    n = _norm_class(name)
+    return (
+        n in ("engine flames", "engine_flames", "engine flame")
+        or "flame" in n
+        or n in ("火焰", "发动机火焰")
+    )
+
+
+def _is_rocket_tracking_classes(class_names):
+    names = list(class_names or [])
+    if not names:
+        return False
+    if any(_is_rocket_body_class(n) for n in names):
+        return True
+    if any(_is_engine_flames_class(n) for n in names):
+        return True
+    return any("rocket" in _norm_class(n) or "火箭" in str(n) for n in names)
+
+
+def _is_rocket_tracking_model(model_key=None, class_names=None, model_id=None):
+    """判断是否为火箭回收跟踪类模型（Roboflow 或本地自定义训练）。"""
+    if model_id and "rocket-detect" in str(model_id).lower():
+        return True
+    key = _norm_class(model_key).replace("-", "_")
+    if key and any(k in key for k in ("rocket", "china_rocket")):
+        return True
+    return _is_rocket_tracking_classes(class_names)
+
+
+def _yolo_result_to_detections(result):
+    """Ultralytics 单帧结果 → 统一 detections 结构。"""
+    detections = []
+    boxes = getattr(result, "boxes", None)
+    if boxes is None:
+        return detections
+    names = getattr(result, "names", None) or {}
+    for b in boxes:
+        x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
+        cid = int(b.cls[0]) if getattr(b, "cls", None) is not None else -1
+        conf = float(b.conf[0]) if getattr(b, "conf", None) is not None else 0.0
+        detections.append({
+            "className": _safe_class_name(names, cid),
+            "classId": cid,
+            "confidence": round(conf, 4),
+            "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
+        })
+    return detections
+
+
+def _model_class_names(model):
+    names = getattr(model, "names", None) or {}
+    if isinstance(names, dict):
+        return [str(names[k]) for k in sorted(names.keys())]
+    return [str(n) for n in names]
+
+
+def _apply_rocket_frame_overlay(frame, detections, tracker, img_w, img_h):
+    """绘制检测框、十字丝与遥测面板，返回 (画面, 遥测指标)。"""
+    plotted = _draw_roboflow_detections(frame, detections)
+    plotted = _draw_rocket_body_crosshair(plotted, detections, img_w, img_h)
+    metrics = tracker.update(detections)
+    plotted = _draw_rocket_telemetry_overlay(plotted, metrics, img_w, img_h)
+    return plotted, metrics
+
+
+def _attach_rocket_telemetry_stats(result, speed_samples, is_rocket):
+    if is_rocket and speed_samples:
+        result["rocketTelemetry"] = {
+            "avgDescentSpeed": round(sum(speed_samples) / len(speed_samples), 1),
+            "maxDescentSpeed": round(max(speed_samples), 1),
+            "rocketStageHeightM": ROCKET_STAGE_HEIGHT_M,
+        }
+    return result
+
+
 def _refine_rocket_detect_detections(detections, img_w, img_h):
     """Rocket Detect 近景落台后处理：剔除平台钢架误检，并按火焰位置补全箭体框。"""
-    flames = [d for d in detections if d.get("className") == "Engine Flames"]
-    bodies = [d for d in detections if d.get("className") == "Rocket Body"]
+    flames = [d for d in detections if _is_engine_flames_class(d.get("className"))]
+    bodies = [d for d in detections if _is_rocket_body_class(d.get("className"))]
     others = [
         d for d in detections
-        if d.get("className") not in ("Engine Flames", "Rocket Body")
+        if not _is_engine_flames_class(d.get("className"))
+        and not _is_rocket_body_class(d.get("className"))
     ]
 
     max_dx = max(45.0, img_w * 0.12)
@@ -220,8 +310,8 @@ class _RocketTelemetryTracker:
 
     @staticmethod
     def _pick_target(detections):
-        bodies = [d for d in detections if d.get("className") == "Rocket Body"]
-        flames = [d for d in detections if d.get("className") == "Engine Flames"]
+        bodies = [d for d in detections if _is_rocket_body_class(d.get("className"))]
+        flames = [d for d in detections if _is_engine_flames_class(d.get("className"))]
         if bodies:
             return max(bodies, key=lambda d: d.get("confidence", 0))
         if flames:
@@ -257,13 +347,13 @@ class _RocketTelemetryTracker:
         descent_speed = 0.0
         if self.prev_track_y is not None:
             dy = track_y - self.prev_track_y
-            ref_h = bh if target.get("className") == "Rocket Body" else (self.prev_body_h or bh)
+            ref_h = bh if _is_rocket_body_class(target.get("className")) else (self.prev_body_h or bh)
             m_per_px = ROCKET_STAGE_HEIGHT_M / max(ref_h, 1.0)
             if dy > 0:
                 descent_speed = min(dy * self.fps * m_per_px, 80.0)
 
         self.prev_track_y = track_y
-        if target.get("className") == "Rocket Body":
+        if _is_rocket_body_class(target.get("className")):
             self.prev_body_h = bh
 
         self.speed_ema = self._smooth(self.speed_ema, descent_speed)
@@ -278,66 +368,117 @@ class _RocketTelemetryTracker:
         }
 
 
+_CROSSHAIR_COLOR = (255, 0, 255)  # 鲜艳洋红（BGR）
+
+
+def _pick_rocket_body(detections):
+    bodies = [d for d in detections if _is_rocket_body_class(d.get("className"))]
+    if not bodies:
+        return None
+    return max(bodies, key=lambda d: d.get("confidence", 0))
+
+
+def _draw_dashed_line_bgr(img, p1, p2, color, thickness=2, dash_len=14, gap_len=10):
+    x1, y1 = float(p1[0]), float(p1[1])
+    x2, y2 = float(p2[0]), float(p2[1])
+    length = math.hypot(x2 - x1, y2 - y1)
+    if length < 1:
+        return
+    dx, dy = (x2 - x1) / length, (y2 - y1) / length
+    dist = 0.0
+    draw = True
+    while dist < length:
+        seg = min((dash_len if draw else gap_len), length - dist)
+        if draw:
+            sx, sy = int(x1 + dx * dist), int(y1 + dy * dist)
+            ex, ey = int(x1 + dx * (dist + seg)), int(y1 + dy * (dist + seg))
+            cv2.line(img, (sx, sy), (ex, ey), color, thickness, cv2.LINE_AA)
+        dist += seg
+        draw = not draw
+
+
+def _draw_rocket_body_crosshair(frame, detections, img_w, img_h):
+    """以箭体检测框中心绘制虚线十字丝（水平宽 1/2 视频宽，垂直高 1/10 视频高）。"""
+    body = _pick_rocket_body(detections)
+    if not body:
+        return frame
+    x1, y1, x2, y2 = body["bbox"]
+    cx = int((x1 + x2) / 2)
+    cy = int((y1 + y2) / 2)
+    thickness = max(2, int(min(img_w, img_h) * 0.003))
+    h_half = img_w / 4
+    v_half = img_h / 20
+    canvas = frame
+    _draw_dashed_line_bgr(
+        canvas,
+        (int(cx - h_half), cy),
+        (int(cx + h_half), cy),
+        _CROSSHAIR_COLOR,
+        thickness,
+    )
+    _draw_dashed_line_bgr(
+        canvas,
+        (cx, int(cy - v_half)),
+        (cx, int(cy + v_half)),
+        _CROSSHAIR_COLOR,
+        thickness,
+    )
+    cv2.circle(canvas, (cx, cy), max(3, thickness), _CROSSHAIR_COLOR, -1, cv2.LINE_AA)
+    return canvas
+
+
 def _draw_rocket_telemetry_overlay(frame, metrics, img_w, img_h):
-    """在视频左侧中上绘制火箭遥测 HUD（科技感布局）。"""
+    """在视频右上方绘制火箭遥测 HUD（科技感布局）。"""
     from PIL import Image, ImageDraw
 
     if metrics.get("valid"):
-        items = [
-            ("下降速度", f"{metrics['descent_speed']:.1f}", "m/s"),
-            ("垂直角度", f"{metrics['vertical_angle']:.1f}", "°"),
-            ("水平角度", f"{metrics['horizontal_angle']:.1f}", "°"),
+        lines = [
+            f"下降速度：{metrics['descent_speed']:.1f}米/秒",
+            f"垂直角度：{metrics['vertical_angle']:.1f}度",
+            f"水平角度：{metrics['horizontal_angle']:.1f}度",
         ]
     else:
-        items = [
-            ("下降速度", "--", "m/s"),
-            ("垂直角度", "--", "°"),
-            ("水平角度", "--", "°"),
+        lines = [
+            "下降速度：--米/秒",
+            "垂直角度：--度",
+            "水平角度：--度",
         ]
 
     font_size = max(14, int(img_w * 0.024))
     title_size = max(13, int(font_size * 0.88))
-    value_size = max(16, int(font_size * 1.08))
     font = _rocket_overlay_font(font_size)
     font_title = _rocket_overlay_font(title_size)
-    font_value = _rocket_overlay_font(value_size)
 
     bg = (4, 12, 28, 205)
     border = (0, 196, 255, 210)
     accent = (0, 214, 255, 255)
     title_c = (72, 228, 255, 255)
-    label_c = (130, 188, 228, 255)
-    value_c = (240, 250, 255, 255)
-    unit_c = (88, 168, 210, 230)
+    text_c = (235, 248, 255, 255)
     divider_c = (0, 150, 210, 110)
-    dot_c = (0, 230, 255, 200)
 
     pad_x = max(14, int(img_w * 0.024))
     pad_y = max(10, int(img_h * 0.012))
-    row_h = max(28, int(font_size * 1.6))
+    line_h = max(26, int(font_size * 1.55))
     title_h = max(24, int(title_size * 1.65))
     accent_w = 3
-    row_gap = max(5, int(font_size * 0.32))
+    line_gap = max(5, int(font_size * 0.32))
     margin = max(12, int(img_w * 0.028))
     bracket = min(20, max(12, int(img_w * 0.028)))
 
-    title = "◈ ROCKET TELEMETRY"
+    title = "◈ 火箭遥测"
     probe = Image.new("RGBA", (4, 4))
     probe_draw = ImageDraw.Draw(probe)
     title_bbox = probe_draw.textbbox((0, 0), title, font=font_title)
     inner_w = title_bbox[2] - title_bbox[0]
-    for label, val, unit in items:
-        lb = probe_draw.textbbox((0, 0), label, font=font)
-        vb = probe_draw.textbbox((0, 0), val, font=font_value)
-        ub = probe_draw.textbbox((0, 0), unit, font=font)
-        inner_w = max(inner_w, (lb[2] - lb[0]) + row_gap * 4 + (vb[2] - vb[0]) + (ub[2] - ub[0]))
+    for text in lines:
+        lb = probe_draw.textbbox((0, 0), text, font=font)
+        inner_w = max(inner_w, lb[2] - lb[0])
 
     box_w = inner_w + pad_x * 2 + accent_w + 10
-    box_h = pad_y * 2 + title_h + row_gap + len(items) * row_h + (len(items) - 1) * row_gap
+    box_h = pad_y * 2 + title_h + line_gap + len(lines) * line_h + (len(lines) - 1) * line_gap
 
-    # 左侧中上：靠左留白，垂直位于画面上部 1/3 区域中部
-    x0 = margin
-    y0 = max(margin, int(img_h * 0.22 - box_h * 0.35))
+    x0 = max(0, img_w - box_w - margin)
+    y0 = margin
 
     pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
     draw = ImageDraw.Draw(pil)
@@ -361,34 +502,20 @@ def _draw_rocket_telemetry_overlay(frame, metrics, img_w, img_h):
 
     div_y = ty + title_h - 6
     draw.line([(tx, div_y), (x0 + box_w - pad_x, div_y)], fill=divider_c, width=1)
-    draw.line([(tx, div_y + 1), (tx + 42, div_y + 1)], fill=accent, width=2)
+    draw.line([(tx, div_y + 1), (tx + 36, div_y + 1)], fill=accent, width=2)
 
-    ry = div_y + row_gap + 2
-    right_edge = x0 + box_w - pad_x
-    for label, val, unit in items:
-        dot_y = ry + row_h // 2
-        draw.ellipse([tx - 11, dot_y - 2, tx - 7, dot_y + 2], fill=dot_c)
-        draw.text((tx, ry), label, font=font, fill=label_c)
-
-        unit_bbox = draw.textbbox((0, 0), unit, font=font)
-        val_bbox = draw.textbbox((0, 0), val, font=font_value)
-        unit_w = unit_bbox[2] - unit_bbox[0]
-        val_w = val_bbox[2] - val_bbox[0]
-        draw.text((right_edge - unit_w, ry + 1), unit, font=font, fill=unit_c)
-        draw.text((right_edge - unit_w - row_gap - val_w, ry - 1), val, font=font_value, fill=value_c)
-
-        sep_y = ry + row_h - 2
-        if sep_y < y0 + box_h - pad_y:
-            draw.line([(tx, sep_y), (right_edge, sep_y)], fill=(0, 100, 150, 60), width=1)
-        ry += row_h + row_gap
+    ry = div_y + line_gap + 2
+    for text in lines:
+        draw.text((tx + 1, ry + 1), text, font=font, fill=(20, 30, 45, 200))
+        draw.text((tx, ry), text, font=font, fill=text_c)
+        ry += line_h + line_gap
 
     status = "LIVE" if metrics.get("valid") else "STANDBY"
     status_bbox = draw.textbbox((0, 0), status, font=font_title)
     status_w = status_bbox[2] - status_bbox[0]
     sx = x0 + box_w - pad_x - status_w
     sy = y0 + pad_y
-    draw.text((sx + 1, sy + 1), status, font=font_title, fill=(0, 40, 60, 180))
-    draw.text((sx, sy), status, font=font_title, fill=accent if metrics.get("valid") else unit_c)
+    draw.text((sx, sy), status, font=font_title, fill=accent if metrics.get("valid") else divider_c)
 
     return cv2.cvtColor(np.asarray(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
 
@@ -418,7 +545,7 @@ def _predict_roboflow(model_id, image_bgr, conf=0.25):
     ]
     detections = _roboflow_preds_to_detections(preds)
     h, w = image_bgr.shape[:2]
-    if "rocket-detect" in str(model_id).lower():
+    if _is_rocket_tracking_model(model_id=model_id):
         detections = _refine_rocket_detect_detections(detections, w, h)
     return detections
 
@@ -428,7 +555,12 @@ def _draw_roboflow_detections(frame, detections):
     for d in detections:
         x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
         name = d.get("className", "unknown")
-        color = _ROBOFLOW_COLORS.get(name, (0, 255, 0))
+        if _is_rocket_body_class(name):
+            color = _ROBOFLOW_COLORS.get("Rocket Body", (0, 255, 255))
+        elif _is_engine_flames_class(name):
+            color = _ROBOFLOW_COLORS.get("Engine Flames", (0, 0, 255))
+        else:
+            color = _ROBOFLOW_COLORS.get(name, (0, 255, 0))
         cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
         label = f"{name} {d.get('confidence', 0):.2f}"
         cv2.putText(canvas, label, (x1, max(16, y1 - 6)),
@@ -481,7 +613,7 @@ def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=N
     class_counts = {}
     total_det = 0
     frames = 0
-    is_rocket = "rocket-detect" in str(model_id).lower()
+    is_rocket = _is_rocket_tracking_model(model_id=model_id)
     tracker = _RocketTelemetryTracker(w, h, fps) if is_rocket else None
     speed_samples = []
     try:
@@ -494,12 +626,12 @@ def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=N
                 name = d["className"]
                 class_counts[name] = class_counts.get(name, 0) + 1
                 total_det += 1
-            plotted = _draw_roboflow_detections(frame, detections)
             if tracker:
-                metrics = tracker.update(detections)
+                plotted, metrics = _apply_rocket_frame_overlay(frame, detections, tracker, w, h)
                 if metrics.get("valid"):
                     speed_samples.append(metrics["descent_speed"])
-                plotted = _draw_rocket_telemetry_overlay(plotted, metrics, w, h)
+            else:
+                plotted = _draw_roboflow_detections(frame, detections)
             _write_bgr(writer, plotted, ew, eh)
             frames += 1
             if progress_cb:
@@ -517,13 +649,7 @@ def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=N
         "width": ew,
         "height": eh,
     }
-    if is_rocket and speed_samples:
-        result["rocketTelemetry"] = {
-            "avgDescentSpeed": round(sum(speed_samples) / len(speed_samples), 1),
-            "maxDescentSpeed": round(max(speed_samples), 1),
-            "rocketStageHeightM": ROCKET_STAGE_HEIGHT_M,
-        }
-    return result
+    return _attach_rocket_telemetry_stats(result, speed_samples, is_rocket)
 
 
 def _get_model(abs_path):
@@ -660,7 +786,7 @@ def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
     }
 
 
-def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
+def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, model_key=None):
     """逐帧检测视频，输出带框视频到 dst_path。
 
     progress_cb(processed, total) 每帧回调，用于上报进度。
@@ -671,6 +797,8 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
         return detect_video_roboflow(abs_path, src_path, dst_path, conf=conf,
                                      progress_cb=progress_cb, meta=meta)
     model = _get_model(abs_path)
+    class_names = _model_class_names(model)
+    is_rocket = _is_rocket_tracking_model(model_key=model_key, class_names=class_names)
 
     cap = cv2.VideoCapture(src_path)
     if not cap.isOpened():
@@ -686,20 +814,34 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
     class_counts = {}
     total_det = 0
     frames = 0
+    tracker = _RocketTelemetryTracker(w, h, fps) if is_rocket else None
+    speed_samples = []
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
             r = model.predict(frame, conf=conf, verbose=False)[0]
-            if r.boxes is not None:
-                names = r.names
-                for b in r.boxes:
-                    cid = int(b.cls[0])
-                    name = _safe_class_name(names, cid)
+            if is_rocket:
+                detections = _yolo_result_to_detections(r)
+                detections = _refine_rocket_detect_detections(detections, w, h)
+                for d in detections:
+                    name = d["className"]
                     class_counts[name] = class_counts.get(name, 0) + 1
                     total_det += 1
-            _write_bgr(writer, _safe_plot(r, frame), ew, eh)
+                plotted, metrics = _apply_rocket_frame_overlay(frame, detections, tracker, w, h)
+                if metrics.get("valid"):
+                    speed_samples.append(metrics["descent_speed"])
+            else:
+                if r.boxes is not None:
+                    names = r.names
+                    for b in r.boxes:
+                        cid = int(b.cls[0])
+                        name = _safe_class_name(names, cid)
+                        class_counts[name] = class_counts.get(name, 0) + 1
+                        total_det += 1
+                plotted = _safe_plot(r, frame)
+            _write_bgr(writer, plotted, ew, eh)
             frames += 1
             if progress_cb:
                 progress_cb(frames, total)
@@ -707,7 +849,7 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
         cap.release()
         writer.close()
 
-    return {
+    result = {
         "frames": frames,
         "totalFrames": total,
         "totalDetections": total_det,
@@ -716,6 +858,7 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
         "width": ew,
         "height": eh,
     }
+    return _attach_rocket_telemetry_stats(result, speed_samples, is_rocket)
 
 
 def estimate_pose(abs_path, image_bytes, conf=0.25, draw=True):
@@ -804,8 +947,9 @@ def pose_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
     }
 
 
-# ------------------------------------------------------------ rtmlib RTMO 姿态（羽毛球分析等）
-_rtmlib_cache = {}  # (path_or_key, mtime, model_key) -> RTMO
+# ------------------------------------------------------------ rtmlib 姿态（RTMO / RTMPose / DWPose）
+_rtmlib_cache = {}       # (onnx_path, mtime, model_key) -> RTMO
+_rtmlib_solver_cache = {}  # (variant, mode, device) -> Body | Wholebody
 
 _RTMO_WEIGHT_URLS = {
     "rtmo-s": (
@@ -818,10 +962,58 @@ _RTMO_WEIGHT_URLS = {
     ),
 }
 
+_RTMLIB_WEIGHT_URLS = {
+    **_RTMO_WEIGHT_URLS,
+    "rtmpose-m": (
+        "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/"
+        "rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip"
+    ),
+    "rtmpose-l": (
+        "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/"
+        "rtmpose-l_simcc-body7_pt-body7_420e-384x288-3f5a1437_20230504.zip"
+    ),
+    "dwpose-m": (
+        "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/"
+        "rtmpose-m_simcc-ucoco_dw-ucoco_270e-256x192-c8b76419_20230728.zip"
+    ),
+    "dwpose-l": (
+        "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/"
+        "rtmpose-l_simcc-ucoco_dw-ucoco_270e-384x288-2438fd99_20230728.zip"
+    ),
+}
+
+
+def rtmlib_variant(model_key):
+    """按 model_key 判定 rtmlib 变体：rtmo / body(RTMPose) / wholebody(DWPose)。"""
+    key = (model_key or "rtmo-s").lower()
+    if key.startswith("dwpose"):
+        if "-l" in key or "-x" in key:
+            mode = "performance"
+        elif "-s" in key or "-t" in key:
+            mode = "lightweight"
+        else:
+            mode = "balanced"
+        return "wholebody", mode
+    if key.startswith("rtmpose"):
+        if "-l" in key or "-x" in key:
+            mode = "performance"
+        elif "-s" in key or "-t" in key:
+            mode = "lightweight"
+        else:
+            mode = "balanced"
+        return "body", mode
+    if key.startswith("rtmo"):
+        return "rtmo", key
+    return "rtmo", "rtmo-s"
+
+
+def rtmlib_keypoint_count(model_key):
+    return 133 if rtmlib_variant(model_key)[0] == "wholebody" else 17
+
 
 def rtmlib_weight_url(model_key):
     key = (model_key or "rtmo-s").lower()
-    return _RTMO_WEIGHT_URLS.get(key, _RTMO_WEIGHT_URLS["rtmo-s"])
+    return _RTMLIB_WEIGHT_URLS.get(key, _RTMO_WEIGHT_URLS["rtmo-s"])
 
 
 def extract_rtmlib_onnx_from_zip(zip_path):
@@ -917,6 +1109,274 @@ def infer_pose_rtmo(frame_bgr, model, conf=0.25):
             for i in range(n)
         ])
     return persons
+
+
+def _resolve_rtmlib_pose_path(abs_weight_path):
+    """manifest / zip / onnx -> 本地 pose onnx 路径（可选）。"""
+    if not abs_weight_path or not os.path.isfile(abs_weight_path):
+        return None
+    p = os.path.abspath(abs_weight_path)
+    if p.lower().endswith(".json"):
+        return None
+    if p.lower().endswith(".zip"):
+        return extract_rtmlib_onnx_from_zip(p)
+    if p.lower().endswith(".onnx"):
+        return p
+    return None
+
+
+def _rtmlib_storage_dir(abs_weight_path):
+    if not abs_weight_path:
+        return None
+    p = os.path.abspath(abs_weight_path)
+    return p if os.path.isdir(p) else os.path.dirname(p)
+
+
+def _rtmlib_pose_input_size(model_key):
+    key = (model_key or "").lower()
+    if "-l" in key:
+        return (288, 384)
+    return (192, 256)
+
+
+def _find_local_pose_onnx(abs_weight_path):
+    """从模型目录定位已拉取的 pose onnx（manifest 旁 zip/onnx）。"""
+    pose_path = _resolve_rtmlib_pose_path(abs_weight_path)
+    if pose_path:
+        return pose_path
+    model_dir = _rtmlib_storage_dir(abs_weight_path)
+    if not model_dir or not os.path.isdir(model_dir):
+        return None
+    onnx_files = [
+        os.path.join(model_dir, name)
+        for name in os.listdir(model_dir)
+        if name.lower().endswith(".onnx")
+    ]
+    if onnx_files:
+        onnx_files.sort(key=os.path.getmtime, reverse=True)
+        return onnx_files[0]
+    zip_files = [
+        os.path.join(model_dir, name)
+        for name in os.listdir(model_dir)
+        if name.lower().endswith(".zip")
+    ]
+    if zip_files:
+        zip_files.sort(key=os.path.getmtime, reverse=True)
+        return extract_rtmlib_onnx_from_zip(zip_files[0])
+    return None
+
+
+def _get_rtmlib_solver(model_key="rtmo-s", abs_weight_path=None):
+    """加载 rtmlib 求解器：RTMO | Body(RTMPose) | Wholebody(DWPose)。"""
+    variant, spec = rtmlib_variant(model_key)
+    if variant == "rtmo":
+        return _get_rtmo_model(abs_weight_path, spec)
+
+    device = _rtmlib_device()
+    backend = "onnxruntime"
+    cache_key = (variant, spec, device, abs_weight_path or "")
+    with _lock:
+        if cache_key in _rtmlib_solver_cache:
+            return _rtmlib_solver_cache[cache_key]
+
+        pose_path = _find_local_pose_onnx(abs_weight_path)
+        pose_input_size = _rtmlib_pose_input_size(model_key)
+        if variant == "body":
+            from rtmlib import Body
+            if pose_path:
+                model = Body(
+                    mode=spec, pose=pose_path, pose_input_size=pose_input_size,
+                    backend=backend, device=device,
+                )
+            else:
+                model = Body(mode=spec, backend=backend, device=device)
+        else:
+            from rtmlib import Wholebody
+            if pose_path:
+                model = Wholebody(
+                    mode=spec, pose=pose_path, pose_input_size=pose_input_size,
+                    backend=backend, device=device,
+                )
+            else:
+                model = Wholebody(mode=spec, backend=backend, device=device)
+
+        _rtmlib_solver_cache[cache_key] = model
+        return model
+
+
+def _persons_from_rtmlib(keypoints, scores, model_key, conf):
+    """rtmlib 输出 -> 平台 persons 列表。"""
+    if keypoints is None or len(keypoints) == 0:
+        return []
+    kp_arr = np.asarray(keypoints, dtype=np.float32)
+    sc_arr = np.asarray(scores, dtype=np.float32)
+    if kp_arr.ndim == 2:
+        kp_arr = kp_arr[np.newaxis, ...]
+        sc_arr = sc_arr[np.newaxis, ...]
+    n_kp = rtmlib_keypoint_count(model_key)
+    persons = []
+    for idx in range(kp_arr.shape[0]):
+        kp = kp_arr[idx]
+        sc = sc_arr[idx].reshape(-1)
+        n = min(n_kp, kp.shape[0], sc.shape[0])
+        if n < 5:
+            continue
+        mean_conf = float(np.mean(sc[:n]))
+        if mean_conf < conf:
+            continue
+        pts = [
+            [round(float(kp[j, 0]), 1), round(float(kp[j, 1]), 1), round(float(sc[j]), 4)]
+            for j in range(n)
+        ]
+        item = {"keypoints": pts}
+        if n_kp == 133:
+            item["keypointCount"] = 133
+        persons.append(item)
+    return persons
+
+
+def _draw_rtmlib_skeleton(img_bgr, keypoints, scores, conf):
+    """rtmlib 骨架绘制（兼容 to_openpose / openpose_skeleton 参数名差异）。"""
+    if keypoints is None or len(keypoints) == 0:
+        return img_bgr
+    from rtmlib import draw_skeleton
+    import inspect
+
+    kp = np.asarray(keypoints, dtype=np.float32)
+    sc = np.asarray(scores, dtype=np.float32)
+    if kp.ndim == 2:
+        kp = kp[np.newaxis, ...]
+        sc = sc[np.newaxis, ...]
+
+    params = inspect.signature(draw_skeleton).parameters
+    kwargs = {"kpt_thr": conf}
+    if "openpose_skeleton" in params:
+        kwargs["openpose_skeleton"] = False
+    elif "to_openpose" in params:
+        kwargs["to_openpose"] = False
+    return draw_skeleton(img_bgr, kp, sc, **kwargs)
+
+
+def infer_pose_rtmlib_frame(frame_bgr, model, model_key, conf=0.25):
+    """rtmlib 单帧推理，返回 COCO-17 关键点（全身模型取 body 前 17 点）。"""
+    variant, _ = rtmlib_variant(model_key)
+    if variant == "rtmo":
+        return infer_pose_rtmo(frame_bgr, model, conf=conf)
+    keypoints, scores = model(frame_bgr)
+    persons = _persons_from_rtmlib(keypoints, scores, model_key, conf)
+    return [p["keypoints"][:17] for p in persons]
+
+
+def write_rtmlib_manifest(folder, model_key):
+    """写入 rtmlib 就绪标记（RTMPose/DWPose 两阶段模型）。"""
+    import json
+    variant, mode = rtmlib_variant(model_key)
+    os.makedirs(folder, exist_ok=True)
+    manifest = os.path.join(folder, "rtmlib_manifest.json")
+    with open(manifest, "w", encoding="utf-8") as f:
+        json.dump({
+            "variant": variant, "mode": mode, "modelKey": model_key, "ready": True,
+        }, f, ensure_ascii=False)
+    return manifest
+
+
+def estimate_pose_rtmlib(model_key, abs_weight_path, image_bytes, conf=0.25, draw=True):
+    """rtmlib 姿态估计：图片 -> 关键点 + 骨架图（COCO-17 或 WholeBody-133）。"""
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+
+    solver = _get_rtmlib_solver(model_key, abs_weight_path)
+    variant, _ = rtmlib_variant(model_key)
+    if variant == "rtmo":
+        persons_kp = infer_pose_rtmo(img, solver, conf=conf)
+        persons = [{"keypoints": kp} for kp in persons_kp]
+        keypoints, scores = solver(img)
+    else:
+        keypoints, scores = solver(img)
+        persons = _persons_from_rtmlib(keypoints, scores, model_key, conf)
+
+    image_b64 = None
+    if draw and persons:
+        if keypoints is not None and len(keypoints):
+            plotted = _draw_rtmlib_skeleton(img.copy(), keypoints, scores, conf)
+        else:
+            plotted = img.copy()
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    h, w = img.shape[:2]
+    kp_count = rtmlib_keypoint_count(model_key)
+    return {
+        "count": len(persons),
+        "persons": persons,
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+        "keypointCount": kp_count,
+        "poseType": "wholebody" if variant == "wholebody" else "body17",
+    }
+
+
+def pose_video_rtmlib(model_key, abs_weight_path, src_path, dst_path, conf=0.25, progress_cb=None):
+    """rtmlib 逐帧姿态视频（RTMO / RTMPose / DWPose）。"""
+    solver = _get_rtmlib_solver(model_key, abs_weight_path)
+    variant, _ = rtmlib_variant(model_key)
+
+    cap = None
+    writer = None
+    total_persons = 0
+    frames = 0
+    try:
+        cap = cv2.VideoCapture(src_path)
+        if not cap.isOpened():
+            raise ValueError("无法打开视频文件")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+        writer, ew, eh = _open_h264(dst_path, fps, w, h)
+
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if variant == "rtmo":
+                persons_kp = infer_pose_rtmo(frame, solver, conf=conf)
+                total_persons += len(persons_kp)
+                keypoints, scores = solver(frame)
+            else:
+                keypoints, scores = solver(frame)
+                persons = _persons_from_rtmlib(keypoints, scores, model_key, conf)
+                total_persons += len(persons)
+
+            if keypoints is not None and len(keypoints):
+                plotted = _draw_rtmlib_skeleton(frame, keypoints, scores, conf)
+            else:
+                plotted = frame
+            _write_bgr(writer, plotted, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        if cap is not None:
+            cap.release()
+        if writer is not None:
+            writer.close()
+
+    return {
+        "frames": frames,
+        "totalFrames": total,
+        "totalPersons": total_persons,
+        "fps": round(float(fps), 2),
+        "width": ew,
+        "height": eh,
+        "keypointCount": rtmlib_keypoint_count(model_key),
+        "poseType": "wholebody" if variant == "wholebody" else "body17",
+    }
 
 
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,

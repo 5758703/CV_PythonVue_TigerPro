@@ -32,8 +32,9 @@ export const modelApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
     }),
-  // 查询视频检测进度
-  videoProgress: (id, jobId) => request.get(`/ai/model/${id}/video-progress/${jobId}`),
+  // 查询视频检测进度（长任务，关闭超时）
+  videoProgress: (id, jobId) =>
+    request.get(`/ai/model/${id}/video-progress/${jobId}`, { timeout: 0 }),
   // 目标追踪：启动异步任务，返回 jobId（进度复用 videoProgress）
   trackVideo: (id, formData) =>
     request.post(`/ai/model/${id}/track-video`, formData, {
@@ -189,6 +190,23 @@ export const trainingApi = {
   buildDataset: (id) => request.post(`/ai/training/datasets/${id}/build`, null, { timeout: 0 }),
   datasetSamples: (id) => request.get(`/ai/training/datasets/${id}/samples`),
   datasetFormats: () => request.get('/ai/training/datasets/formats'),
+  extractFrames: (id, formData) =>
+    request.post(`/ai/training/datasets/${id}/extract-frames`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+  annotateSamples: (id) => request.get(`/ai/training/datasets/${id}/annotate/samples`),
+  annotateImage: (id, stem) =>
+    request.get(`/ai/training/datasets/${id}/annotate/image/${encodeURIComponent(stem)}`, {
+      responseType: 'blob',
+      timeout: 0
+    }),
+  annotateLabels: (id, stem) =>
+    request.get(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`),
+  saveAnnotateLabels: (id, stem, data) =>
+    request.put(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`, data),
+  clearAnnotateLabels: (id, stem) =>
+    request.delete(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`),
   // 训练任务
   listJobs: (params) => request.get('/ai/training/jobs', { params }),
   getJob: (id) => request.get(`/ai/training/jobs/${id}`),
