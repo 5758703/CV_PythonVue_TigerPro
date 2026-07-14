@@ -111,6 +111,26 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 3. 前端 `npm run dev`（:5173），浏览器打开，用 `admin/admin123` 登录
 <img width="1920" height="869" alt="744ec6c19b3817d1e7c1efe5d66124e7" src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" />
 
+
+
 <img width="1920" height="869" alt="243ec0a85149c5fc2c79168466bfd19d" src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" />
 
 <img width="1920" height="869" alt="a894ca39be5586d2f9bcc7a587404d4d" src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" />
+
+
+
+开源不易，接收赞赏
+
+<img width="127" height="174" alt="f0afa6f30ce5b11d3bc0b17c42ab5c9a" src="https://github.com/user-attachments/assets/797c35ba-a7fd-434f-841e-4de19fac4f1a" />    
+
+<img width="127" height="174" alt="5ea44947061de1d34f2c713fb8ce5ce8" src="https://github.com/user-attachments/assets/077e8228-f416-4d44-8c47-c6976788af07" />
+
+
+
+
+
+
+
+
+
+
