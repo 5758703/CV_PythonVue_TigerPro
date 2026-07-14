@@ -3,6 +3,7 @@ import os
 import shutil
 import threading
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 from flask import Blueprint, request, jsonify, current_app, send_file
@@ -42,6 +43,8 @@ from services.dataset_annotation import (
     get_sample_image_path,
     get_sample_label_path,
 )
+from services.dataset_quality import analyze_dataset_quality
+from services.dataset_convert import get_convert_types, run_convert
 
 training_bp = Blueprint("training", __name__, url_prefix="/api/ai/training")
 
@@ -531,6 +534,116 @@ def annotate_labels_delete(did, stem):
         lbl_path.unlink()
     stats = annotation_stats(raw_dir)
     return jsonify(code=0, message="标签已清除", data={"stats": stats})
+
+
+# ── 标注质量检测 & 格式转换 ───────────────────────────
+
+@training_bp.post("/datasets/<int:did>/quality/analyze")
+@permission_required("ai:training:query")
+def analyze_quality(did):
+    """分析数据集标注质量（YOLO 配对、类别分布、框统计等）。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    data = request.get_json(silent=True) or {}
+    mode = (data.get("mode") or "raw").strip().lower()
+    class_names = ds.class_list()
+
+    if mode == "yaml":
+        if not ds.yaml_path:
+            return jsonify(code=400, message="数据集尚未构建，无法使用 YAML 模式分析"), 400
+        yaml_path = _upload_root() / ds.yaml_path
+        yolo_dir = yaml_path.parent
+        try:
+            report = analyze_dataset_quality(yolo_dir, class_names=class_names, yaml_path=yaml_path)
+        except ValueError as e:
+            return jsonify(code=400, message=str(e)), 400
+    else:
+        if ds.format == "import" and ds.source_path:
+            source_dir = Path(ds.source_path)
+        else:
+            source_dir = _dataset_dir(did) / "raw"
+        if not source_dir.exists():
+            return jsonify(code=400, message="数据集目录不存在，请先上传或抽帧"), 400
+        try:
+            report = analyze_dataset_quality(source_dir, class_names=class_names)
+        except ValueError as e:
+            return jsonify(code=400, message=str(e)), 400
+
+    return jsonify(code=0, message="分析完成", data={
+        "dataset": ds.to_dict(),
+        "mode": mode,
+        "report": report,
+        "analyzedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+
+
+@training_bp.get("/datasets/convert/types")
+@permission_required("ai:training:query")
+def list_convert_types():
+    return jsonify(code=0, data=get_convert_types())
+
+
+@training_bp.post("/datasets/<int:did>/convert")
+@permission_required("ai:training:edit")
+def convert_dataset(did):
+    """数据集格式转换。"""
+    ds = TrainingDataset.query.get_or_404(did)
+    data = request.get_json(silent=True) or {}
+    convert_type = (data.get("type") or "").strip()
+    if not convert_type:
+        return jsonify(code=400, message="请选择转换类型"), 400
+
+    class_names = ds.class_list()
+    if data.get("classNames"):
+        class_names = data["classNames"]
+    class_map = data.get("classMap") or []
+
+    ds_root = _dataset_dir(did)
+    if ds.format == "import" and ds.source_path:
+        source_dir = Path(ds.source_path)
+    else:
+        source_dir = ds_root / "raw"
+
+    target_sub = (data.get("targetSubdir") or "").strip().strip("/\\")
+    if target_sub:
+        target_dir = ds_root / target_sub
+    else:
+        target_dir = source_dir
+
+    export_sub = (data.get("exportSubdir") or "").strip()
+    export_dir = None
+    if export_sub:
+        export_dir = ds_root / export_sub
+
+    if not source_dir.exists():
+        return jsonify(code=400, message="源数据目录不存在"), 400
+
+    try:
+        result = run_convert(
+            convert_type,
+            source_dir,
+            target_dir,
+            class_names=class_names,
+            class_map=class_map,
+            export_dir=export_dir,
+        )
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"转换失败：{e}"), 500
+
+    if convert_type in ("labelme_to_yolo", "voc_to_yolo") and ds.format in ("auto", "voc", "labelme"):
+        ds.format = "yolo_flat"
+    if convert_type in ("labelme_to_yolo", "voc_to_yolo") and result.get("classNames") and not ds.class_list():
+        ds.set_class_list(result["classNames"])
+    ds.status = "draft"
+    db.session.commit()
+
+    stats = annotation_stats(target_dir if (target_dir / "images").exists() else source_dir)
+    return jsonify(code=0, message="转换完成", data={
+        "dataset": ds.to_dict(),
+        "result": result,
+        "annotation": stats,
+    })
 
 
 # ── 训练任务 ──────────────────────────────────────────

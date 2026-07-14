@@ -808,6 +808,10 @@ def transcribe_route(mid):
         if (m.library or "") == "funasr-onnx":
             from inference import transcribe_audio_onnx
             result = transcribe_audio_onnx(path, audio_path)
+        elif (m.library or "") == "funasr-nano":
+            from inference import transcribe_audio_nano
+            lang = (request.form.get("language") or "auto").strip()
+            result = transcribe_audio_nano(path, audio_path, language=lang)
         elif (m.library or "") == "transformers":
             from inference import transcribe_audio_whisper
             result = transcribe_audio_whisper(path, audio_path)

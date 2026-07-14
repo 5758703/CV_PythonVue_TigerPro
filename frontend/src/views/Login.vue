@@ -1,95 +1,70 @@
 <template>
   <div class="login-root">
-    <!-- Three.js canvas 背景 -->
+    <!-- Three.js 背景（首页同色深蓝梯度 + 粒子网络） -->
     <canvas ref="canvasRef" class="bg-canvas" />
 
-    <!-- 全息 HUD 装饰层 -->
-    <div class="hud-layer">
-      <div class="hud-corner hud-tl" />
-      <div class="hud-corner hud-tr" />
-      <div class="hud-corner hud-bl" />
-      <div class="hud-corner hud-br" />
-      <div class="hud-scan-line" />
-      <div class="hud-top-bar">
-        <span class="hud-text">TIGER · AI · PLATFORM</span>
-        <span class="hud-dot" />
-        <span class="hud-text blink">ONLINE</span>
+    <!-- 轻量平台装饰（对齐首页 hero 气质，弱化科幻 HUD） -->
+    <div class="chrome-layer">
+      <div class="chrome-top">
+        <span class="chrome-brand">TIGER AI PLATFORM</span>
+        <span class="chrome-dot" />
+        <span class="chrome-status">READY</span>
       </div>
-      <div class="hud-bottom-bar">
-        <span class="hud-text mono">SYS v2.6.1</span>
-        <span class="hud-divider" />
-        <span class="hud-text mono">{{ hudTime }}</span>
-        <span class="hud-divider" />
-        <span class="hud-text mono">NODE: 0x{{ nodeId }}</span>
+      <div class="chrome-bottom">
+        <span>视觉 · 文本 · 语音 · 训练闭环</span>
+        <span class="chrome-sep">|</span>
+        <span class="mono">{{ hudTime }}</span>
       </div>
-      <div class="vol-light vol-left" />
-      <div class="vol-light vol-right" />
     </div>
 
-    <!-- 登录卡片 -->
-    <div class="login-card" :class="{ shake: shaking }">
-      <div class="card-glow" />
-
-      <!-- LOGO区 -->
-      <div class="brand-row">
-        <div class="brand-icon">
-          <div class="icon-hex">
-            <svg viewBox="0 0 60 60" fill="none">
-              <polygon points="30,4 54,17 54,43 30,56 6,43 6,17"
-                stroke="url(#hexGrad)" stroke-width="1.5" fill="url(#hexFill)" />
-              <text x="50%" y="57%" dominant-baseline="middle" text-anchor="middle"
-                fill="white" font-size="16" font-weight="800" font-family="monospace">CV</text>
-              <defs>
-                <linearGradient id="hexGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#38bdf8"/>
-                  <stop offset="100%" stop-color="#818cf8"/>
-                </linearGradient>
-                <linearGradient id="hexFill" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0.3"/>
-                  <stop offset="100%" stop-color="#6366f1" stop-opacity="0.15"/>
-                </linearGradient>
-              </defs>
-            </svg>
-          </div>
-          <div class="icon-ring ring1" />
-          <div class="icon-ring ring2" />
-        </div>
-        <div class="brand-text">
+    <!-- 登录面板：白卡片风格对齐首页 stat/loop card -->
+    <div class="login-shell" :class="{ shake: shaking }">
+      <div class="hero-band">
+        <div class="hero-badge">CV</div>
+        <div class="hero-copy">
           <h1 class="brand-name">Tiger AI Platform</h1>
-          <p class="brand-sub">多任务 AI 模型管理与测试平台</p>
+          <p class="brand-sub">多任务 / 多模态 AI 模型管理与测试学习平台</p>
         </div>
       </div>
 
-      <div class="divider-line">
-        <span class="divider-dot" /><span class="divider-core" /><span class="divider-dot" />
-      </div>
+      <div class="card-body">
+        <div class="feature-tags">
+          <span v-for="t in tags" :key="t.text" class="htag" :style="{ background: t.color }">{{ t.text }}</span>
+        </div>
 
-      <el-form ref="formRef" :model="form" :rules="rules" class="login-form" @keyup.enter="onSubmit">
-        <el-form-item prop="username">
-          <div class="input-wrap">
-            <el-icon class="inp-icon"><User /></el-icon>
-            <el-input v-model="form.username" placeholder="用户名" class="glass-input" />
-          </div>
-        </el-form-item>
-        <el-form-item prop="password">
-          <div class="input-wrap">
-            <el-icon class="inp-icon"><Lock /></el-icon>
-            <el-input v-model="form.password" type="password" placeholder="密码"
-              show-password class="glass-input" />
-          </div>
-        </el-form-item>
+        <el-form ref="formRef" :model="form" :rules="rules" class="login-form" @keyup.enter="onSubmit">
+          <el-form-item prop="username">
+            <div class="input-wrap">
+              <el-icon class="inp-icon"><User /></el-icon>
+              <el-input v-model="form.username" placeholder="用户名" class="platform-input" />
+            </div>
+          </el-form-item>
+          <el-form-item prop="password">
+            <div class="input-wrap">
+              <el-icon class="inp-icon"><Lock /></el-icon>
+              <el-input
+                v-model="form.password"
+                type="password"
+                placeholder="密码"
+                show-password
+                class="platform-input"
+              />
+            </div>
+          </el-form-item>
 
-        <button class="submit-btn" :class="{ loading }" @click.prevent="onSubmit" :disabled="loading">
-          <span v-if="!loading" class="btn-label">登 录</span>
-          <span v-else class="btn-spinner" />
-          <div class="btn-shine" />
-        </button>
-      </el-form>
+          <button class="submit-btn" :class="{ loading }" :disabled="loading" @click.prevent="onSubmit">
+            <span v-if="!loading" class="btn-label">登 录</span>
+            <span v-else class="btn-spinner" />
+            <div class="btn-shine" />
+          </button>
+        </el-form>
 
-      <div class="login-tip">
-        <span class="tip-key">admin</span> / <span class="tip-key">admin123</span>
-        &nbsp;·&nbsp;
-        <span class="tip-key">tiger</span> / <span class="tip-key">123456</span>
+        <div class="login-tip">
+          默认账号
+          <span class="tip-key">admin</span> / <span class="tip-key">admin123</span>
+          <span class="tip-sep">·</span>
+          <span class="tip-key">tiger</span> / <span class="tip-key">123456</span>
+        </div>
       </div>
     </div>
   </div>
@@ -112,12 +87,20 @@ const formRef = ref(null)
 const loading = ref(false)
 const shaking = ref(false)
 const hudTime = ref('')
-const nodeId = ref('A4F3')
+
+const tags = [
+  { text: '目标检测', color: '#409eff' },
+  { text: '模型训练闭环', color: '#1a73e8' },
+  { text: '在线标注', color: '#ff6b35' },
+  { text: '姿态估计', color: '#00b894' },
+  { text: '语音 ASR/TTS', color: '#f5222d' },
+  { text: 'RBAC', color: '#52c41a' },
+]
 
 const form = reactive({ username: 'admin', password: 'admin123' })
 const rules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
 
 let clockTimer
@@ -142,7 +125,7 @@ const onSubmit = async () => {
   }
 }
 
-// ════ Three.js shaders ════
+/* ════ Three.js：沿用粒子网络，色板对齐首页 hero ════ */
 
 const BG_VERT = `void main(){gl_Position=vec4(position,1.0);}`
 
@@ -161,11 +144,11 @@ float noise(vec2 p){
 
 float neuralRipple(vec2 uv,float t){
   float v=0.0;
-  for(int i=0;i<7;i++){
+  for(int i=0;i<6;i++){
     float fi=float(i);
-    vec2 c=vec2(0.5+0.38*sin(fi*1.3+t*0.25),0.5+0.38*cos(fi*0.9+t*0.18));
+    vec2 c=vec2(0.5+0.36*sin(fi*1.3+t*0.22),0.5+0.36*cos(fi*0.9+t*0.16));
     float d=length(uv-c);
-    v+=sin(d*20.0-t*2.2+fi*0.9)*exp(-d*4.0)*0.18;
+    v+=sin(d*18.0-t*2.0+fi*0.8)*exp(-d*3.8)*0.15;
   }
   return v;
 }
@@ -173,32 +156,30 @@ float neuralRipple(vec2 uv,float t){
 void main(){
   vec2 uv=gl_FragCoord.xy/uRes;
 
-  // 深空渐变
-  vec3 col=mix(vec3(0.02,0.03,0.10),vec3(0.04,0.01,0.15),uv.y);
+  // 首页 hero：#0c1733 → #16306b → #1f6feb
+  vec3 deep=vec3(0.047,0.090,0.200);
+  vec3 mid=vec3(0.086,0.188,0.420);
+  vec3 accent=vec3(0.122,0.435,0.920);
+  vec3 col=mix(deep, mid, uv.y);
+  col=mix(col, accent, pow(uv.y, 2.2) * 0.35);
 
-  // 流体噪声纹理
-  float n=noise(uv*4.0+uTime*0.12)*0.5+noise(uv*8.0-uTime*0.08)*0.25;
-  col+=vec3(0.02,0.06,0.14)*n;
+  float n=noise(uv*3.5+uTime*0.1)*0.5+noise(uv*7.0-uTime*0.07)*0.22;
+  col+=vec3(0.05,0.18,0.45)*n;
 
-  // 体积光 — 上下两道
-  float vl1=exp(-pow(length(uv-vec2(0.5,0.0))*1.3,2.0))*0.18;
-  col+=vec3(0.05,0.35,1.0)*vl1;
-  float vl2=exp(-pow(length(uv-vec2(0.5,1.0))*1.5,2.0))*0.12;
-  col+=vec3(0.25,0.05,0.8)*vl2;
+  float vl1=exp(-pow(length(uv-vec2(0.2,0.15))*1.4,2.0))*0.22;
+  col+=vec3(0.25,0.52,1.0)*vl1;
+  float vl2=exp(-pow(length(uv-vec2(0.85,0.75))*1.6,2.0))*0.16;
+  col+=vec3(0.16,0.38,0.95)*vl2;
 
-  // 神经网络波纹
   float rip=neuralRipple(uv,uTime);
-  col+=vec3(0.0,0.5,1.0)*rip*0.7;
-  col+=vec3(0.3,0.0,0.85)*rip*0.35;
+  col+=vec3(0.25,0.55,1.0)*rip*0.55;
 
-  // 鼠标跟随光晕
   vec2 mp=uMouse*0.5+0.5;
-  float mg=exp(-length(uv-mp)*3.8)*0.3;
-  col+=vec3(0.15,0.55,1.0)*mg;
+  float mg=exp(-length(uv-mp)*3.6)*0.22;
+  col+=vec3(0.25,0.55,1.0)*mg;
 
-  // 暗角
-  float vig=1.0-smoothstep(0.25,0.9,length(uv-0.5)*1.5);
-  col*=0.4+0.6*vig;
+  float vig=1.0-smoothstep(0.30,0.95,length(uv-0.5)*1.45);
+  col*=0.55+0.45*vig;
 
   gl_FragColor=vec4(col,1.0);
 }
@@ -225,25 +206,17 @@ float noise3(vec3 p){
 void main(){
   vec3 pos=position;
   float t=uTime*aSpeed+aPhase;
-
-  // 流体扰动 3-octave
-  float nx=noise3(pos*0.4+vec3(t*0.25,0,0));
-  float ny=noise3(pos*0.4+vec3(0,t*0.25,1.5));
-  float nz=noise3(pos*0.4+vec3(2.1,0,t*0.25));
-  pos+=vec3(nx,ny,nz)*1.0;
-
-  // 波纹
-  pos.z+=sin(length(pos.xy)*1.4-uTime*2.0)*0.35;
-
-  // 鼠标斥力
+  float nx=noise3(pos*0.4+vec3(t*0.22,0,0));
+  float ny=noise3(pos*0.4+vec3(0,t*0.22,1.5));
+  float nz=noise3(pos*0.4+vec3(2.1,0,t*0.22));
+  pos+=vec3(nx,ny,nz)*0.9;
+  pos.z+=sin(length(pos.xy)*1.3-uTime*1.8)*0.28;
   float d=length(pos.xy-uMouse*6.0);
-  pos.xy+=normalize(pos.xy-uMouse*6.0+0.001)*smoothstep(3.0,0.0,d)*1.8;
-
+  pos.xy+=normalize(pos.xy-uMouse*6.0+0.001)*smoothstep(3.0,0.0,d)*1.5;
   vHue=nx;
-  vAlpha=0.25+0.75*(0.5+0.5*sin(t+aPhase));
-
+  vAlpha=0.28+0.72*(0.5+0.5*sin(t+aPhase));
   vec4 mv=modelViewMatrix*vec4(pos,1.0);
-  gl_PointSize=aSize*(280.0/-mv.z);
+  gl_PointSize=aSize*(260.0/-mv.z);
   gl_Position=projectionMatrix*mv;
 }
 `
@@ -252,20 +225,16 @@ const PARTICLE_FRAG = `
 varying float vAlpha;
 varying float vHue;
 uniform float uTime;
-
 void main(){
   vec2 uv=gl_PointCoord-0.5;
   float r=length(uv);
   if(r>0.5)discard;
-
   float core=exp(-r*14.0);
-  float halo=exp(-r*4.5)*0.45;
+  float halo=exp(-r*4.5)*0.42;
   float glow=core+halo;
-
-  // 青→紫渐变 + 时间偏移
-  vec3 col=mix(vec3(0.0,0.85,1.0),vec3(0.5,0.25,1.0),clamp(vHue+sin(uTime*0.4)*0.1,0.0,1.0));
-  col=mix(col,vec3(1.0),core*0.55);
-
+  // #409eff → #1f6feb
+  vec3 col=mix(vec3(0.25,0.62,1.0),vec3(0.12,0.44,0.92),clamp(vHue+sin(uTime*0.35)*0.08,0.0,1.0));
+  col=mix(col,vec3(1.0),core*0.45);
   gl_FragColor=vec4(col,glow*vAlpha);
 }
 `
@@ -279,9 +248,9 @@ const LINE_FRAG = `
 uniform float uTime;
 varying float vAlpha;
 void main(){
-  float p=0.5+0.5*sin(uTime*1.8);
-  vec3 col=mix(vec3(0.05,0.55,1.0),vec3(0.4,0.15,0.9),p);
-  gl_FragColor=vec4(col,vAlpha*0.45);
+  float p=0.5+0.5*sin(uTime*1.5);
+  vec3 col=mix(vec3(0.25,0.62,1.0),vec3(0.12,0.44,0.92),p);
+  gl_FragColor=vec4(col,vAlpha*0.38);
 }
 `
 
@@ -304,73 +273,71 @@ function initThree() {
   camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 200)
   camera.position.z = 13
 
-  // ── 背景 fullscreen quad ──
   const bgGeo = new THREE.BufferGeometry()
   bgGeo.setAttribute('position', new THREE.BufferAttribute(
-    new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,-1,0, 1,1,0, -1,1,0]), 3))
+    new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, -1, 0, 1, 1, 0, -1, 1, 0]), 3))
   const bgMat = new THREE.ShaderMaterial({
-    vertexShader: BG_VERT, fragmentShader: BG_FRAG,
+    vertexShader: BG_VERT,
+    fragmentShader: BG_FRAG,
     uniforms: {
       uTime: { value: 0 },
       uRes: { value: new THREE.Vector2(W, H) },
-      uMouse: { value: new THREE.Vector2(0, 0) }
+      uMouse: { value: new THREE.Vector2(0, 0) },
     },
-    depthTest: false, depthWrite: false
+    depthTest: false,
+    depthWrite: false,
   })
   const bgMesh = new THREE.Mesh(bgGeo, bgMat)
   bgMesh.renderOrder = -999
   bgMesh.frustumCulled = false
   scene.add(bgMesh)
 
-  // ── 粒子 ──
-  const CNT = 3200
+  const CNT = 2800
   const pos = new Float32Array(CNT * 3)
   const sizes = new Float32Array(CNT)
   const speeds = new Float32Array(CNT)
   const phases = new Float32Array(CNT)
-
   for (let i = 0; i < CNT; i++) {
     const r = Math.random() * 14
     const t = Math.random() * Math.PI * 2
     const p = Math.acos(2 * Math.random() - 1)
-    pos[i*3]   = r * Math.sin(p) * Math.cos(t)
-    pos[i*3+1] = r * Math.sin(p) * Math.sin(t)
-    pos[i*3+2] = (Math.random() - 0.5) * 9
-    sizes[i]   = Math.random() * 2.8 + 0.4
-    speeds[i]  = Math.random() * 0.5 + 0.15
-    phases[i]  = Math.random() * Math.PI * 2
+    pos[i * 3] = r * Math.sin(p) * Math.cos(t)
+    pos[i * 3 + 1] = r * Math.sin(p) * Math.sin(t)
+    pos[i * 3 + 2] = (Math.random() - 0.5) * 9
+    sizes[i] = Math.random() * 2.6 + 0.4
+    speeds[i] = Math.random() * 0.45 + 0.15
+    phases[i] = Math.random() * Math.PI * 2
   }
-
   const pGeo = new THREE.BufferGeometry()
   pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
   pGeo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1))
   pGeo.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1))
   pGeo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1))
-
   const pMat = new THREE.ShaderMaterial({
-    vertexShader: PARTICLE_VERT, fragmentShader: PARTICLE_FRAG,
+    vertexShader: PARTICLE_VERT,
+    fragmentShader: PARTICLE_FRAG,
     uniforms: {
       uTime: { value: 0 },
-      uMouse: { value: new THREE.Vector2(0, 0) }
+      uMouse: { value: new THREE.Vector2(0, 0) },
     },
-    transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
   })
   const particles = new THREE.Points(pGeo, pMat)
   scene.add(particles)
 
-  // ── 神经网络连线 ──
-  const NODE_CNT = 70
+  const NODE_CNT = 64
   const nodes = []
   for (let i = 0; i < NODE_CNT; i++) {
     nodes.push(new THREE.Vector3(
       (Math.random() - 0.5) * 22,
       (Math.random() - 0.5) * 14,
-      (Math.random() - 0.5) * 7
+      (Math.random() - 0.5) * 7,
     ))
   }
   const linePos = [], lineAlpha = []
-  const MAX_D = 5.5
+  const MAX_D = 5.2
   for (let i = 0; i < NODE_CNT; i++) {
     for (let j = i + 1; j < NODE_CNT; j++) {
       const d = nodes[i].distanceTo(nodes[j])
@@ -381,41 +348,36 @@ function initThree() {
       }
     }
   }
-
   const lGeo = new THREE.BufferGeometry()
   lGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(linePos), 3))
   lGeo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(lineAlpha), 1))
   const lMat = new THREE.ShaderMaterial({
-    vertexShader: LINE_VERT, fragmentShader: LINE_FRAG,
+    vertexShader: LINE_VERT,
+    fragmentShader: LINE_FRAG,
     uniforms: { uTime: { value: 0 } },
-    transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
   })
   const lines = new THREE.LineSegments(lGeo, lMat)
   scene.add(lines)
 
-  // ── 动画循环 ──
   const startTime = performance.now()
   function animate() {
     animId = requestAnimationFrame(animate)
     const t = (performance.now() - startTime) / 1000
-
     bgMat.uniforms.uTime.value = t
     bgMat.uniforms.uMouse.value.set(mouseX, mouseY)
     pMat.uniforms.uTime.value = t
     pMat.uniforms.uMouse.value.set(mouseX, mouseY)
     lMat.uniforms.uTime.value = t
-
-    // 摄像机跟随鼠标
-    camera.position.x += (mouseX * 1.8 - camera.position.x) * 0.025
-    camera.position.y += (mouseY * 1.0 - camera.position.y) * 0.025
+    camera.position.x += (mouseX * 1.6 - camera.position.x) * 0.025
+    camera.position.y += (mouseY * 0.9 - camera.position.y) * 0.025
     camera.lookAt(0, 0, 0)
-
-    particles.rotation.y = t * 0.035
-    particles.rotation.x = Math.sin(t * 0.018) * 0.08
-    lines.rotation.y = t * 0.035
-    lines.rotation.x = Math.sin(t * 0.018) * 0.08
-
+    particles.rotation.y = t * 0.03
+    particles.rotation.x = Math.sin(t * 0.016) * 0.07
+    lines.rotation.y = t * 0.03
+    lines.rotation.x = Math.sin(t * 0.016) * 0.07
     renderer.render(scene, camera)
   }
   animate()
@@ -433,7 +395,6 @@ function initThree() {
 onMounted(() => {
   updateClock()
   clockTimer = setInterval(updateClock, 1000)
-  nodeId.value = Math.random().toString(16).slice(2, 6).toUpperCase()
   window.addEventListener('mousemove', onMouseMove)
   initThree()
 })
@@ -454,7 +415,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  font-family: 'Inter', 'SF Pro Display', system-ui, sans-serif;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 .bg-canvas {
@@ -465,295 +426,240 @@ onBeforeUnmount(() => {
   z-index: 0;
 }
 
-/* ══ HUD ══ */
-.hud-layer {
+.chrome-layer {
   position: absolute;
   inset: 0;
-  pointer-events: none;
   z-index: 1;
+  pointer-events: none;
 }
-
-.hud-corner {
-  position: absolute;
-  width: 30px;
-  height: 30px;
-  border-color: rgba(56, 189, 248, 0.55);
-  border-style: solid;
-}
-.hud-tl { top: 18px; left: 18px; border-width: 2px 0 0 2px; }
-.hud-tr { top: 18px; right: 18px; border-width: 2px 2px 0 0; }
-.hud-bl { bottom: 18px; left: 18px; border-width: 0 0 2px 2px; }
-.hud-br { bottom: 18px; right: 18px; border-width: 0 2px 2px 0; }
-
-.hud-scan-line {
-  position: absolute;
-  left: 0; right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(56,189,248,0.55), transparent);
-  animation: scanLine 7s linear infinite;
-}
-@keyframes scanLine {
-  0%   { top: 0; opacity: 1; }
-  85%  { top: 100%; opacity: 0.2; }
-  100% { top: 100%; opacity: 0; }
-}
-
-.hud-top-bar, .hud-bottom-bar {
+.chrome-top,
+.chrome-bottom {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: rgba(56,189,248,0.65);
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: rgba(188, 208, 245, 0.75);
 }
-.hud-top-bar    { top: 18px; }
-.hud-bottom-bar { bottom: 18px; }
-.hud-text { font-family: 'Courier New', monospace; }
-.hud-text.mono { opacity: 0.65; }
-.hud-text.blink { animation: blink 1.8s step-end infinite; }
-.hud-dot {
-  width: 5px; height: 5px; border-radius: 50%;
-  background: #22d3ee;
-  box-shadow: 0 0 6px #22d3ee;
+.chrome-top { top: 22px; }
+.chrome-bottom { bottom: 20px; letter-spacing: 0.5px; font-size: 12px; color: rgba(214, 227, 255, 0.65); }
+.chrome-brand { font-weight: 700; color: #eaf2ff; }
+.chrome-status { color: #7ab8ff; }
+.chrome-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #409eff;
+  box-shadow: 0 0 8px rgba(64, 158, 255, 0.8);
   animation: pulse 2s ease-in-out infinite;
 }
-.hud-divider { width: 1px; height: 12px; background: rgba(56,189,248,0.35); }
-
-@keyframes blink  { 0%,100%{opacity:1} 50%{opacity:0.15} }
-@keyframes pulse  { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.35;transform:scale(0.75)} }
-
-.vol-light {
-  position: absolute;
-  top: 0;
-  width: 280px;
-  height: 100%;
-  pointer-events: none;
+.chrome-sep { opacity: 0.4; }
+.mono { font-family: Consolas, "Courier New", monospace; opacity: 0.85; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
 }
-.vol-left  { left: -80px;  background: linear-gradient(90deg,transparent,rgba(56,189,248,0.04),transparent); transform: skewX(-12deg); animation: volP 5s ease-in-out infinite; }
-.vol-right { right: -80px; background: linear-gradient(90deg,transparent,rgba(139,92,246,0.04),transparent); transform: skewX(12deg);  animation: volP 5s ease-in-out infinite 2.5s; }
-@keyframes volP { 0%,100%{opacity:0.4} 50%{opacity:1} }
 
-/* ══ 登录卡片 ══ */
-.login-card {
+.login-shell {
   position: relative;
   z-index: 2;
-  width: 420px;
-  padding: 42px 40px 36px;
-  border-radius: 20px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.075) 0%, rgba(255,255,255,0.028) 100%);
-  backdrop-filter: blur(26px) saturate(1.5);
-  -webkit-backdrop-filter: blur(26px) saturate(1.5);
-  border: 1px solid rgba(148,210,255,0.16);
+  width: min(440px, calc(100vw - 32px));
+  border-radius: 16px;
+  overflow: hidden;
+  background: #fff;
   box-shadow:
-    inset 0 0 0 1px rgba(255,255,255,0.05),
-    0 24px 64px rgba(0,0,0,0.65),
-    0 0 90px rgba(56,189,248,0.07),
-    0 0 130px rgba(139,92,246,0.05);
-  transition: box-shadow 0.4s;
+    0 8px 24px rgba(20, 48, 107, 0.22),
+    0 24px 64px rgba(12, 23, 51, 0.35);
+  transition: transform 0.25s ease, box-shadow 0.3s ease;
 }
-.login-card:hover {
+.login-shell:hover {
   box-shadow:
-    inset 0 0 0 1px rgba(255,255,255,0.07),
-    0 28px 72px rgba(0,0,0,0.7),
-    0 0 110px rgba(56,189,248,0.11),
-    0 0 150px rgba(139,92,246,0.08);
+    0 10px 28px rgba(20, 48, 107, 0.28),
+    0 28px 72px rgba(12, 23, 51, 0.4);
 }
-.login-card.shake {
-  animation: shake 0.5s cubic-bezier(.36,.07,.19,.97);
+.login-shell.shake {
+  animation: shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
 }
 @keyframes shake {
-  10%,90% { transform:translateX(-3px); }
-  20%,80% { transform:translateX(4px); }
-  30%,50%,70% { transform:translateX(-5px); }
-  40%,60% { transform:translateX(5px); }
+  10%, 90% { transform: translateX(-3px); }
+  20%, 80% { transform: translateX(4px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
 }
 
-.card-glow {
-  position: absolute;
-  top: -1px; left: 50%;
-  transform: translateX(-50%);
-  width: 55%; height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(56,189,248,0.9), rgba(139,92,246,0.85), transparent);
-  box-shadow: 0 0 18px rgba(56,189,248,0.5), 0 0 36px rgba(139,92,246,0.3);
-  border-radius: 0 0 4px 4px;
+/* 对齐首页 .hero */
+.hero-band {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 22px 24px;
+  color: #eaf2ff;
+  background: linear-gradient(120deg, #0c1733 0%, #16306b 55%, #1f6feb 100%);
 }
-
-/* ── LOGO ── */
-.brand-row {
+.hero-badge {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 28px;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(135deg, #409eff, #6a5acd);
+  box-shadow: 0 4px 14px rgba(64, 158, 255, 0.35);
 }
-.brand-icon {
-  position: relative;
-  width: 56px; height: 56px;
-  flex-shrink: 0;
-}
-.icon-hex {
-  position: relative; z-index: 1;
-  width: 100%; height: 100%;
-  filter: drop-shadow(0 0 10px rgba(56,189,248,0.55));
-}
-.icon-ring {
-  position: absolute;
-  border-radius: 50%;
-  top: 50%; left: 50%;
-  transform: translate(-50%,-50%);
-}
-.ring1 {
-  width: 66px; height: 66px;
-  border: 1px solid rgba(56,189,248,0.3);
-  animation: rot 7s linear infinite;
-}
-.ring2 {
-  width: 82px; height: 82px;
-  border: 1px solid rgba(139,92,246,0.2);
-  animation: rot 11s linear infinite reverse;
-}
-@keyframes rot { to { transform: translate(-50%,-50%) rotate(360deg); } }
-
 .brand-name {
   margin: 0;
-  font-size: 19px;
-  font-weight: 700;
-  background: linear-gradient(135deg,#e0f2fe,#c7d2fe);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-size: 22px;
+  font-weight: 800;
   letter-spacing: 0.4px;
+  color: #fff;
 }
 .brand-sub {
-  margin: 5px 0 0;
-  font-size: 11px;
-  color: rgba(148,163,184,0.65);
-  letter-spacing: 0.4px;
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #bcd0f5;
 }
 
-.divider-line {
+.card-body {
+  padding: 22px 24px 20px;
+  background: #fff;
+}
+
+.feature-tags {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
-.divider-core {
-  flex: 1; height: 1px;
-  background: linear-gradient(90deg,transparent,rgba(56,189,248,0.38),rgba(139,92,246,0.38),transparent);
-}
-.divider-dot {
-  width: 4px; height: 4px; border-radius: 50%;
-  background: rgba(56,189,248,0.65);
-  box-shadow: 0 0 5px rgba(56,189,248,0.8);
+.htag {
+  border: none;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
-/* ── 输入框 ── */
-.login-form :deep(.el-form-item) { margin-bottom: 16px; }
-.login-form :deep(.el-form-item__error) { color: #f87171; }
+.login-form :deep(.el-form-item) { margin-bottom: 14px; }
+.login-form :deep(.el-form-item__error) { color: #f56c6c; }
 
 .input-wrap { position: relative; width: 100%; }
 .inp-icon {
   position: absolute;
-  left: 13px; top: 50%;
+  left: 12px;
+  top: 50%;
   transform: translateY(-50%);
   z-index: 2;
-  color: rgba(56,189,248,0.65);
+  color: #909399;
   font-size: 15px;
   pointer-events: none;
 }
 
-.login-form :deep(.glass-input .el-input__wrapper) {
-  background: rgba(255,255,255,0.035);
-  border: 1px solid rgba(148,210,255,0.18);
+.login-form :deep(.platform-input .el-input__wrapper) {
+  background: #f5f7fa;
+  border: 1px solid #e4e7ed;
   border-radius: 10px;
   box-shadow: none;
-  padding-left: 38px;
-  transition: border-color 0.3s, box-shadow 0.3s, background 0.3s;
+  padding-left: 36px;
+  transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
 }
-.login-form :deep(.glass-input .el-input__wrapper:hover),
-.login-form :deep(.glass-input .el-input__wrapper.is-focus) {
-  background: rgba(56,189,248,0.055);
-  border-color: rgba(56,189,248,0.48);
-  box-shadow: 0 0 0 3px rgba(56,189,248,0.1), inset 0 0 10px rgba(56,189,248,0.04);
+.login-form :deep(.platform-input .el-input__wrapper:hover),
+.login-form :deep(.platform-input .el-input__wrapper.is-focus) {
+  background: #fff;
+  border-color: #409eff;
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.12);
 }
-.login-form :deep(.glass-input .el-input__inner) {
-  color: #e0f2fe;
+.login-form :deep(.platform-input .el-input__inner) {
+  color: #1f2d3d;
   font-size: 14px;
   height: 44px;
-  background: transparent;
 }
-.login-form :deep(.glass-input .el-input__inner::placeholder) {
-  color: rgba(148,163,184,0.45);
+.login-form :deep(.platform-input .el-input__inner::placeholder) {
+  color: #a8abb2;
 }
 .login-form :deep(.el-input__password) {
-  color: rgba(56,189,248,0.6);
+  color: #909399;
 }
 
-/* ── 提交按钮 ── */
 .submit-btn {
   position: relative;
   width: 100%;
-  height: 48px;
-  margin-top: 8px;
+  height: 46px;
+  margin-top: 6px;
   border: none;
   border-radius: 10px;
   cursor: pointer;
   overflow: hidden;
-  background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
+  background: linear-gradient(135deg, #1f6feb 0%, #409eff 100%);
   color: #fff;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: 6px;
-  box-shadow: 0 4px 22px rgba(14,165,233,0.38), 0 0 44px rgba(99,102,241,0.22);
-  transition: transform 0.2s, box-shadow 0.3s;
+  box-shadow: 0 6px 18px rgba(31, 111, 235, 0.35);
+  transition: transform 0.2s, box-shadow 0.25s;
 }
 .submit-btn:not(:disabled):hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 32px rgba(14,165,233,0.48), 0 0 60px rgba(99,102,241,0.32);
+  box-shadow: 0 8px 24px rgba(31, 111, 235, 0.45);
 }
 .submit-btn:active { transform: translateY(0); }
-.submit-btn:disabled { cursor: not-allowed; opacity: 0.7; }
+.submit-btn:disabled { cursor: not-allowed; opacity: 0.75; }
 
 .btn-shine {
   position: absolute;
-  top: 0; left: -80%;
-  width: 55%; height: 100%;
-  background: linear-gradient(90deg,transparent,rgba(255,255,255,0.22),transparent);
+  top: 0;
+  left: -80%;
+  width: 55%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
   transform: skewX(-20deg);
   animation: shine 4.5s ease-in-out infinite;
 }
 @keyframes shine {
-  0%   { left:-80%; opacity:0; }
-  15%  { opacity:1; }
-  40%  { left:140%; opacity:0; }
-  100% { left:140%; opacity:0; }
+  0% { left: -80%; opacity: 0; }
+  15% { opacity: 1; }
+  40% { left: 140%; opacity: 0; }
+  100% { left: 140%; opacity: 0; }
 }
 
 .btn-spinner {
   display: inline-block;
-  width: 20px; height: 20px;
-  border: 2px solid rgba(255,255,255,0.28);
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.65s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── 提示 ── */
 .login-tip {
-  margin-top: 18px;
+  margin-top: 16px;
   text-align: center;
-  font-size: 11px;
-  color: rgba(100,116,139,0.75);
+  font-size: 12px;
+  color: #909399;
 }
+.tip-sep { margin: 0 6px; opacity: 0.5; }
 .tip-key {
-  font-family: 'Courier New', monospace;
-  color: rgba(56,189,248,0.6);
-  background: rgba(56,189,248,0.07);
+  font-family: Consolas, "Courier New", monospace;
+  color: #1f6feb;
+  background: #ecf5ff;
   padding: 1px 6px;
   border-radius: 4px;
-  border: 1px solid rgba(56,189,248,0.14);
+  border: 1px solid #d9ecff;
+}
+
+@media (max-width: 480px) {
+  .hero-band { padding: 18px 16px; }
+  .card-body { padding: 16px; }
+  .brand-name { font-size: 18px; }
 }
 </style>

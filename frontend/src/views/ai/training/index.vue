@@ -54,7 +54,17 @@
 
       <!-- ── 数据标注 ── -->
       <el-tab-pane label="数据标注" name="annotate">
-        <AnnotatePanel ref="annotateRef" :initial-dataset-id="annotateDatasetId" />
+        <el-tabs v-model="annotateSubTab" type="card" class="annotate-sub-tabs">
+          <el-tab-pane label="在线标注" name="canvas">
+            <AnnotatePanel ref="annotateRef" :initial-dataset-id="annotateDatasetId" />
+          </el-tab-pane>
+          <el-tab-pane label="质量检测" name="quality">
+            <QualityPanel ref="qualityRef" :initial-dataset-id="annotateDatasetId" />
+          </el-tab-pane>
+          <el-tab-pane label="格式转换" name="convert">
+            <ConvertPanel ref="convertRef" :initial-dataset-id="annotateDatasetId" />
+          </el-tab-pane>
+        </el-tabs>
       </el-tab-pane>
 
       <!-- ── 训练任务 ── -->
@@ -529,6 +539,13 @@
         </el-table>
       </div>
     </el-dialog>
+
+    <div class="doc-links">
+      <el-link :href="ANNOTATION_DOC_URL" target="_blank" type="primary" :underline="false">
+        <el-icon class="doc-link-icon"><Document /></el-icon>
+        数据标注功能说明
+      </el-link>
+    </div>
   </div>
 </template>
 
@@ -538,9 +555,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Edit, Delete, Upload, Document, VideoCamera } from '@element-plus/icons-vue'
 import { trainingApi } from '../../../api/ai'
 import AnnotatePanel from './annotate.vue'
+import QualityPanel from './quality.vue'
+import ConvertPanel from './convert.vue'
+
+const ANNOTATION_DOC_URL = 'https://github.com/5758703/CV_PythonVue_TigerPro/blob/main/docs/数据标注功能说明.md'
 
 const activeTab = ref('dataset')
+const annotateSubTab = ref('canvas')
 const annotateRef = ref(null)
+const qualityRef = ref(null)
+const convertRef = ref(null)
 const annotateDatasetId = ref(null)
 
 const formatsLoading = ref(false)
@@ -771,7 +795,10 @@ async function submitExtract() {
     loadDatasets()
     annotateDatasetId.value = extractForm.datasetId
     activeTab.value = 'annotate'
+    annotateSubTab.value = 'canvas'
     annotateRef.value?.setDatasetId?.(extractForm.datasetId)
+    qualityRef.value?.setDatasetId?.(extractForm.datasetId)
+    convertRef.value?.setDatasetId?.(extractForm.datasetId)
   } catch (e) {
     ElMessage.error(e.message || '抽帧失败')
   } finally {
@@ -786,7 +813,10 @@ function openAnnotate(row) {
   }
   annotateDatasetId.value = row.id
   activeTab.value = 'annotate'
+  annotateSubTab.value = 'canvas'
   annotateRef.value?.setDatasetId?.(row.id)
+  qualityRef.value?.setDatasetId?.(row.id)
+  convertRef.value?.setDatasetId?.(row.id)
 }
 
 async function removeDs(row) {
@@ -1394,6 +1424,9 @@ onMounted(() => {
 }
 
 .mt12 { margin-top: 12px; }
+.doc-links { margin-top: 16px; font-size: 13px; text-align: center; }
+.doc-link-icon { vertical-align: -2px; margin-right: 4px; }
+.annotate-sub-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .workflow-alert { margin-bottom: 12px; }
 .field-hint-inline { font-size: 12px; color: #909399; margin-left: 8px; }
 .preview-desc { margin-bottom: 8px; }

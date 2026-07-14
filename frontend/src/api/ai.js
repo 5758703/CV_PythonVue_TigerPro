@@ -207,6 +207,11 @@ export const trainingApi = {
     request.put(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`, data),
   clearAnnotateLabels: (id, stem) =>
     request.delete(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`),
+  analyzeQuality: (id, data) =>
+    request.post(`/ai/training/datasets/${id}/quality/analyze`, data, { timeout: 0 }),
+  convertTypes: () => request.get('/ai/training/datasets/convert/types'),
+  convertDataset: (id, data) =>
+    request.post(`/ai/training/datasets/${id}/convert`, data, { timeout: 0 }),
   // 训练任务
   listJobs: (params) => request.get('/ai/training/jobs', { params }),
   getJob: (id) => request.get(`/ai/training/jobs/${id}`),

@@ -50,8 +50,21 @@
     </el-card>
 
     <el-card v-if="mode === 'video' && previewUrl" shadow="never" class="cfg-card">
-      <div class="preview-title">原视频预览</div>
-      <video :src="previewUrl" controls class="player" />
+      <div class="preview-header">
+        <div class="preview-title">原视频预览</div>
+        <div class="video-rotate-bar">
+          <span class="rotate-label">旋转</span>
+          <el-button-group size="small">
+            <el-button :icon="RefreshLeft" @click="rotatePreview(-90)">左转 90°</el-button>
+            <el-button :icon="RefreshRight" @click="rotatePreview(90)">右转 90°</el-button>
+            <el-button :disabled="!previewRotation" @click="previewRotation = 0">重置</el-button>
+          </el-button-group>
+          <el-tag v-if="previewRotation" size="small" type="info" effect="plain">{{ previewRotation }}°</el-tag>
+        </div>
+      </div>
+      <div class="video-wrap">
+        <video :src="previewUrl" controls class="player" :style="videoRotateStyle(previewRotation)" />
+      </div>
     </el-card>
 
     <el-card shadow="never">
@@ -91,11 +104,24 @@
 
       <!-- 视频结果 -->
       <div v-else-if="mode === 'video' && resultUrl">
-        <div class="res-title">
-          姿态视频结果
+        <div class="preview-header">
+          <div class="res-title">姿态视频结果</div>
+          <div class="video-rotate-bar">
+            <span class="rotate-label">旋转</span>
+            <el-button-group size="small">
+              <el-button :icon="RefreshLeft" @click="rotateOutput(-90)">左转 90°</el-button>
+              <el-button :icon="RefreshRight" @click="rotateOutput(90)">右转 90°</el-button>
+              <el-button :disabled="!outputRotation" @click="outputRotation = 0">重置</el-button>
+            </el-button-group>
+            <el-tag v-if="outputRotation" size="small" type="info" effect="plain">{{ outputRotation }}°</el-tag>
+          </div>
+        </div>
+        <div class="video-wrap">
+          <video :src="resultUrl" controls class="player" :style="videoRotateStyle(outputRotation)" />
+        </div>
+        <div class="res-actions">
           <el-button link type="primary" :icon="Download" @click="downloadVideo">下载视频</el-button>
         </div>
-        <video :src="resultUrl" controls class="player" />
         <div class="stats">
           <el-tag type="success" effect="dark">帧数：{{ stats.frames }}</el-tag>
           <el-tag type="warning" effect="dark">累计人体数：{{ stats.totalPersons }}</el-tag>
@@ -108,8 +134,18 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, VideoPlay, Refresh, Download } from '@element-plus/icons-vue'
+import { UploadFilled, VideoPlay, Refresh, Download, RefreshLeft, RefreshRight } from '@element-plus/icons-vue'
 import { modelApi } from '../../../api/ai'
+
+const normalizeRotation = (deg) => ((deg % 360) + 360) % 360
+const isPortraitRotation = (deg) => deg === 90 || deg === 270
+const videoRotateStyle = (deg) => ({
+  transform: deg ? `rotate(${deg}deg)` : undefined,
+  transformOrigin: 'center center',
+  transition: 'transform 0.25s ease',
+  maxWidth: isPortraitRotation(deg) ? '520px' : '100%',
+  maxHeight: isPortraitRotation(deg) ? '80vh' : '480px',
+})
 
 const mode = ref('image')
 const modelOptions = ref([])
@@ -118,6 +154,11 @@ const category = ref('')
 const conf = ref(0.25)
 const file = ref(null)
 const previewUrl = ref('')   // 视频模式：选中视频的原视频回放 URL
+const previewRotation = ref(0)
+const outputRotation = ref(0)
+
+const rotatePreview = (delta) => { previewRotation.value = normalizeRotation(previewRotation.value + delta) }
+const rotateOutput = (delta) => { outputRotation.value = normalizeRotation(outputRotation.value + delta) }
 
 const running = ref(false)
 const processed = ref(0)
@@ -206,6 +247,8 @@ const onPick = (uploadFile) => {
   file.value = raw
   resultImg.value = ''
   clearVideoOut()
+  previewRotation.value = 0
+  outputRotation.value = 0
   if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
   if (!wantImage) previewUrl.value = URL.createObjectURL(raw)
 }
@@ -238,6 +281,7 @@ const runVideo = async () => {
   running.value = true
   processed.value = 0
   total.value = 0
+  outputRotation.value = 0
   clearVideoOut()
   try {
     const fd = new FormData()
@@ -307,6 +351,8 @@ const clearAll = () => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
   file.value = null
+  previewRotation.value = 0
+  outputRotation.value = 0
   resultImg.value = ''
   poseCount.value = 0
   keypointCount.value = 17
@@ -462,9 +508,32 @@ onBeforeUnmount(() => {
 .progress-box { padding: 22px 4px; }
 .progress-title { font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
 .res-title { display: flex; align-items: center; gap: 12px; font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
-.preview-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; }
+.preview-title { font-weight: 600; color: #3a4a63; }
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.video-rotate-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rotate-label { font-size: 13px; color: #909399; }
+.res-actions { margin-bottom: 10px; }
+.video-wrap {
+  display: flex;
+  justify-content: center;
+  background: #0c1733;
+  border-radius: 8px;
+  padding: 8px;
+}
 .result-img { max-width: 100%; max-height: 560px; border: 1px solid #ebeef5; border-radius: 6px; }
-.player { width: 100%; max-height: 480px; background: #000; border-radius: 6px; }
+.player { max-width: 100%; max-height: 480px; background: #000; border-radius: 6px; object-fit: contain; }
 .stats { display: flex; gap: 10px; margin-top: 12px; }
 .cam-wrap { margin-top: 8px; }
 .cam-stage { position: relative; background: #0c1733; border-radius: 8px; aspect-ratio: 16/9; overflow: hidden; }

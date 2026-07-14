@@ -49,9 +49,20 @@
     </el-card>
 
     <el-card v-if="previewUrl" shadow="never" class="cfg-card">
-      <div class="preview-title">原视频预览</div>
+      <div class="preview-header">
+        <div class="preview-title">原视频预览</div>
+        <div class="video-rotate-bar">
+          <span class="rotate-label">旋转</span>
+          <el-button-group size="small">
+            <el-button :icon="RefreshLeft" @click="rotatePreview(-90)">左转 90°</el-button>
+            <el-button :icon="RefreshRight" @click="rotatePreview(90)">右转 90°</el-button>
+            <el-button :disabled="!previewRotation" @click="previewRotation = 0">重置</el-button>
+          </el-button-group>
+          <el-tag v-if="previewRotation" size="small" type="info" effect="plain">{{ previewRotation }}°</el-tag>
+        </div>
+      </div>
       <div class="video-wrap">
-        <video :src="previewUrl" controls class="result-video"></video>
+        <video :src="previewUrl" controls class="result-video" :style="videoRotateStyle(previewRotation)" />
       </div>
     </el-card>
 
@@ -65,8 +76,20 @@
       <el-empty v-else-if="!result" description="选择模型与视频后开始检测" />
 
       <div v-else>
+        <div class="preview-header">
+          <div class="preview-title">检测结果视频</div>
+          <div class="video-rotate-bar">
+            <span class="rotate-label">旋转</span>
+            <el-button-group size="small">
+              <el-button :icon="RefreshLeft" @click="rotateOutput(-90)">左转 90°</el-button>
+              <el-button :icon="RefreshRight" @click="rotateOutput(90)">右转 90°</el-button>
+              <el-button :disabled="!outputRotation" @click="outputRotation = 0">重置</el-button>
+            </el-button-group>
+            <el-tag v-if="outputRotation" size="small" type="info" effect="plain">{{ outputRotation }}°</el-tag>
+          </div>
+        </div>
         <div class="video-wrap">
-          <video v-if="outputUrl" :src="outputUrl" controls class="result-video"></video>
+          <video v-if="outputUrl" :src="outputUrl" controls class="result-video" :style="videoRotateStyle(outputRotation)" />
         </div>
 
         <div class="stat-row">
@@ -102,9 +125,19 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, VideoPlay, VideoCamera, Refresh, Download } from '@element-plus/icons-vue'
+import { UploadFilled, VideoPlay, VideoCamera, Refresh, Download, RefreshLeft, RefreshRight } from '@element-plus/icons-vue'
 
 import { modelApi } from '../../../api/ai'
+
+const normalizeRotation = (deg) => ((deg % 360) + 360) % 360
+const isPortraitRotation = (deg) => deg === 90 || deg === 270
+const videoRotateStyle = (deg) => ({
+  transform: deg ? `rotate(${deg}deg)` : undefined,
+  transformOrigin: 'center center',
+  transition: 'transform 0.25s ease',
+  maxWidth: isPortraitRotation(deg) ? '520px' : '100%',
+  maxHeight: isPortraitRotation(deg) ? '80vh' : '520px',
+})
 
 const modelOptions = ref([])
 const modelId = ref(null)
@@ -114,6 +147,11 @@ const file = ref(null)
 const fileName = ref('')
 const videoInfo = ref(null)
 const previewUrl = ref('')   // 选中视频的原视频回放 URL
+const previewRotation = ref(0)
+const outputRotation = ref(0)
+
+const rotatePreview = (delta) => { previewRotation.value = normalizeRotation(previewRotation.value + delta) }
+const rotateOutput = (delta) => { outputRotation.value = normalizeRotation(outputRotation.value + delta) }
 
 const detecting = ref(false)
 const result = ref(null)
@@ -196,6 +234,8 @@ const onPick = (uploadFile) => {
   videoInfo.value = null
   clearOutput()
   result.value = null
+  previewRotation.value = 0
+  outputRotation.value = 0
   // 原视频回放 + 浏览器端读取视频元信息（时长/分辨率），复用同一 objectURL
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = URL.createObjectURL(raw)
@@ -220,6 +260,7 @@ const detect = async () => {
   detecting.value = true
   clearOutput()
   result.value = null
+  outputRotation.value = 0
   processed.value = 0
   total.value = 0
   startTime = Date.now()
@@ -264,6 +305,8 @@ const clearAll = () => {
   file.value = null
   fileName.value = ''
   videoInfo.value = null
+  previewRotation.value = 0
+  outputRotation.value = 0
   result.value = null
   detecting.value = false
 }
@@ -303,7 +346,24 @@ onBeforeUnmount(() => {
 .preview-title {
   font-weight: 600;
   color: #3a4a63;
+}
+.preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 10px;
+}
+.video-rotate-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rotate-label {
+  font-size: 13px;
+  color: #909399;
 }
 .progress-box {
   padding: 28px 8px;
@@ -329,6 +389,7 @@ onBeforeUnmount(() => {
   max-width: 100%;
   max-height: 520px;
   border-radius: 6px;
+  object-fit: contain;
 }
 .stat-row {
   display: flex;

@@ -629,6 +629,13 @@ def seed_ai_models():
         source_url="https://modelscope.cn/models/iic/SenseVoiceSmall-onnx",
         description="SenseVoice 量化 onnx 版（242MB，约 1/4 体积），CPU 更快。中/英/粤/日/韩。语音识别页使用。", status="0",
     ))
+    # 语音识别（Fun-ASR-Nano，通义 LLM-ASR 800M，中/英/日+方言，纯 CPU）
+    created |= _ensure_ai_model("fun-asr-nano", dict(
+        model_name="Fun-ASR-Nano 语音识别", category="语音识别",
+        task="automatic-speech-recognition", library="funasr-nano", version="v1",
+        source_url="https://modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
+        description="通义 Fun-ASR-Nano 端到端大模型(800M)，中/英/日及多方言口音，支持热词/歌词场景，纯 CPU 推理(funasr+model.py)。语音识别页使用。", status="0",
+    ))
     # 数字人合成（Linly-Talker/SadTalker，脚手架：生成需 GPU + SadTalker 运行环境）
     created |= _ensure_ai_model("linly-talker", dict(
         model_name="Linly-Talker 数字人", category="数字人",

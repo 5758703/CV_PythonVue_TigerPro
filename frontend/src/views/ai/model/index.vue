@@ -106,6 +106,7 @@
             <el-option label="mobilesam（MobileSAM 交互分割）" value="mobilesam" />
             <el-option label="rtmlib（RTMO/RTMPose ONNX）" value="rtmlib" />
             <el-option label="funasr（语音识别）" value="funasr" />
+            <el-option label="funasr-nano（Fun-ASR-Nano）" value="funasr-nano" />
             <el-option label="funasr-onnx（语音识别 onnx）" value="funasr-onnx" />
             <el-option label="sherpa-onnx（语音合成 onnx）" value="sherpa-onnx" />
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
@@ -290,6 +291,7 @@ const LIB_DEFAULT_TASK = {
   mobilesam: "interactive-segmentation",
   rtmlib: "pose-estimation",
   "funasr": "automatic-speech-recognition",
+  "funasr-nano": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",
   "sherpa-onnx": "text-to-speech",
   "vibevoice": "text-to-speech",

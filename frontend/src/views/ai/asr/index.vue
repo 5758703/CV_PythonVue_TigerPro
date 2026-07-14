@@ -17,6 +17,14 @@
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="识别语言" v-if="isNanoModel">
+          <el-select v-model="asrLanguage" style="width: 140px">
+            <el-option label="自动" value="auto" />
+            <el-option label="中文" value="中文" />
+            <el-option label="英文" value="英文" />
+            <el-option label="日文" value="日文" />
+          </el-select>
+        </el-form-item>
         <el-form-item>
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick" accept="audio/*">
             <el-button :icon="UploadFilled">选择音频</el-button>
@@ -37,7 +45,7 @@
         v-if="!modelOptions.length"
         type="warning"
         :closable="false"
-        title="暂无可用语音模型：请到「模型管理」新增 funasr 语音识别模型（如 SenseVoiceSmall）并拉取权重。"
+        title="暂无可用语音模型：请到「模型管理」拉取 SenseVoice / Paraformer / Fun-ASR-Nano 等语音识别模型。"
       />
     </el-card>
 
@@ -97,6 +105,11 @@ const fmtDuration = (s) => {
   return `${m}:${String(sec).padStart(2, '0')}`
 }
 
+const asrLanguage = ref('auto')
+
+const selectedModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
+const isNanoModel = computed(() => selectedModel.value?.library === 'funasr-nano')
+
 const categories = computed(() => [...new Set(modelOptions.value.map((m) => m.category).filter(Boolean))])
 const filteredModels = computed(() =>
   category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value
@@ -112,7 +125,7 @@ const PREFERRED_ASR_KEY = 'paraformer-zh'
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
   const rows = (res.data.rows || []).filter(
-    (m) => (m.library === 'funasr' || m.library === 'funasr-onnx' || m.library === 'transformers') &&
+    (m) => (m.library === 'funasr' || m.library === 'funasr-onnx' || m.library === 'funasr-nano' || m.library === 'transformers') &&
       m.task === 'automatic-speech-recognition' && m.filePath && m.status === '0'
   )
   rows.sort((a, b) => (b.modelKey === PREFERRED_ASR_KEY) - (a.modelKey === PREFERRED_ASR_KEY))
@@ -141,6 +154,7 @@ const run = async () => {
   try {
     const fd = new FormData()
     fd.append('file', file.value)
+    if (isNanoModel.value) fd.append('language', asrLanguage.value)
     const res = await modelApi.transcribe(modelId.value, fd)
     result.value = res.data
   } finally {
