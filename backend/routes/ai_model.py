@@ -568,6 +568,22 @@ def _fetch_roboflow(source_url, folder, sub):
     return f"models/{sub}/{fname}", total_size
 
 
+def _fetch_insightface_weight(m):
+    """拉取 InsightFace buffalo 套件到 uploads/insightface/models/<pack>。"""
+    from inference import ensure_insightface_pack
+
+    pack = (m.version or "").strip().lower()
+    if not pack.startswith("buffalo"):
+        key = (m.model_key or "").lower()
+        pack = "buffalo_l" if ("buffalo_l" in key or "buffalo-l" in key) else "buffalo_s"
+    root = os.path.join(current_app.config["UPLOAD_FOLDER"], "insightface")
+    _pack_dir, size = ensure_insightface_pack(root, pack)
+    # file_path 指向 insightface root；pack 名存在 version
+    if (m.version or "").strip().lower() != pack:
+        m.version = pack
+    return "insightface", size
+
+
 def _fetch_rtmlib_weight(folder, sub, model_key):
     """拉取 rtmlib ONNX SDK（RTMO 单文件；RTMPose/DWPose 写 manifest 并预热）。"""
     import requests
@@ -633,6 +649,8 @@ def fetch_weight(mid):
             rel, size = _fetch_rfdetr_weight(folder, sub, m.model_key)
         elif lib == "rtmlib":
             rel, size = _fetch_rtmlib_weight(folder, sub, m.model_key)
+        elif lib == "insightface":
+            rel, size = _fetch_insightface_weight(m)
         else:
             hub = _hub_of(m.source_url)
             if hub == "roboflow":

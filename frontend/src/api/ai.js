@@ -235,3 +235,22 @@ export const trainingApi = {
   downloadExportFile: (id, file) =>
     request.get(`/ai/training/jobs/${id}/download-export`, { params: { file }, responseType: 'blob', timeout: 0 }),
 }
+
+// ---------------- 人脸识别（InsightFace 1:N）
+export const faceApi = {
+  listPersons: (params) => request.get('/ai/face/persons', { params }),
+  getPerson: (id) => request.get(`/ai/face/persons/${id}`),
+  addPerson: (data) => request.post('/ai/face/persons', data),
+  updatePerson: (id, data) => request.put(`/ai/face/persons/${id}`, data),
+  removePerson: (id) => request.delete(`/ai/face/persons/${id}`),
+  enroll: (id, formData) =>
+    request.post(`/ai/face/persons/${id}/enroll`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  recognize: (formData) =>
+    request.post('/ai/face/recognize', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+}

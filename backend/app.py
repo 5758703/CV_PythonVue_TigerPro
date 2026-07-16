@@ -34,6 +34,8 @@ def create_app():
         return jsonify(code=401, message="登录已过期，请重新登录"), 401
 
     with app.app_context():
+        # 确保 ORM 模型（含人脸底库）在 create_all 前完成注册
+        import models  # noqa: F401
         db.create_all()
         _migrate(db)
         from seed import init_seed

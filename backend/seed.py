@@ -101,6 +101,7 @@ def _regroup_ai_menus():
         (202, 230, "/ai/image"), (203, 230, "/ai/video"), (204, 230, "/ai/camera"),
         (206, 230, "/ai/imgcls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
         (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
+        (274, 230, "/ai/face"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -319,6 +320,14 @@ def seed_ai_menus():
                     path="/ai/segment", component="ai/segment/index", icon="Crop",
                     order=12, grant_common=True)
     _ensure_ai_menu(2721, 272, "图像分割查询", "F", "ai:segment:query", grant_common=True)
+    # 人脸识别（视觉识别 230 下）
+    _ensure_ai_menu(274, 230, "人脸识别", "C", "ai:face:list",
+                    path="/ai/face", component="ai/face/index", icon="User",
+                    order=13, grant_common=True)
+    _ensure_ai_menu(2741, 274, "人脸识别查询", "F", "ai:face:query", grant_common=True)
+    _ensure_ai_menu(2742, 274, "人脸底库新增", "F", "ai:face:add")
+    _ensure_ai_menu(2743, 274, "人脸底库修改", "F", "ai:face:edit")
+    _ensure_ai_menu(2744, 274, "人脸底库删除", "F", "ai:face:remove")
     # 老库曾误写 WaterMelon（非 Element Plus 图标名），修正为 Pouring
     _m250 = Menu.query.get(250)
     if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
@@ -450,6 +459,45 @@ def _bind_local_rocket_detect_weight():
     if changed:
         db.session.commit()
     return changed
+
+
+def _bind_local_insightface():
+    """若 uploads/insightface/models/<pack> 已存在，绑定 file_path=insightface。"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.join(base, "uploads", "insightface")
+    mapping = (
+        ("insightface-buffalo-s", "buffalo_s"),
+        ("insightface-buffalo-l", "buffalo_l"),
+    )
+    any_changed = False
+    for key, pack in mapping:
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            continue
+        pack_dir = os.path.join(root, "models", pack)
+        size = 0
+        if os.path.isdir(pack_dir):
+            for r, _d, files in os.walk(pack_dir):
+                for f in files:
+                    size += os.path.getsize(os.path.join(r, f))
+        changed = False
+        if size > 0:
+            if m.file_path != "insightface":
+                m.file_path = "insightface"
+                changed = True
+            if m.file_size != size:
+                m.file_size = size
+                changed = True
+            if m.version != pack:
+                m.version = pack
+                changed = True
+            if m.status != "0":
+                m.status = "0"
+                changed = True
+        if changed:
+            db.session.commit()
+            any_changed = True
+    return any_changed
 
 
 def _purge_cosyvoice_models():
@@ -698,8 +746,24 @@ def seed_ai_models():
         source_url="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-ucoco_dw-ucoco_270e-256x192-c8b76419_20230728.zip",
         description="DWPose-M 全身 133 关键点（rtmlib Wholebody），含手/脸/脚。姿态估计页全身模式。", status="0",
     ))
+    # InsightFace 人脸识别（SCRFD + ArcFace；version=pack 名）
+    created |= _ensure_ai_model("insightface-buffalo-s", dict(
+        model_name="InsightFace Buffalo-S", category="人脸识别",
+        task="face-recognition", library="insightface", version="buffalo_s",
+        source_url="https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip",
+        description="InsightFace buffalo_s（轻量，CPU 友好）：SCRFD 检测 + MobileFace ArcFace。"
+                    "许可请参阅 InsightFace 仓库；人脸数据请合规留存。", status="0",
+    ))
+    created |= _ensure_ai_model("insightface-buffalo-l", dict(
+        model_name="InsightFace Buffalo-L", category="人脸识别",
+        task="face-recognition", library="insightface", version="buffalo_l",
+        source_url="https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
+        description="InsightFace buffalo_l（高精度）：SCRFD + ResNet50 ArcFace。"
+                    "建议 GPU/CUDA EP；许可与隐私合规同上。", status="0",
+    ))
     _bind_local_brain_tumor_weight()
     _bind_local_rocket_detect_weight()
+    _bind_local_insightface()
     return created
 
 

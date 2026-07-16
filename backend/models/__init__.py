@@ -241,10 +241,12 @@ class User(db.Model):
 from .ai_model import AiModel  # noqa: E402  AI 检测模型
 from .camera import Camera  # noqa: E402  摄像头
 from .training import TrainingDataset, TrainingJob  # noqa: E402  模型训练
+from .face import FacePerson, FaceEmbedding  # noqa: E402  人脸底库
 
 __all__ = [
     "db",
     "User", "Role", "Dept", "Job", "Menu", "AiModel", "Camera",
     "TrainingDataset", "TrainingJob",
+    "FacePerson", "FaceEmbedding",
     "user_role", "user_dept", "user_post", "role_menu", "user_menu",
 ]

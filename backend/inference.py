@@ -2876,3 +2876,140 @@ def paddle_ocr(det_dir, rec_dir, image_bytes):
         "width": w,
         "height": h,
     }
+
+
+# ---------------------------------------------------------------------------
+# InsightFace face recognition (detect + ArcFace embedding)
+# ---------------------------------------------------------------------------
+_face_cache = {}  # (root, pack, providers, det_size) -> FaceAnalysis
+
+
+def _face_providers():
+    """Prefer CUDA EP when available, else CPU."""
+    try:
+        import onnxruntime as ort
+        avail = ort.get_available_providers()
+        if "CUDAExecutionProvider" in avail:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    except Exception:  # noqa: BLE001
+        pass
+    return ["CPUExecutionProvider"]
+
+
+def _get_face_app(root_dir, pack_name="buffalo_s", det_size=(640, 640)):
+    """Cached FaceAnalysis; root_dir is insightface root (models/<pack> under it)."""
+    providers = _face_providers()
+    key = (os.path.abspath(root_dir), pack_name, ",".join(providers), det_size)
+    with _lock:
+        app = _face_cache.get(key)
+        if app is not None:
+            return app
+        from insightface.app import FaceAnalysis
+        os.makedirs(root_dir, exist_ok=True)
+        app = FaceAnalysis(name=pack_name, root=root_dir, providers=providers)
+        ctx_id = 0 if providers and providers[0].startswith("CUDA") else -1
+        app.prepare(ctx_id=ctx_id, det_size=det_size)
+        _face_cache[key] = app
+        return app
+
+
+def ensure_insightface_pack(root_dir, pack_name="buffalo_s"):
+    """Ensure pack exists under root/models/<pack>; return (pack_dir, size_bytes)."""
+    pack_dir = os.path.join(root_dir, "models", pack_name)
+    marker = os.path.join(pack_dir, "w600k_mbf.onnx")
+    alt = os.path.join(pack_dir, "w600k_r50.onnx")
+    if not (os.path.isfile(marker) or os.path.isfile(alt)):
+        _get_face_app(root_dir, pack_name)
+    total = 0
+    if os.path.isdir(pack_dir):
+        for r, _d, files in os.walk(pack_dir):
+            for f in files:
+                total += os.path.getsize(os.path.join(r, f))
+    return pack_dir, total
+
+
+def _decode_bgr(image_bytes):
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("cannot decode image")
+    return img
+
+
+def extract_face_embeddings(root_dir, pack_name, image_bytes, det_thresh=0.5):
+    """Extract face embeddings (L2-normalized) from image bytes."""
+    from services.face_gallery import l2_normalize
+
+    app = _get_face_app(root_dir, pack_name)
+    img = _decode_bgr(image_bytes)
+    faces = app.get(img)
+    out = []
+    for f in faces or []:
+        if float(getattr(f, "det_score", 1.0)) < float(det_thresh):
+            continue
+        emb = l2_normalize(np.asarray(f.embedding, dtype=np.float32))
+        bbox = [float(x) for x in f.bbox.tolist()]
+        out.append({
+            "embedding": emb,
+            "bbox": bbox,
+            "detScore": round(float(f.det_score), 4),
+        })
+    return out, img
+
+
+def recognize_faces(
+    root_dir,
+    pack_name,
+    model_key,
+    image_bytes,
+    threshold=0.4,
+    det_thresh=0.5,
+    draw=False,
+):
+    """1:N recognize; returns detections with bbox/name/score/matched."""
+    from services.face_gallery import match_embedding
+
+    faces, img = extract_face_embeddings(
+        root_dir, pack_name, image_bytes, det_thresh=det_thresh)
+    h, w = img.shape[:2]
+    detections = []
+    for face in faces:
+        m = match_embedding(face["embedding"], model_key, threshold=threshold)
+        detections.append({
+            "className": m["name"],
+            "classId": m["personId"] if m["personId"] is not None else -1,
+            "personId": m["personId"],
+            "name": m["name"],
+            "confidence": m["score"],
+            "score": m["score"],
+            "matched": m["matched"],
+            "detScore": face["detScore"],
+            "bbox": face["bbox"],
+        })
+
+    image_b64 = None
+    if draw and detections:
+        vis = img.copy()
+        for d in detections:
+            x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
+            color = (0, 200, 80) if d["matched"] else (0, 165, 255)
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+            label = f"{d['name']} {d['score']:.2f}"
+            cv2.putText(
+                vis, label, (x1, max(0, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA,
+            )
+        ok, buf = cv2.imencode(".jpg", vis)
+        if ok:
+            image_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "width": w,
+        "height": h,
+        "imageBase64": image_b64,
+        "threshold": float(threshold),
+        "providers": _face_providers(),
+    }
+

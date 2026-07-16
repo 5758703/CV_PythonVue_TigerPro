@@ -47,3 +47,5 @@ pytest==8.3.3
 voxcpm==2.0.3
 # PaddleOCR onnx 文字识别（RapidOCR 封装 PP-OCR det+rec，CPU）
 rapidocr_onnxruntime==1.4.4
+# InsightFace 人脸识别（SCRFD + ArcFace ONNX；CPU 用 onnxruntime，GPU 可另装 onnxruntime-gpu）
+insightface>=0.7.3

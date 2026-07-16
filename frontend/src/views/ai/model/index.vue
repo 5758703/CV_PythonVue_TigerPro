@@ -112,6 +112,7 @@
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
             <el-option label="voxcpm（语音合成/克隆/音色设计）" value="voxcpm" />
             <el-option label="rapidocr（PaddleOCR onnx）" value="rapidocr" />
+            <el-option label="insightface（人脸识别）" value="insightface" />
             <el-option label="linly（数字人）" value="linly" />
           </el-select>
         </el-form-item>
@@ -121,6 +122,7 @@
             <el-option label="实例分割 instance-segmentation" value="instance-segmentation" />
             <el-option label="交互分割 interactive-segmentation" value="interactive-segmentation" />
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
+            <el-option label="人脸识别 face-recognition" value="face-recognition" />
             <el-option label="图像分类 image-classification" value="image-classification" />
             <el-option label="文字识别 OCR" value="ocr" />
             <el-option label="文本检测 text-detection" value="text-detection" />
@@ -266,6 +268,7 @@ const TASK_LABELS = {
   "instance-segmentation": "实例分割",
   "interactive-segmentation": "交互分割",
   "pose-estimation": "姿态估计",
+  "face-recognition": "人脸识别",
   "image-classification": "图像分类",
   "ocr": "OCR(端到端)",
   "text-detection": "文本检测",
@@ -290,6 +293,7 @@ const LIB_DEFAULT_TASK = {
   rfdetr: "object-detection",
   mobilesam: "interactive-segmentation",
   rtmlib: "pose-estimation",
+  insightface: "face-recognition",
   "funasr": "automatic-speech-recognition",
   "funasr-nano": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",
