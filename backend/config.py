@@ -26,6 +26,7 @@ class Config:
 
     # 文件上传：模型权重等
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ALERT_RULES_DIR = os.path.join(BASE_DIR, "alert_rules")
     UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
     MODEL_FOLDER = os.path.join(UPLOAD_FOLDER, "models")
     THIRD_PARTY_VENDOR_FOLDER = os.path.join(MODEL_FOLDER, "third_party")  # vendored 推理代码（VibeVoice 等）

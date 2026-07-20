@@ -1124,9 +1124,14 @@ def seed_alert_rules():
     # 一次性：将旧种子「默认启用」对齐为「默认停用」（之后保留管理员手动设置）
     align_default_off = False
     try:
-        from flask import current_app
         import os
-        flag_path = os.path.join(current_app.instance_path or ".", ".alert_rules_default_off_v1")
+        from config import Config
+
+        flag_path = os.path.join(Config.ALERT_RULES_DIR, ".alert_rules_default_off_v1")
+        legacy_flag = os.path.join(os.path.dirname(Config.BASE_DIR), "instance", ".alert_rules_default_off_v1")
+        if not os.path.exists(flag_path) and os.path.exists(legacy_flag):
+            os.makedirs(Config.ALERT_RULES_DIR, exist_ok=True)
+            shutil.copy2(legacy_flag, flag_path)
         if not os.path.exists(flag_path):
             for fields in defaults:
                 row = AlertRule.query.filter_by(rule_key=fields["rule_key"]).first()
