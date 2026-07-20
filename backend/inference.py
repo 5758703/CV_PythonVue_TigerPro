@@ -9,6 +9,7 @@ import math
 import os
 import sys
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -267,6 +268,247 @@ def _refine_rocket_detect_detections(detections, img_w, img_h):
         })
 
     return others + flames + kept_bodies
+
+
+def _build_alert_rule_objs(alert_rules):
+    """将 API 传入的规则 dict 列表转为 evaluate_rules 可用的轻量对象。"""
+    objs = []
+    for rr in alert_rules or []:
+        class _RuleObj:  # noqa: N801
+            def __init__(self, d):
+                self.id = d.get("id")
+                self.rule_key = d.get("ruleKey")
+                self.name = d.get("name")
+                self.rule_type = d.get("ruleType")
+                self.severity = d.get("severity", "medium")
+                self.status = d.get("status", "0")
+                self._cfg = d.get("config") or {}
+
+            def config(self):
+                return self._cfg
+
+        objs.append(_RuleObj(rr))
+    return objs
+
+
+def _hex_to_bgr(hex_color, default=(0, 0, 255)):
+    """#RRGGBB -> OpenCV BGR tuple。"""
+    s = str(hex_color or "").strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        return default
+    try:
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        return (b, g, r)
+    except ValueError:
+        return default
+
+
+def _hex_to_rgba(hex_color, alpha=255, default=(255, 255, 255, 255)):
+    s = str(hex_color or "").strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        return default
+    try:
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        return (r, g, b, int(alpha))
+    except ValueError:
+        return default
+
+
+def _apply_alert_center_overlay(frame_bgr, style_or_kind, img_w, img_h):
+    """在画面中央绘制告警大图标与文字（样式来自规则 config.overlay，中文用 PIL）。
+
+    style_or_kind: 完整 overlay 样式 dict，或兼容旧值 'fire'/'crowd'。
+    """
+    from PIL import Image, ImageDraw
+    from services.alert_engine import resolve_overlay_style
+
+    if not style_or_kind:
+        return frame_bgr
+
+    if isinstance(style_or_kind, str):
+        # 兼容旧调用：仅传 fire/crowd
+        key = "fire-smoke" if style_or_kind == "fire" else (
+            "crowd-gathering" if style_or_kind == "crowd" else "generic"
+        )
+        style = resolve_overlay_style({"ruleKey": key, "name": key, "config": {}})
+    else:
+        style = dict(style_or_kind)
+
+    try:
+        wr = float(style.get("panelWidthRatio", 0.72))
+        hr = float(style.get("panelHeightRatio", 0.36))
+        opacity = float(style.get("opacity", 0.45))
+    except (TypeError, ValueError):
+        wr, hr, opacity = 0.72, 0.36, 0.45
+    wr = min(0.95, max(0.3, wr))
+    hr = min(0.8, max(0.18, hr))
+    opacity = min(0.85, max(0.15, opacity))
+
+    cx, cy = img_w // 2, img_h // 2
+    panel_w = int(img_w * wr)
+    panel_h = int(img_h * hr)
+    x1 = max(0, cx - panel_w // 2)
+    y1 = max(0, cy - panel_h // 2)
+    x2 = min(img_w - 1, x1 + panel_w)
+    y2 = min(img_h - 1, y1 + panel_h)
+
+    fill_bgr = _hex_to_bgr(style.get("fillColor"), (0, 0, 255))
+    border_bgr = _hex_to_bgr(style.get("borderColor"), fill_bgr)
+    text_rgba = _hex_to_rgba(style.get("textColor"), 255, (255, 255, 255, 255))
+    shadow_rgba = (0, 0, 0, 160) if sum(text_rgba[:3]) > 380 else (255, 255, 255, 140)
+    title_lines = list(style.get("titleLines") or [])
+    subtitle_lines = list(style.get("subtitleLines") or [])
+    show_triangle = bool(style.get("showTriangle", True))
+    tri_fill = _hex_to_bgr(style.get("triangleFill"), (255, 255, 255))
+    mark_bgr = _hex_to_bgr(style.get("triangleMark"), (0, 0, 200))
+    tri_border = (255, 255, 255) if sum(tri_fill) < 400 else (40, 40, 40)
+
+    out = frame_bgr.copy()
+    overlay = out.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), fill_bgr, thickness=-1)
+    out = cv2.addWeighted(overlay, opacity, out, 1.0 - opacity, 0)
+    cv2.rectangle(out, (x1, y1), (x2, y2), border_bgr, thickness=4)
+
+    icon_cy = y1 + int(panel_h * 0.28)
+    tri_r = max(28, int(min(panel_w, panel_h) * 0.13))
+    if show_triangle:
+        pts = np.array([
+            [cx, icon_cy - tri_r],
+            [cx - int(tri_r * 0.95), icon_cy + int(tri_r * 0.78)],
+            [cx + int(tri_r * 0.95), icon_cy + int(tri_r * 0.78)],
+        ], dtype=np.int32)
+        cv2.fillPoly(out, [pts], tri_fill, lineType=cv2.LINE_AA)
+        cv2.polylines(out, [pts], True, tri_border, 3, cv2.LINE_AA)
+        cv2.line(
+            out,
+            (cx, icon_cy - int(tri_r * 0.38)),
+            (cx, icon_cy + int(tri_r * 0.08)),
+            mark_bgr,
+            max(4, tri_r // 7),
+            cv2.LINE_AA,
+        )
+        cv2.circle(out, (cx, icon_cy + int(tri_r * 0.40)), max(4, tri_r // 10), mark_bgr, -1, cv2.LINE_AA)
+
+    all_lines = title_lines + subtitle_lines
+    if not all_lines:
+        all_lines = [str(style.get("ruleName") or "ALERT")]
+    font_main = _rocket_overlay_font(max(24, int(img_w * 0.040)))
+    font_sub = _rocket_overlay_font(max(20, int(img_w * 0.034)))
+    line_gap = max(8, int(img_w * 0.012))
+
+    pil = Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB)).convert("RGBA")
+    draw = ImageDraw.Draw(pil)
+    probe = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+
+    metrics = []
+    for i, line in enumerate(all_lines):
+        font = font_main if i < len(title_lines) or not title_lines else font_sub
+        if i < len(title_lines):
+            font = font_main
+        else:
+            font = font_sub
+        bb = probe.textbbox((0, 0), line, font=font)
+        metrics.append((line, font, bb[2] - bb[0], bb[3] - bb[1]))
+
+    text_block_h = sum(m[3] for m in metrics) + line_gap * max(0, len(metrics) - 1)
+    text_top = min(y2 - text_block_h - int(panel_h * 0.08), icon_cy + int(tri_r * 1.05))
+    ty = max(text_top, icon_cy + (int(tri_r * 0.82) if show_triangle else int(panel_h * 0.12)))
+    for line, font, tw, th in metrics:
+        tx = cx - tw // 2
+        draw.text((tx + 2, ty + 2), line, font=font, fill=shadow_rgba)
+        draw.text((tx, ty), line, font=font, fill=text_rgba)
+        ty += th + line_gap
+
+    return cv2.cvtColor(np.asarray(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
+
+
+def _video_alert_ctx(alert_rules, source_key, line=None):
+    """初始化视频逐帧告警上下文；无规则时返回 None。"""
+    if not alert_rules:
+        return None
+    return {
+        "rules": alert_rules,
+        "rule_objs": None,
+        "start_ts": None,
+        "triggered_frames": [],
+        "source_key": source_key or "video",
+        "max_person": 0,
+        "overlay_frames": 0,
+        "line": line,
+    }
+
+
+def _apply_frame_video_alerts(plotted, detections, ctx, frames, fps, *, line=None):
+    """对单帧应用告警叠加并累计统计。
+
+    line: 可选归一化警戒线，供 line_crossing 规则使用（追踪视频）。
+    """
+    if not ctx:
+        return plotted
+    import uuid
+    from services.alert_engine import active_overlay_style, count_persons, evaluate_rules
+
+    if ctx["rule_objs"] is None:
+        ctx["rule_objs"] = _build_alert_rule_objs(ctx["rules"])
+    if ctx["start_ts"] is None:
+        ctx["start_ts"] = time.time()
+
+    ctx["max_person"] = max(ctx["max_person"], count_persons(detections))
+
+    fh, fw = plotted.shape[:2]
+    frame_token = f"{ctx.get('source_key', 'video')}-{frames}-{uuid.uuid4().hex[:8]}"
+    alert_line = line if line is not None else ctx.get("line")
+    overlay_style = active_overlay_style(
+        ctx["rule_objs"],
+        detections,
+        video=True,
+        frame_width=fw,
+        frame_height=fh,
+        line=alert_line,
+        source_key=ctx["source_key"],
+        frame_token=frame_token,
+    )
+    if overlay_style:
+        plotted = _apply_alert_center_overlay(plotted, overlay_style, fw, fh)
+        ctx["overlay_frames"] += 1
+
+    now_ts = float(ctx["start_ts"]) + (frames / float(fps) if fps else 0.0)
+    triggered = evaluate_rules(
+        ctx["rule_objs"],
+        detections,
+        ctx["source_key"],
+        persist_event=None,
+        now_ts=now_ts,
+        frame_width=fw,
+        frame_height=fh,
+        line=alert_line,
+        frame_token=frame_token,
+    )
+    for t in triggered:
+        ctx["triggered_frames"].append({
+            "frame": frames,
+            "ruleKey": t.get("ruleKey"),
+            "title": t.get("title"),
+            "severity": t.get("severity"),
+        })
+    return plotted
+
+
+def _video_alert_stats(ctx):
+    """从告警上下文提取写入 stats 的字段。"""
+    if not ctx:
+        return {}
+    out = {
+        "maxPersonPerFrame": ctx["max_person"],
+        "alertOverlayFrames": ctx["overlay_frames"],
+    }
+    if ctx["triggered_frames"]:
+        out["alertTriggered"] = ctx["triggered_frames"]
+    return out
 
 
 def _rocket_overlay_font(size=18):
@@ -593,7 +835,18 @@ def detect_image_roboflow(abs_path, image_bytes, conf=0.25, draw=True, meta=None
     }
 
 
-def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, meta=None):
+def detect_video_roboflow(
+    abs_path,
+    src_path,
+    dst_path,
+    conf=0.25,
+    progress_cb=None,
+    meta=None,
+    *,
+    alert_rules=None,
+    alert_source_key=None,
+    alert_icon_duration_sec=2.0,
+):
     """Roboflow Universe 模型视频检测（逐帧 serverless 推理 + 画框）。"""
     meta = meta or load_roboflow_meta(abs_path)
     if not meta:
@@ -616,6 +869,7 @@ def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=N
     is_rocket = _is_rocket_tracking_model(model_id=model_id)
     tracker = _RocketTelemetryTracker(w, h, fps) if is_rocket else None
     speed_samples = []
+    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key)
     try:
         while True:
             ok, frame = cap.read()
@@ -632,6 +886,9 @@ def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=N
                     speed_samples.append(metrics["descent_speed"])
             else:
                 plotted = _draw_roboflow_detections(frame, detections)
+
+            plotted = _apply_frame_video_alerts(plotted, detections, alert_ctx, frames, fps)
+
             _write_bgr(writer, plotted, ew, eh)
             frames += 1
             if progress_cb:
@@ -649,6 +906,7 @@ def detect_video_roboflow(abs_path, src_path, dst_path, conf=0.25, progress_cb=N
         "width": ew,
         "height": eh,
     }
+    result.update(_video_alert_stats(alert_ctx))
     return _attach_rocket_telemetry_stats(result, speed_samples, is_rocket)
 
 
@@ -786,7 +1044,18 @@ def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
     }
 
 
-def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, model_key=None):
+def detect_video(
+    abs_path,
+    src_path,
+    dst_path,
+    conf=0.25,
+    progress_cb=None,
+    model_key=None,
+    *,
+    alert_rules=None,
+    alert_source_key=None,
+    alert_icon_duration_sec=2.0,
+):
     """逐帧检测视频，输出带框视频到 dst_path。
 
     progress_cb(processed, total) 每帧回调，用于上报进度。
@@ -795,7 +1064,10 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, mode
     meta = load_roboflow_meta(abs_path)
     if meta:
         return detect_video_roboflow(abs_path, src_path, dst_path, conf=conf,
-                                     progress_cb=progress_cb, meta=meta)
+                                     progress_cb=progress_cb, meta=meta,
+                                     alert_rules=alert_rules,
+                                     alert_source_key=alert_source_key,
+                                     alert_icon_duration_sec=alert_icon_duration_sec)
     model = _get_model(abs_path)
     class_names = _model_class_names(model)
     is_rocket = _is_rocket_tracking_model(model_key=model_key, class_names=class_names)
@@ -816,6 +1088,7 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, mode
     frames = 0
     tracker = _RocketTelemetryTracker(w, h, fps) if is_rocket else None
     speed_samples = []
+    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key)
     try:
         while True:
             ok, frame = cap.read()
@@ -825,6 +1098,7 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, mode
             if is_rocket:
                 detections = _yolo_result_to_detections(r)
                 detections = _refine_rocket_detect_detections(detections, w, h)
+                frame_dets_for_alert = detections
                 for d in detections:
                     name = d["className"]
                     class_counts[name] = class_counts.get(name, 0) + 1
@@ -833,14 +1107,26 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, mode
                 if metrics.get("valid"):
                     speed_samples.append(metrics["descent_speed"])
             else:
+                frame_dets_for_alert = []
                 if r.boxes is not None:
                     names = r.names
                     for b in r.boxes:
                         cid = int(b.cls[0])
                         name = _safe_class_name(names, cid)
+                        conf_i = float(b.conf[0]) if getattr(b, "conf", None) is not None else 0.0
+                        xyxy = [round(float(v), 1) for v in b.xyxy[0].tolist()] if getattr(b, "xyxy", None) is not None else [0, 0, 0, 0]
                         class_counts[name] = class_counts.get(name, 0) + 1
                         total_det += 1
+                        frame_dets_for_alert.append({
+                            "className": name,
+                            "classId": cid,
+                            "confidence": round(conf_i, 4),
+                            "bbox": xyxy,
+                        })
                 plotted = _safe_plot(r, frame)
+
+            plotted = _apply_frame_video_alerts(plotted, frame_dets_for_alert, alert_ctx, frames, fps)
+
             _write_bgr(writer, plotted, ew, eh)
             frames += 1
             if progress_cb:
@@ -858,6 +1144,7 @@ def detect_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None, mode
         "width": ew,
         "height": eh,
     }
+    result.update(_video_alert_stats(alert_ctx))
     return _attach_rocket_telemetry_stats(result, speed_samples, is_rocket)
 
 
@@ -1380,13 +1667,15 @@ def pose_video_rtmlib(model_key, abs_weight_path, src_path, dst_path, conf=0.25,
 
 
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
-                progress_cb=None):
+                progress_cb=None, alert_rules=None, alert_source_key=None):
     """YOLO + ByteTrack 逐帧追踪，输出带框+ID 视频。
 
     line: 归一化 [x1,y1,x2,y2]（0–1）或 None。非 None 时统计越线进/出。
+    alert_rules: 启用告警时传入规则 dict 列表（烧录中央叠加 + 触发统计）。
     返回统计：帧数 / 唯一目标数 / 各类别去重计数 / 越线 {in,out,total} 或 None。
     """
     model = _get_model(abs_path)
+    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key or "track-video", line=line)
 
     cap = None
     writer = None
@@ -1419,15 +1708,24 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 break
             r = model.track(frame, persist=True, tracker="bytetrack.yaml",
                             conf=conf, imgsz=imgsz, verbose=False)[0]
+            detections = []
             if r.boxes is not None and r.boxes.id is not None:
                 names = r.names
                 ids = r.boxes.id.int().tolist()
                 clss = r.boxes.cls.int().tolist()
+                confs = r.boxes.conf.cpu().tolist()
                 xyxy = r.boxes.xyxy.cpu().tolist()
-                for tid, cid, box in zip(ids, clss, xyxy):
+                for tid, cid, conf_v, box in zip(ids, clss, confs, xyxy):
                     seen_ids.add(tid)
                     name = names.get(cid, str(cid))
                     class_ids.setdefault(name, set()).add(tid)
+                    detections.append({
+                        "className": name,
+                        "classId": int(cid),
+                        "confidence": round(float(conf_v), 4),
+                        "bbox": [round(float(v), 1) for v in box],
+                        "trackId": int(tid),
+                    })
                     if px_line is not None:
                         cx = (box[0] + box[2]) / 2.0
                         cy = (box[1] + box[3]) / 2.0
@@ -1442,6 +1740,17 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                                     crossing["out"] += 1
                                 crossing["total"] = crossing["in"] + crossing["out"]
                         last_centroid[tid] = (cx, cy)
+            elif r.boxes is not None:
+                names = r.names
+                for b in r.boxes:
+                    cid = int(b.cls[0])
+                    detections.append({
+                        "className": names.get(cid, str(cid)),
+                        "classId": cid,
+                        "confidence": round(float(b.conf[0]), 4),
+                        "bbox": [round(float(v), 1) for v in b.xyxy[0].tolist()],
+                        "trackId": None,
+                    })
 
             annotated = r.plot()  # BGR，带框+ID
             if px_line is not None:
@@ -1451,8 +1760,11 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 cv2.putText(annotated, f"IN:{crossing['in']} OUT:{crossing['out']}",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
                             cv2.LINE_AA)
-            _write_bgr(writer, annotated, ew, eh)
             frames += 1
+            if alert_ctx:
+                annotated = _apply_frame_video_alerts(
+                    annotated, detections, alert_ctx, frames, fps, line=line)
+            _write_bgr(writer, annotated, ew, eh)
             if progress_cb:
                 progress_cb(frames, total)
     finally:
@@ -1461,7 +1773,7 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
         if writer is not None:
             writer.close()
 
-    return {
+    result = {
         "frames": frames,
         "totalFrames": total,
         "fps": round(float(fps), 2),
@@ -1471,6 +1783,8 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
         "classCounts": {name: len(idset) for name, idset in class_ids.items()},
         "crossing": crossing,
     }
+    result.update(_video_alert_stats(alert_ctx))
+    return result
 
 
 def track_frame(abs_path, image_bytes, conf=0.25, reset=False):
@@ -1598,7 +1912,8 @@ def detect_image_hf(model_dir, image_bytes, conf=0.25, draw=True, task="object-d
             "imageBase64": image_b64, "width": w, "height": h}
 
 
-def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detection", progress_cb=None):
+def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detection", progress_cb=None,
+                    *, alert_rules=None, alert_source_key=None):
     """transformers 目标检测逐帧处理视频。progress_cb(processed, total) 上报进度。"""
     from PIL import Image
     pipe = _get_img_pipeline(task, model_dir)
@@ -1614,6 +1929,7 @@ def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detec
     writer, ew, eh = _open_h264(dst_path, fps, w, h)
 
     class_counts, total_det, frames = {}, 0, 0
+    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key)
     try:
         while True:
             ok, frame = cap.read()
@@ -1625,6 +1941,7 @@ def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detec
                 class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
                 total_det += 1
             _draw_dets(frame, dets)
+            frame = _apply_frame_video_alerts(frame, dets, alert_ctx, frames, fps)
             _write_bgr(writer, frame, ew, eh)
             frames += 1
             if progress_cb:
@@ -1633,8 +1950,10 @@ def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detec
         cap.release()
         writer.close()
 
-    return {"frames": frames, "totalFrames": total, "totalDetections": total_det,
-            "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+    result = {"frames": frames, "totalFrames": total, "totalDetections": total_det,
+              "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+    result.update(_video_alert_stats(alert_ctx))
+    return result
 
 
 # ------------------------------------------------------------ RF-DETR 目标检测（Roboflow rfdetr 包）
@@ -1763,7 +2082,8 @@ def detect_image_rfdetr(abs_path, image_bytes, conf=0.25, draw=True, model_key="
             "imageBase64": image_b64, "width": w, "height": h}
 
 
-def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-detr-medium", progress_cb=None):
+def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-detr-medium", progress_cb=None,
+                        *, alert_rules=None, alert_source_key=None):
     """RF-DETR 逐帧视频检测。"""
     model, class_names = _get_rfdetr_model(abs_path, model_key)
     cap = cv2.VideoCapture(src_path)
@@ -1775,6 +2095,7 @@ def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-d
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     writer, ew, eh = _open_h264(dst_path, fps, w, h)
     class_counts, total_det, frames = {}, 0, 0
+    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key)
     try:
         while True:
             ok, frame = cap.read()
@@ -1787,6 +2108,7 @@ def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-d
                 class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
                 total_det += 1
             _draw_dets(frame, dets)
+            frame = _apply_frame_video_alerts(frame, dets, alert_ctx, frames, fps)
             _write_bgr(writer, frame, ew, eh)
             frames += 1
             if progress_cb:
@@ -1794,8 +2116,10 @@ def detect_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-d
     finally:
         cap.release()
         writer.close()
-    return {"frames": frames, "totalFrames": total, "totalDetections": total_det,
-            "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+    result = {"frames": frames, "totalFrames": total, "totalDetections": total_det,
+              "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+    result.update(_video_alert_stats(alert_ctx))
+    return result
 
 
 def _encode_mask_b64(mask):
@@ -1943,6 +2267,217 @@ def segment_video_rfdetr(abs_path, src_path, dst_path, conf=0.25, model_key="rf-
         writer.close()
     return {"frames": frames, "totalFrames": total, "totalDetections": total_det,
             "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+
+
+# ------------------------------------------------------------ Ultralytics / YOLOE 实例分割
+# YOLOE 开放词汇默认提示（COCO 80；可被请求 classes 覆盖）
+_DEFAULT_YOLOE_CLASSES = [
+    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck",
+    "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+    "backpack", "umbrella", "handbag", "tie", "suitcase",
+    "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+    "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
+    "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
+    "donut", "cake",
+    "chair", "couch", "potted plant", "bed", "dining table", "toilet",
+    "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "sink", "refrigerator",
+    "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush",
+]
+
+
+def _parse_prompt_classes(raw) -> list[str] | None:
+    """解析开放词汇类别列表；None/空表示使用默认。"""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        if s.startswith("["):
+            try:
+                raw = json.loads(s)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raw = [x.strip() for x in s.replace("，", ",").split(",") if x.strip()]
+        else:
+            raw = [x.strip() for x in s.replace("，", ",").split(",") if x.strip()]
+    if not isinstance(raw, (list, tuple)):
+        return None
+    out = []
+    seen = set()
+    for x in raw:
+        name = str(x).strip()
+        if name and name not in seen and name != " ":
+            seen.add(name)
+            out.append(name)
+    return out or None
+
+
+def _is_yoloe_weight(abs_path: str) -> bool:
+    return "yoloe" in os.path.basename(abs_path or "").lower()
+
+
+def _get_yoloe_model(abs_path):
+    """加载 YOLOE 权重（优先 YOLOE 类，失败回退 YOLO）。"""
+    cache_key = ("yoloe", abs_path)
+    mtime = os.path.getmtime(abs_path)
+    with _lock:
+        cached = _cache.get(cache_key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+        try:
+            from ultralytics import YOLOE  # 惰性导入
+            model = YOLOE(abs_path)
+        except Exception:  # noqa: BLE001
+            from ultralytics import YOLO
+            model = YOLO(abs_path)
+        _cache[cache_key] = (mtime, model)
+        return model
+
+
+def _ensure_yoloe_classes(model, classes: list[str]):
+    """设置开放词汇提示；相同列表不重复跑 CLIP。"""
+    names = list(classes)
+    prev = getattr(model, "_tiger_prompt_classes", None)
+    if prev == names:
+        return
+    if hasattr(model, "set_classes"):
+        model.set_classes(names)
+        model._tiger_prompt_classes = names
+
+
+def _ultralytics_masks_to_items(r, detections, orig_h, orig_w, include_mask=True):
+    """把 ultralytics Result.masks 写入 detections[].maskBase64。"""
+    if not include_mask or r.masks is None or not detections:
+        return
+    try:
+        data = r.masks.data
+        if data is None:
+            return
+        arr = data.cpu().numpy() if hasattr(data, "cpu") else np.asarray(data)
+    except Exception:  # noqa: BLE001
+        return
+    n = min(len(detections), len(arr))
+    for i in range(n):
+        m = arr[i]
+        if m.ndim > 2:
+            m = m.squeeze()
+        if m.shape[:2] != (orig_h, orig_w):
+            m = cv2.resize(m.astype(np.float32), (orig_w, orig_h),
+                           interpolation=cv2.INTER_NEAREST)
+        detections[i]["maskBase64"] = _encode_mask_b64(m > 0.5)
+
+
+def _ultralytics_boxes_to_detections(r, model) -> list[dict]:
+    names = getattr(r, "names", None) or getattr(model, "names", None) or {}
+    detections = []
+    if r.boxes is None:
+        return detections
+    for b in r.boxes:
+        cls_id = int(b.cls[0]) if getattr(b, "cls", None) is not None else -1
+        conf_v = float(b.conf[0]) if getattr(b, "conf", None) is not None else 0.0
+        xyxy = [round(float(v), 1) for v in b.xyxy[0].tolist()]
+        detections.append({
+            "className": _safe_class_name(names, cls_id),
+            "classId": cls_id,
+            "confidence": round(conf_v, 4),
+            "bbox": xyxy,
+        })
+    return detections
+
+
+def segment_image_ultralytics(abs_path, image_bytes, conf=0.25, draw=True, classes=None):
+    """Ultralytics / YOLOE 图片实例分割。
+
+    classes: 开放词汇文本提示列表；YOLOE 建议提供。未提供时使用默认 COCO 常用类。
+    """
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    h, w = img.shape[:2]
+
+    is_yoloe = _is_yoloe_weight(abs_path)
+    model = _get_yoloe_model(abs_path) if is_yoloe else _get_model(abs_path)
+    prompt = _parse_prompt_classes(classes) or (
+        list(_DEFAULT_YOLOE_CLASSES) if is_yoloe else None
+    )
+    if prompt and hasattr(model, "set_classes"):
+        _ensure_yoloe_classes(model, prompt)
+
+    results = model.predict(img, conf=conf, verbose=False)
+    r = results[0]
+    detections = _ultralytics_boxes_to_detections(r, model)
+    _ultralytics_masks_to_items(r, detections, h, w, include_mask=True)
+
+    image_b64 = None
+    if draw:
+        plotted = _safe_plot(r, fallback_frame=img)
+        if r.masks is None and any(d.get("maskBase64") for d in detections):
+            plotted = _blend_mask_detections(plotted, detections)
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+        "promptClasses": prompt,
+    }
+
+
+def segment_video_ultralytics(abs_path, src_path, dst_path, conf=0.25, classes=None,
+                              progress_cb=None):
+    """Ultralytics / YOLOE 逐帧视频实例分割。"""
+    is_yoloe = _is_yoloe_weight(abs_path)
+    model = _get_yoloe_model(abs_path) if is_yoloe else _get_model(abs_path)
+    prompt = _parse_prompt_classes(classes) or (
+        list(_DEFAULT_YOLOE_CLASSES) if is_yoloe else None
+    )
+    if prompt and hasattr(model, "set_classes"):
+        _ensure_yoloe_classes(model, prompt)
+
+    cap = cv2.VideoCapture(src_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频文件")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    writer, ew, eh = _open_h264(dst_path, fps, w, h)
+    class_counts, total_det, frames = {}, 0, 0
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            r = model.predict(frame, conf=conf, verbose=False)[0]
+            dets = _ultralytics_boxes_to_detections(r, model)
+            for d in dets:
+                class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
+                total_det += 1
+            plotted = _safe_plot(r, fallback_frame=frame)
+            _write_bgr(writer, plotted, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        cap.release()
+        writer.close()
+    return {
+        "frames": frames,
+        "totalFrames": total,
+        "totalDetections": total_det,
+        "classCounts": class_counts,
+        "fps": round(float(fps), 2),
+        "width": ew,
+        "height": eh,
+        "promptClasses": prompt,
+    }
 
 
 # ------------------------------------------------------------ MobileSAM 交互式分割

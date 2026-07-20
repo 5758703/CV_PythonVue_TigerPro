@@ -2,19 +2,20 @@
   <div class="segment-root">
     <el-tabs v-model="engine" @tab-change="onEngineChange">
       <el-tab-pane label="RF-DETR 实例分割" name="rfdetr" />
+      <el-tab-pane label="YOLOE 开放词汇分割" name="ultralytics" />
       <el-tab-pane label="MobileSAM 交互分割" name="mobilesam" />
     </el-tabs>
 
     <el-card shadow="never" class="cfg-card">
       <el-form :inline="true">
-        <el-form-item v-if="engine === 'rfdetr'" label="模式">
+        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics'" label="模式">
           <el-radio-group v-model="mode" @change="clearAll">
             <el-radio-button value="image">图片</el-radio-button>
             <el-radio-button value="video">视频</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="模型">
-          <el-select v-model="modelId" placeholder="选择分割模型" style="width: 240px">
+          <el-select v-model="modelId" placeholder="选择分割模型" style="width: 260px">
             <el-option v-for="m in filteredModels" :key="m.id"
                        :label="`${m.modelName}（${m.category || '未分类'}）`" :value="m.id" />
           </el-select>
@@ -22,15 +23,23 @@
         <el-form-item label="置信度">
           <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" style="width: 140px" />
         </el-form-item>
+        <el-form-item v-if="engine === 'ultralytics'" label="提示类别">
+          <el-input
+            v-model="promptClasses"
+            clearable
+            placeholder="留空=COCO常用类；如 person,car,dog"
+            style="width: 280px"
+          />
+        </el-form-item>
         <el-form-item v-if="engine === 'mobilesam'" label="SAM 模式">
           <el-radio-group v-model="samMode">
             <el-radio-button value="prompt">点击分割</el-radio-button>
             <el-radio-button value="auto">全自动</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="engine === 'rfdetr' || samMode === 'auto'">
+        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics' || samMode === 'auto'">
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick"
-                     :accept="mode === 'video' && engine === 'rfdetr' ? 'video/*' : 'image/*'">
+                     :accept="isVideoMode ? 'video/*' : 'image/*'">
             <el-button :icon="UploadFilled">{{ pickLabel }}</el-button>
           </el-upload>
         </el-form-item>
@@ -48,10 +57,10 @@
                      @click="clearPoints">清除标点</el-button>
         </el-form-item>
       </el-form>
-      <el-alert v-if="!filteredModels.length" type="warning" :closable="false"
-                :title="engine === 'rfdetr'
-                  ? '暂无 RF-DETR-Seg 模型：请到「模型管理」添加 task=instance-segmentation、library=rfdetr 并拉取权重。'
-                  : '暂无 MobileSAM 模型：请到「模型管理」添加 task=interactive-segmentation、library=mobilesam 并拉取权重。'" />
+      <el-alert v-if="!filteredModels.length" type="warning" :closable="false" :title="emptyModelTitle" />
+      <p v-if="engine === 'ultralytics'" class="hint">
+        YOLOE 支持文本提示类别（英文逗号分隔）。留空时使用 COCO 常用 80 类；自定义如 <code>person,hardhat,fire</code>。
+      </p>
       <p v-if="engine === 'mobilesam' && samMode === 'prompt'" class="hint">
         左键点击 = 前景点（保留区域），Shift+点击 = 背景点（排除区域），然后点「开始分割」。原图支持滚轮缩放与全屏。
       </p>
@@ -213,6 +222,7 @@ const samMode = ref('prompt')
 const modelOptions = ref([])
 const modelId = ref(null)
 const conf = ref(0.25)
+const promptClasses = ref('')
 const file = ref(null)
 const samFile = ref(null)
 
@@ -244,7 +254,7 @@ let originBlobUrl = null
 let resultBlobUrl = null
 let pollTimer = null
 
-const isVideoMode = computed(() => engine.value === 'rfdetr' && mode.value === 'video')
+const isVideoMode = computed(() => (engine.value === 'rfdetr' || engine.value === 'ultralytics') && mode.value === 'video')
 const isImageMode = computed(() => !isVideoMode.value)
 const isSamPrompt = computed(() => engine.value === 'mobilesam' && samMode.value === 'prompt')
 const hasContent = computed(() => !!(originImgUrl.value || previewUrl.value || resultImg.value || resultUrl.value))
@@ -254,8 +264,22 @@ const filteredModels = computed(() => {
     return modelOptions.value.filter(
       (m) => m.library === 'rfdetr' && m.task === 'instance-segmentation' && m.filePath && m.status === '0')
   }
+  if (engine.value === 'ultralytics') {
+    return modelOptions.value.filter(
+      (m) => m.library === 'ultralytics' && m.task === 'instance-segmentation' && m.filePath && m.status === '0')
+  }
   return modelOptions.value.filter(
     (m) => m.library === 'mobilesam' && m.task === 'interactive-segmentation' && m.filePath && m.status === '0')
+})
+
+const emptyModelTitle = computed(() => {
+  if (engine.value === 'rfdetr') {
+    return '暂无 RF-DETR-Seg 模型：请到「模型管理」添加 task=instance-segmentation、library=rfdetr 并拉取权重。'
+  }
+  if (engine.value === 'ultralytics') {
+    return '暂无 YOLOE / Ultralytics 分割模型：请确认种子 yoloe-26s-seg 已启用且本地权重存在。'
+  }
+  return '暂无 MobileSAM 模型：请到「模型管理」添加 task=interactive-segmentation、library=mobilesam 并拉取权重。'
 })
 
 const pickLabel = computed(() => {
@@ -478,6 +502,9 @@ const runImage = async () => {
     const src = isSamPrompt.value ? samFile.value : file.value
     fd.append('file', src)
     fd.append('conf', conf.value)
+    if (engine.value === 'ultralytics' && promptClasses.value.trim()) {
+      fd.append('classes', promptClasses.value.trim())
+    }
     if (engine.value === 'mobilesam') {
       fd.append('mode', samMode.value)
       if (samMode.value === 'prompt') {
@@ -508,6 +535,9 @@ const runVideo = async () => {
     const fd = new FormData()
     fd.append('file', file.value)
     fd.append('conf', conf.value)
+    if (engine.value === 'ultralytics' && promptClasses.value.trim()) {
+      fd.append('classes', promptClasses.value.trim())
+    }
     const res = await modelApi.segmentVideo(modelId.value, fd)
     const jobId = res.data.jobId
     pollTimer = setInterval(async () => {

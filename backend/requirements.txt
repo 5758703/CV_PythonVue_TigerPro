@@ -13,7 +13,11 @@ transformers>=5.1.0,<6.0.0
 # RF-DETR 实时目标检测（Roboflow/rf-detr-medium 等，COCO 80 类）
 rfdetr>=1.8.0
 # MobileSAM 交互式分割（CPU 可用，vit_t 约 40MB；import 名为 mobile_sam）
-mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git
+# 官方源：https://github.com/ChaoningZhang/MobileSAM
+# 国内镜像（AtomGit/GitCode，内容一致，便于国内 pip 安装）：
+mobile-sam @ git+https://gitcode.com/ChaoningZhang/MobileSAM.git
+# 若可直连 GitHub，可改回：
+# mobile-sam @ git+https://github.com/ChaoningZhang/MobileSAM.git
 # RTMO 姿态估计（rtmlib + onnxruntime，羽毛球分析等）
 rtmlib>=0.0.15
 onnxruntime>=1.17.0

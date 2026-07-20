@@ -44,11 +44,27 @@ def _ensure_dir(p):
     os.makedirs(p, exist_ok=True)
 
 
-def _abs_model_path(m):
+def _abs_model_path(m, library=None):
+    """解析本地权重路径。
+
+    ultralytics 必须传单文件（.pt/.onnx）；目录型仓库（如 HF 的 yolo26n-pose-ONNX）
+    从目录内挑选权重。rtmlib 可接受文件或目录。
+    """
     if not m or not m.file_path:
         return None
     p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
-    return p if os.path.exists(p) else None
+    if not os.path.exists(p):
+        return None
+    lib = (library or m.library or "ultralytics").lower()
+    if lib != "ultralytics":
+        return p
+    if os.path.isfile(p):
+        return p
+    if os.path.isdir(p):
+        # 与模型管理一致：目录内挑 .pt 优先的单文件权重
+        from routes.ai_model import _pick_local_weight
+        return _pick_local_weight(p)
+    return None
 
 
 def _job_dir(job_id):
@@ -74,7 +90,7 @@ def _save_temp_video(file):
 
 
 def _worker(job_id, pose_path, ball_path, src_path, out_dir, court_points, opts,
-            pose_library, model_key):
+            pose_library, model_key, net_points=None):
     def cb(processed, total):
         with _jobs_lock:
             j = _jobs.get(job_id)
@@ -87,6 +103,7 @@ def _worker(job_id, pose_path, ball_path, src_path, out_dir, court_points, opts,
         stats = analyze_badminton_video(
             pose_path, src_path, out_dir,
             court_points=court_points,
+            net_points=net_points,
             ball_model_path=ball_path,
             pose_library=pose_library,
             model_key=model_key,
@@ -186,7 +203,7 @@ def analyze():
     if pose_key.startswith("dwpose"):
         return jsonify(code=400, message="DWPose 全身模型不适用于羽毛球分析，请选 RTMO/RTMPose/YOLO"), 400
 
-    pose_path = _abs_model_path(pose_m)
+    pose_path = _abs_model_path(pose_m, pose_lib)
     if pose_lib == "ultralytics" and pose_path is None:
         return jsonify(code=400, message="姿态模型暂无本地权重，请先拉取"), 400
 
@@ -197,7 +214,7 @@ def analyze():
             ball_id = int(raw_ball)
             ball_m = AiModel.query.get(ball_id)
             if ball_m and (ball_m.library or "") == "ultralytics":
-                ball_path = _abs_model_path(ball_m)
+                ball_path = _abs_model_path(ball_m, "ultralytics")
         except (TypeError, ValueError):
             pass
 
@@ -209,10 +226,25 @@ def analyze():
     except (json.JSONDecodeError, ValueError, TypeError):
         return jsonify(code=400, message="请标注球场四个角点（courtPoints JSON）"), 400
 
+    net_pts = None
+    net_raw = request.form.get("netPoints")
+    if net_raw not in (None, ""):
+        try:
+            net_pts = json.loads(net_raw)
+            if not isinstance(net_pts, list) or len(net_pts) != 2:
+                raise ValueError("need 2 points")
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return jsonify(code=400, message="网线端点须为 2 个点（netPoints JSON：左端→右端）"), 400
+
     try:
         conf = float(request.form.get("conf", 0.25))
     except (TypeError, ValueError):
         conf = 0.25
+    try:
+        raw_bc = request.form.get("ballConf")
+        ball_conf = float(raw_bc) if raw_bc not in (None, "") else max(0.12, min(0.25, conf * 0.7))
+    except (TypeError, ValueError):
+        ball_conf = max(0.12, min(0.25, conf * 0.7))
 
     language = (request.form.get("language") or "zh").lower()
     if language not in ("zh", "en"):
@@ -220,6 +252,7 @@ def analyze():
 
     opts = {
         "conf": conf,
+        "ball_conf": ball_conf,
         "show_skeleton": _flag("showSkeleton", True),
         "show_trajectories": _flag("showTrajectories", True),
         "show_shuttle": _flag("showShuttle", True),
@@ -257,7 +290,7 @@ def analyze():
     threading.Thread(
         target=_worker,
         args=(job_id, pose_path, ball_path, src_path, out_dir, court_pts, opts,
-              pose_lib, pose_m.model_key or ""),
+              pose_lib, pose_m.model_key or "", net_pts),
         daemon=True,
     ).start()
 

@@ -58,7 +58,7 @@ class TrainingJob(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     job_name = db.Column(db.String(128), nullable=False)
-    status = db.Column(db.String(16), default="pending")       # pending/running/done/failed/cancelled
+    status = db.Column(db.String(16), default="pending")       # pending/running/cancelling/done/failed/cancelled
     framework = db.Column(db.String(32), default="ultralytics")
     base_model = db.Column(db.String(128), default="yolov8n.pt")
     dataset_id = db.Column(db.Integer, db.ForeignKey("training_dataset.id"), index=True)

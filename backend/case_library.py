@@ -89,7 +89,7 @@ CASES = [
         "title": "作业人员未佩戴安全帽",
         "scene": "工地/厂区检测到人员但缺少安全帽目标",
         "keywords": ["person", "人员", "未戴安全帽", "安全帽", "helmet"],
-        "match_classes": ["person", "head", "no-helmet"],
+        "match_classes": ["NO-Hardhat", "no-hardhat", "Person", "Hardhat"],
         "risk_level": "高",
         "suggestion": "立即提醒未佩戴安全帽人员撤离危险区域并补戴；"
                       "在入口设置安全帽佩戴检查岗；将该点位纳入高频巡检。",

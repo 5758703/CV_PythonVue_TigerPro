@@ -34,25 +34,55 @@
             <el-button :icon="UploadFilled">选择视频</el-button>
           </el-upload>
         </el-form-item>
-        <el-form-item v-if="mode==='file'">
-          <el-button type="primary" :icon="VideoPlay" :loading="running" :disabled="!modelId || !file" @click="run">开始追踪</el-button>
-          <el-button :icon="Refresh" @click="clearAll">清空</el-button>
+        <el-form-item v-if="mode==='file'" class="alert-action-item">
+          <div class="alert-action-row">
+            <el-button type="primary" :icon="VideoPlay" :loading="running" :disabled="!modelId || !file" @click="run">开始追踪</el-button>
+            <el-checkbox v-model="alertEnabled" :disabled="running" style="margin-left: 12px">启用告警</el-checkbox>
+            <el-alert
+              v-if="alertEnabled && allModels.length && filteredModels.length"
+              type="info"
+              :closable="false"
+              show-icon
+              class="alert-tip-inline"
+              title="总开关已开：仅「检测告警」页已启用规则会烧录叠加；单项开关请到检测告警页配置。"
+            />
+            <el-button :icon="Refresh" @click="clearAll" style="margin-left: 8px">清空</el-button>
+          </div>
         </el-form-item>
         <el-form-item v-if="mode==='camera'" label="摄像头">
           <el-select v-model="deviceId" placeholder="默认摄像头" style="width: 180px" :disabled="camRunning">
             <el-option v-for="d in devices" :key="d.deviceId" :label="d.label || `摄像头 ${d.idx}`" :value="d.deviceId" />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="mode==='camera'">
-          <el-button v-if="!camRunning" type="primary" :icon="VideoCamera" :disabled="!modelId" @click="camStart">开始</el-button>
-          <el-button v-else type="danger" :icon="SwitchButton" @click="camStop">停止</el-button>
-          <el-button v-if="camLine" link type="primary" @click="clearCamLine">清除线</el-button>
-          <el-button v-if="recBlobUrl" link type="primary" :icon="Download" @click="downloadRec">下载录制</el-button>
+        <el-form-item v-if="mode==='camera'" class="alert-action-item">
+          <div class="alert-action-row">
+            <el-button v-if="!camRunning" type="primary" :icon="VideoCamera" :disabled="!modelId" @click="camStart">开始</el-button>
+            <el-button v-else type="danger" :icon="SwitchButton" @click="camStop">停止</el-button>
+            <el-checkbox v-model="alertEnabled" :disabled="camRunning" style="margin-left: 12px">启用告警</el-checkbox>
+            <el-alert
+              v-if="alertEnabled && allModels.length && filteredModels.length"
+              type="info"
+              :closable="false"
+              show-icon
+              class="alert-tip-inline"
+              title="总开关已开：仅「检测告警」页中已启用的规则会生效；画警戒线后越线规则可触发。单项开关请到检测告警页配置。"
+            />
+            <el-button v-if="camLine" link type="primary" @click="clearCamLine">清除线</el-button>
+            <el-button v-if="recBlobUrl" link type="primary" :icon="Download" @click="downloadRec">下载录制</el-button>
+          </div>
         </el-form-item>
       </el-form>
-      <el-alert v-if="!modelOptions.length" type="warning" :closable="false"
+      <el-alert v-if="!allModels.length" type="warning" :closable="false"
                 title="暂无可用模型：目标追踪需 ultralytics（YOLO）目标检测模型，请到「模型管理」上传/拉取并启用。" />
-      <div v-else-if="mode==='file'" class="hint">越线计数（可选）：在下方首帧上点两点画一条计数线；不画则不统计越线。</div>
+      <el-alert
+        v-else-if="alertEnabled && !filteredModels.length"
+        type="warning"
+        :closable="false"
+        title="启用告警后无可用模型：请拉取 YOLO 目标检测权重（如 YOLO26 / PPE / 烟火）。"
+      />
+      <div v-else-if="mode==='file'" class="hint">
+        越线计数（可选）：在下方首帧点两点画线。
+      </div>
     </el-card>
 
     <el-card v-if="mode==='file' && previewUrl" shadow="never" class="cfg-card">
@@ -90,6 +120,12 @@
           <el-tag v-if="stats.crossing" type="warning" effect="dark">
             越线 进:{{ stats.crossing.in }} 出:{{ stats.crossing.out }} 净:{{ stats.crossing.in - stats.crossing.out }}
           </el-tag>
+          <el-tag v-if="stats.alertOverlayFrames" type="danger" effect="dark">
+            告警叠加 {{ stats.alertOverlayFrames }} 帧
+          </el-tag>
+          <el-tag v-if="stats.alertTriggered?.length" type="danger" effect="dark">
+            触发 {{ stats.alertTriggered.length }} 次
+          </el-tag>
         </div>
         <el-table :data="classRows" size="small" border class="cls-table">
           <el-table-column prop="name" label="类别" />
@@ -107,6 +143,7 @@
           <el-tag type="success" effect="dark">{{ camFps }} FPS</el-tag>
           <el-tag type="warning" effect="dark">目标 {{ camDets.length }}</el-tag>
           <el-tag v-if="camLine" type="danger" effect="dark">进{{ cross.in }} 出{{ cross.out }}</el-tag>
+          <el-tag v-if="alertEnabled && lastAlertTitle" type="danger" effect="dark">{{ lastAlertTitle }}</el-tag>
         </div>
       </div>
     </div>
@@ -114,18 +151,28 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ElMessage, ElNotification } from 'element-plus'
 import { UploadFilled, VideoPlay, Refresh, Download, VideoCamera, SwitchButton } from '@element-plus/icons-vue'
-import { modelApi } from '../../../api/ai'
+import { modelApi, alertApi } from '../../../api/ai'
+import {
+  filterWorkbenchModels,
+  ensureModelInList,
+  categoriesFromModels,
+} from '../../../utils/alertModels'
 
-const modelOptions = ref([])
+const ALERT_SOURCE_KEY = 'track-camera'
+
+const allModels = ref([])
 const modelId = ref(null)
 const category = ref('')
 const imgsz = ref(640)
 const conf = ref(0.25)
+const alertEnabled = ref(false)
 const file = ref(null)
 const previewUrl = ref('')   // 选中视频的原视频回放 URL
+const lastAlertTitle = ref('')
+const liveOverlay = ref(null)
 
 const frameCanvas = ref(null)
 const linePts = ref([])      // 像素点 [{x,y}...]（canvas 坐标）
@@ -160,20 +207,37 @@ const lastCentroid = {}
 const counted = new Set()
 const CAM_COLORS = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#9254de', '#13c2c2']
 
-const categories = computed(() => [...new Set(modelOptions.value.map((m) => m.category).filter(Boolean))])
+const categories = computed(() => categoriesFromModels(
+  filterWorkbenchModels(allModels.value, { alertEnabled: alertEnabled.value, forTrack: true }),
+))
 const filteredModels = computed(() =>
-  category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value)
+  filterWorkbenchModels(allModels.value, {
+    alertEnabled: alertEnabled.value,
+    forTrack: true,
+    category: category.value,
+  }),
+)
+
+const syncModelSelection = () => {
+  modelId.value = ensureModelInList(modelId.value, filteredModels.value)
+}
+const onCategoryChange = () => { syncModelSelection() }
+
+watch(alertEnabled, () => {
+  if (category.value && !categories.value.includes(category.value)) category.value = ''
+  syncModelSelection()
+})
+watch(filteredModels, () => { syncModelSelection() }, { immediate: true })
+
 const percent = computed(() => (total.value ? Math.min(100, Math.floor((processed.value / total.value) * 100)) : 0))
 const classRows = computed(() =>
   Object.entries(stats.value.classCounts || {}).map(([name, count]) => ({ name, count })))
 
-const onCategoryChange = () => { modelId.value = filteredModels.value[0]?.id || null }
-
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  modelOptions.value = (res.data.rows || []).filter(
+  allModels.value = (res.data.rows || []).filter(
     (m) => m.library === 'ultralytics' && m.task === 'object-detection' && m.filePath && m.status === '0')
-  if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
+  syncModelSelection()
 }
 
 const onPick = (uploadFile) => {
@@ -271,6 +335,7 @@ const run = async () => {
     fd.append('conf', conf.value)
     fd.append('imgsz', imgsz.value)
     if (line.value) fd.append('line', JSON.stringify(line.value))
+    fd.append('alertEnabled', alertEnabled.value ? '1' : '0')
     const res = await modelApi.trackVideo(modelId.value, fd)
     const jobId = res.data.jobId
     await poll(jobId)
@@ -322,6 +387,99 @@ const clearAll = () => {
   processed.value = 0
   total.value = 0
   running.value = false
+}
+
+const notifyAlert = (item) => {
+  const type = item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'info'
+  ElNotification({
+    title: item.title || item.ruleName || '检测告警',
+    message: item.message || '请现场核实',
+    type,
+    duration: item.severity === 'high' ? 0 : 8000,
+    position: 'top-right',
+  })
+  lastAlertTitle.value = item.title || item.ruleName || '告警'
+}
+
+const evaluateAlerts = async (detections, frameW, frameH) => {
+  if (!alertEnabled.value) {
+    liveOverlay.value = null
+    return
+  }
+  if (!detections?.length) {
+    liveOverlay.value = null
+    return
+  }
+  try {
+    const payload = {
+      detections,
+      sourceKey: ALERT_SOURCE_KEY,
+      sourceType: 'camera',
+      modelId: modelId.value,
+      persist: true,
+      frameWidth: frameW,
+      frameHeight: frameH,
+    }
+    if (camLine.value) payload.line = camLine.value
+    const res = await alertApi.evaluate(payload)
+    const list = res.data?.triggered || []
+    list.filter((t) => t.notify).forEach(notifyAlert)
+    liveOverlay.value = res.data?.overlay || null
+  } catch (_) {
+    /* 告警失败不阻断追踪 */
+  }
+}
+
+const drawAlertOverlay = (ctx, cv, style) => {
+  if (!style || style.enabled === false) return
+  const w = cv.width
+  const h = cv.height
+  const wr = Math.min(0.95, Math.max(0.3, Number(style.panelWidthRatio) || 0.72))
+  const hr = Math.min(0.8, Math.max(0.18, Number(style.panelHeightRatio) || 0.36))
+  const opacity = Math.min(0.85, Math.max(0.15, Number(style.opacity) || 0.45))
+  const pw = Math.round(w * wr)
+  const ph = Math.round(h * hr)
+  const x = Math.round((w - pw) / 2)
+  const y = Math.round((h - ph) / 2)
+  const cx = Math.round(w / 2)
+
+  ctx.save()
+  ctx.globalAlpha = opacity
+  ctx.fillStyle = style.fillColor || '#9254DE'
+  ctx.fillRect(x, y, pw, ph)
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = style.borderColor || style.fillColor || '#722ED1'
+  ctx.lineWidth = 3
+  ctx.strokeRect(x, y, pw, ph)
+
+  if (style.showTriangle !== false) {
+    const triR = Math.max(22, Math.min(pw, ph) * 0.12)
+    const icy = y + Math.round(ph * 0.28)
+    ctx.beginPath()
+    ctx.moveTo(cx, icy - triR)
+    ctx.lineTo(cx - triR * 0.95, icy + triR * 0.78)
+    ctx.lineTo(cx + triR * 0.95, icy + triR * 0.78)
+    ctx.closePath()
+    ctx.fillStyle = style.triangleFill || '#FFFFFF'
+    ctx.fill()
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+
+  const titles = style.titleLines || []
+  const subs = style.subtitleLines || []
+  const lines = [...titles, ...subs]
+  ctx.fillStyle = style.textColor || '#FFFFFF'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const startY = y + Math.round(ph * (style.showTriangle === false ? 0.35 : 0.58))
+  const step = Math.max(18, Math.round(ph * 0.14))
+  lines.forEach((ln, i) => {
+    ctx.font = `${i < titles.length ? 'bold ' : ''}${Math.max(14, Math.round(ph * 0.11))}px sans-serif`
+    ctx.fillText(String(ln), cx, startY + i * step)
+  })
+  ctx.restore()
 }
 
 // 摄像头模式方法
@@ -426,7 +584,8 @@ const camLoop = () => {
       const res = await modelApi.trackFrame(modelId.value, fd)
       camDets.value = res.data.detections
       updateCrossing(res.data.detections)
-      camDraw(res.data.detections)
+      await evaluateAlerts(res.data.detections, res.data.width || capCanvas.width, res.data.height || capCanvas.height)
+      camDraw(res.data.detections, liveOverlay.value)
       frameCount++
     } catch (e) { /* 单帧失败忽略 */ } finally {
       camBusy = false
@@ -456,7 +615,7 @@ const updateCrossing = (list) => {
   }
 }
 
-const camDraw = (list) => {
+const camDraw = (list, overlayStyle = null) => {
   const cv = camCanvas.value, ctx = cv.getContext('2d')
   ctx.clearRect(0, 0, cv.width, cv.height)
   ctx.drawImage(camVideo.value, 0, 0, cv.width, cv.height)  // 合成：底图+标注，供录制
@@ -477,9 +636,12 @@ const camDraw = (list) => {
     ctx.strokeStyle = '#ff1744'; ctx.lineWidth = 3
     ctx.beginPath(); ctx.moveTo(ln[0], ln[1]); ctx.lineTo(ln[2], ln[3]); ctx.stroke()
   }
+  if (alertEnabled.value && overlayStyle) {
+    drawAlertOverlay(ctx, cv, overlayStyle)
+  }
 }
 
-const camStop = () => {
+const camStop = async () => {
   camRunning.value = false
   if (fpsTimer) { clearInterval(fpsTimer); fpsTimer = null }
   if (recorder && recorder.state !== 'inactive') recorder.stop()
@@ -491,6 +653,11 @@ const camStop = () => {
     ctx.clearRect(0, 0, camCanvas.value.width, camCanvas.value.height)
   }
   camDets.value = []; camFps.value = 0
+  lastAlertTitle.value = ''
+  liveOverlay.value = null
+  try {
+    await alertApi.resetRuntime({ sourceKey: ALERT_SOURCE_KEY })
+  } catch (_) { /* ignore */ }
 }
 
 const downloadRec = () => {
@@ -514,6 +681,26 @@ onBeforeUnmount(() => {
 <style scoped>
 .cfg-card { margin-bottom: 12px; }
 .hint, .line-tip { font-size: 13px; color: #5a6b87; margin-top: 8px; }
+.alert-tip { margin-top: 8px; }
+.alert-action-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 0;
+}
+.alert-tip-inline {
+  flex: 1 1 320px;
+  width: auto;
+  margin: 0 0 0 12px;
+  padding: 5px 12px;
+}
+.alert-tip-inline :deep(.el-alert__content) {
+  padding: 0;
+}
+.alert-tip-inline :deep(.el-alert__title) {
+  font-size: 13px;
+  line-height: 1.4;
+}
 .preview-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; }
 .meta { margin-left: 10px; color: #67c23a; }
 .frame-box { margin-top: 10px; }

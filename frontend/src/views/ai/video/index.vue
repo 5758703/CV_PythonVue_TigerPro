@@ -25,9 +25,20 @@
             <el-button :icon="UploadFilled">选择视频</el-button>
           </el-upload>
         </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="VideoPlay" :loading="detecting" :disabled="!modelId || !file" @click="detect">开始检测</el-button>
-          <el-button :icon="Refresh" @click="clearAll">清空</el-button>
+        <el-form-item class="alert-action-item">
+          <div class="alert-action-row">
+            <el-button type="primary" :icon="VideoPlay" :loading="detecting" :disabled="!modelId || !file" @click="detect">开始检测</el-button>
+            <el-checkbox v-model="alertEnabled" :disabled="detecting" style="margin-left: 12px">启用告警</el-checkbox>
+            <el-alert
+              v-if="alertEnabled && allModels.length && filteredModels.length"
+              type="info"
+              :closable="false"
+              show-icon
+              class="alert-tip-inline"
+              title="总开关已开：仅「检测告警」页中已启用的规则会叠加到本视频；单项开关请到检测告警页配置。"
+            />
+            <el-button :icon="Refresh" @click="clearAll" style="margin-left: 8px">清空</el-button>
+          </div>
         </el-form-item>
       </el-form>
 
@@ -41,10 +52,16 @@
         </template>
       </div>
       <el-alert
-        v-if="!modelOptions.length"
+        v-if="!allModels.length"
         type="warning"
         :closable="false"
         title="暂无可用模型：请先到「模型管理」上传或拉取权重，并保持启用状态。"
+      />
+      <el-alert
+        v-else-if="alertEnabled && !filteredModels.length"
+        type="warning"
+        :closable="false"
+        title="启用告警后无可用模型：请选用 YOLO / RF-DETR / transformers 目标检测权重。"
       />
     </el-card>
 
@@ -98,6 +115,16 @@
           <el-statistic title="帧率(FPS)" :value="result.fps" />
           <el-statistic title="分辨率" :value="`${result.width}×${result.height}`" />
           <el-statistic
+            v-if="result.maxPersonPerFrame != null"
+            title="单帧最多人数"
+            :value="result.maxPersonPerFrame"
+          />
+          <el-statistic
+            v-if="result.alertOverlayFrames != null"
+            title="告警叠加帧数"
+            :value="result.alertOverlayFrames"
+          />
+          <el-statistic
             v-if="result.rocketTelemetry"
             title="平均下降速度"
             :value="result.rocketTelemetry.avgDescentSpeed"
@@ -123,11 +150,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, VideoPlay, VideoCamera, Refresh, Download, RefreshLeft, RefreshRight } from '@element-plus/icons-vue'
 
 import { modelApi } from '../../../api/ai'
+import {
+  filterWorkbenchModels,
+  ensureModelInList,
+  categoriesFromModels,
+  isAlertCapableModel,
+} from '../../../utils/alertModels'
 
 const normalizeRotation = (deg) => ((deg % 360) + 360) % 360
 const isPortraitRotation = (deg) => deg === 90 || deg === 270
@@ -139,10 +172,11 @@ const videoRotateStyle = (deg) => ({
   maxHeight: isPortraitRotation(deg) ? '80vh' : '520px',
 })
 
-const modelOptions = ref([])
+const allModels = ref([])
 const modelId = ref(null)
 const category = ref('')
 const conf = ref(0.25)
+const alertEnabled = ref(false)
 const file = ref(null)
 const fileName = ref('')
 const videoInfo = ref(null)
@@ -183,13 +217,28 @@ const fmtEta = (sec) => {
   return `${m} 分 ${s % 60} 秒`
 }
 
-const categories = computed(() => [...new Set(modelOptions.value.map((m) => m.category).filter(Boolean))])
+const categories = computed(() => categoriesFromModels(
+  filterWorkbenchModels(allModels.value, { alertEnabled: alertEnabled.value }),
+))
 const filteredModels = computed(() =>
-  category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value
+  filterWorkbenchModels(allModels.value, {
+    alertEnabled: alertEnabled.value,
+    category: category.value,
+  }),
 )
-const onCategoryChange = () => {
-  modelId.value = filteredModels.value[0]?.id || null
+const selectedModel = computed(() => allModels.value.find((m) => m.id === modelId.value) || null)
+const alertSupported = computed(() => isAlertCapableModel(selectedModel.value))
+
+const syncModelSelection = () => {
+  modelId.value = ensureModelInList(modelId.value, filteredModels.value)
 }
+const onCategoryChange = () => { syncModelSelection() }
+
+watch(alertEnabled, () => {
+  if (category.value && !categories.value.includes(category.value)) category.value = ''
+  syncModelSelection()
+})
+watch(filteredModels, () => { syncModelSelection() }, { immediate: true })
 
 const classRows = computed(() =>
   result.value
@@ -217,10 +266,10 @@ const fmtSize = (bytes) => {
 
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  modelOptions.value = (res.data.rows || []).filter(
+  allModels.value = (res.data.rows || []).filter(
     (m) => m.task === 'object-detection' && m.filePath && m.status === '0'
   )
-  if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
+  syncModelSelection()
 }
 
 const onPick = (uploadFile) => {
@@ -268,6 +317,7 @@ const detect = async () => {
     const fd = new FormData()
     fd.append('file', file.value)
     fd.append('conf', conf.value)
+    fd.append('alertEnabled', alertSupported.value && alertEnabled.value ? '1' : '0')
     const res = await modelApi.detectVideo(modelId.value, fd)
     poll(res.data.jobId)
   } catch (e) {
@@ -289,6 +339,17 @@ const poll = (jobId) => {
         const blob = await modelApi.outputVideo(d.stats.output)
         outputUrl.value = URL.createObjectURL(blob)
         detecting.value = false
+        if (alertSupported.value && alertEnabled.value) {
+          const overlay = d.stats.alertOverlayFrames ?? 0
+          const persons = d.stats.maxPersonPerFrame ?? 0
+          if (overlay <= 0) {
+            ElMessage.warning(
+              persons > 0
+                ? `未触发人员聚集叠加：单帧最多 ${persons} 人，视频叠加需 ≥3 人；请确认使用含 person 的通用检测模型。`
+                : '未触发人员聚集叠加：未检出 person 类目标，请换用 YOLO/RF-DETR 等通用检测模型（非烟火专用模型）。'
+            )
+          }
+        }
       }
     } catch (e) {
       // 进度接口返回错误（如检测失败）→ 拦截器已提示
@@ -377,6 +438,30 @@ onBeforeUnmount(() => {
   margin-top: 10px;
   font-size: 12px;
   color: #909399;
+}
+.alert-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+.alert-action-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 0;
+}
+.alert-tip-inline {
+  flex: 1 1 320px;
+  width: auto;
+  margin: 0 0 0 12px;
+  padding: 5px 12px;
+}
+.alert-tip-inline :deep(.el-alert__content) {
+  padding: 0;
+}
+.alert-tip-inline :deep(.el-alert__title) {
+  font-size: 13px;
+  line-height: 1.4;
 }
 .video-wrap {
   display: flex;

@@ -13,7 +13,7 @@
     1. VOC XML → YOLO TXT 标注
     2. 80/20 划分 train/val
     3. 创建 data.yaml
-    4. yolov8n.pt 预训练权重微调 (100 epochs)
+    4. weights/yolov8n.pt 预训练权重微调 (100 epochs)
     5. 拷贝 best.pt → weights/water_gauge_yolo.pt
 """
 import os
@@ -28,7 +28,8 @@ from pathlib import Path
 BASE_DIR  = Path(__file__).parent
 DATA_DIR  = BASE_DIR.parent / "docs" / "Data"
 WORK_DIR  = BASE_DIR / "yolo_dataset"        # 临时训练目录
-OUT_PT    = BASE_DIR / "weights" / "water_gauge_yolo.pt"
+OUT_PT         = BASE_DIR / "weights" / "water_gauge_yolo.pt"
+PRETRAINED_PT  = BASE_DIR / "weights" / "yolov8n.pt"
 
 CLASS_NAMES = ["WaterGuage"]   # 与 XML <name> 对应（保留原始拼写）
 SPLIT_RATIO = 0.8              # 训练集比例
@@ -136,7 +137,8 @@ names: {CLASS_NAMES}
 def train(yaml_path):
     from ultralytics import YOLO
 
-    model = YOLO("yolov8n.pt")   # 下载预训练权重（首次需联网）
+    weight = str(PRETRAINED_PT) if PRETRAINED_PT.is_file() else "yolov8n.pt"
+    model = YOLO(weight)
     results = model.train(
         data     = yaml_path,
         epochs   = EPOCHS,

@@ -16,6 +16,9 @@ IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 LABEL_EXT = ".txt"
 XML_EXT = ".xml"
 
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+PRETRAINED_WEIGHTS_DIR = _BACKEND_ROOT / "weights"
+
 DATASET_FORMATS = {
     "auto": "自动检测",
     "voc": "Pascal VOC（图片 + 同名 XML）",
@@ -235,19 +238,47 @@ _cancel_flags = {}
 _cancel_lock = threading.Lock()
 
 
-def request_cancel(job_id):
+def _cancel_flag_path(job_id, upload_root: Path | None = None) -> Path:
+    """跨进程取消标记文件（Flask debug reloader / 多进程下内存标志不可靠）。"""
+    root = Path(upload_root) if upload_root else Path(__file__).resolve().parent.parent / "uploads"
+    return root / "training" / "cancel" / f"{int(job_id)}.flag"
+
+
+def request_cancel(job_id, upload_root: Path | None = None):
+    """请求取消：内存标志 + 落盘标志。"""
+    jid = int(job_id)
     with _cancel_lock:
-        _cancel_flags[job_id] = True
+        _cancel_flags[jid] = True
+    try:
+        p = _cancel_flag_path(jid, upload_root)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
 
 
-def is_cancelled(job_id):
+def is_cancelled(job_id, upload_root: Path | None = None):
+    """是否已请求取消（内存或磁盘标志任一为真）。"""
+    jid = int(job_id)
     with _cancel_lock:
-        return _cancel_flags.get(job_id, False)
+        if _cancel_flags.get(jid, False):
+            return True
+    try:
+        return _cancel_flag_path(jid, upload_root).is_file()
+    except OSError:
+        return False
 
 
-def clear_cancel(job_id):
+def clear_cancel(job_id, upload_root: Path | None = None):
+    jid = int(job_id)
     with _cancel_lock:
-        _cancel_flags.pop(job_id, None)
+        _cancel_flags.pop(jid, None)
+    try:
+        p = _cancel_flag_path(jid, upload_root)
+        if p.is_file():
+            p.unlink()
+    except OSError:
+        pass
 
 
 # ── VOC → YOLO ────────────────────────────────────────
@@ -487,6 +518,8 @@ def detect_dataset_format(source_dir: Path):
     """自动检测数据集目录格式。返回格式名或 None。"""
     if not source_dir.exists():
         return None
+
+    source_dir = unwrap_dataset_root(source_dir)
 
     if _is_roboflow_yolo_layout(source_dir):
         return "yolo"
@@ -988,25 +1021,35 @@ def is_allowed_import_path(path: Path, app_base_dir: Path):
 
 
 def extract_zip_dataset(zip_path: Path, dest_dir: Path):
-    """解压 zip 到目标目录，返回解压的文件数。"""
+    """解压 zip 到目标目录，返回解压的文件数。
+
+    兼容 Roboflow 常见结构：顶层项目目录 / train|valid / images|labels / …
+    """
     dest_dir.mkdir(parents=True, exist_ok=True)
     count = 0
     with zipfile.ZipFile(zip_path, "r") as zf:
+        names = [info.filename.replace("\\", "/") for info in zf.infolist() if not info.is_dir()]
+        # 若所有文件共有唯一顶层目录，则剥掉（Roboflow / GitHub 导出常见）
+        tops = {n.split("/", 1)[0] for n in names if n and not n.startswith("..")}
+        strip_root = None
+        if len(tops) == 1:
+            root = next(iter(tops))
+            # 顶层不是 train/images/labels 本身时才剥离
+            if root.lower() not in ("train", "valid", "val", "test", "images", "labels"):
+                strip_root = root
+
         for info in zf.infolist():
             if info.is_dir():
                 continue
             name = info.filename.replace("\\", "/")
             if ".." in name or name.startswith("/"):
                 continue
-            # 去掉顶层目录包裹（常见 zip 结构）
-            parts = name.split("/")
-            if len(parts) > 1 and parts[0] and all(
-                p.lower() in ("images", "labels", "annotations", "jpegimages", "data.yaml")
-                for p in parts[1:]
-            ):
-                rel = "/".join(parts[1:])
+            if strip_root and name.startswith(strip_root + "/"):
+                rel = name[len(strip_root) + 1 :]
             else:
                 rel = name
+            if not rel:
+                continue
             target = dest_dir / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as dst:
@@ -1015,10 +1058,168 @@ def extract_zip_dataset(zip_path: Path, dest_dir: Path):
     return count
 
 
+def unwrap_dataset_root(source_dir: Path) -> Path:
+    """若 raw 下仅有一层包裹目录且内含 YOLO/Roboflow 结构，则返回内层路径。"""
+    if not source_dir.is_dir():
+        return source_dir
+    if _is_roboflow_yolo_layout(source_dir) or _is_standard_yolo_layout(source_dir):
+        return source_dir
+    if (source_dir / "data.yaml").exists():
+        return source_dir
+    children = [p for p in source_dir.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    if len(children) == 1:
+        inner = children[0]
+        if (
+            _is_roboflow_yolo_layout(inner)
+            or _is_standard_yolo_layout(inner)
+            or (inner / "data.yaml").exists()
+        ):
+            return inner
+    return source_dir
+
+
+def list_base_models(upload_root: Path | None = None):
+    """训练基座模型选项（含 YOLO11 与本地羽毛球权重）。"""
+    opts = [
+        {
+            "value": "yolo11n.pt",
+            "label": "YOLO11n（推荐轻量，羽毛球自训）",
+            "group": "yolo11",
+            "hint": "backend/weights/yolo11n.pt；无本地文件时由 Ultralytics 自动下载",
+        },
+        {
+            "value": "yolo11s.pt",
+            "label": "YOLO11s（精度优先）",
+            "group": "yolo11",
+            "hint": "比 n 更准、稍慢",
+        },
+        {
+            "value": "yolov8n.pt",
+            "label": "YOLOv8n（轻量）",
+            "group": "yolov8",
+            "hint": "backend/weights/yolov8n.pt；无本地文件时由 Ultralytics 自动下载",
+        },
+        {
+            "value": "yolov8s.pt",
+            "label": "YOLOv8s",
+            "group": "yolov8",
+        },
+        {
+            "value": "yolov8m.pt",
+            "label": "YOLOv8m",
+            "group": "yolov8",
+        },
+    ]
+    # 本地 Good-Badminton / 已部署羽毛球权重可作为微调起点
+    if upload_root:
+        root = Path(upload_root)
+        candidates = [
+            ("local:yolo11s-ball", root / "models" / "yolo11s-ball" / "yolo11s-ball.pt",
+             "YOLO11s-ball（Good-Badminton，微调推荐）"),
+        ]
+        # 已部署的自定义羽毛球权重
+        models_dir = root / "models"
+        if models_dir.is_dir():
+            for sub in sorted(models_dir.iterdir()):
+                if not sub.is_dir():
+                    continue
+                key = sub.name.lower()
+                if "badminton" not in key and "ball" not in key and "shuttle" not in key:
+                    continue
+                for pt in sorted(sub.glob("*.pt")):
+                    val = f"local:{sub.name}/{pt.name}"
+                    if any(o["value"] == val for o in opts):
+                        continue
+                    if pt.name == "yolo11s-ball.pt":
+                        continue
+                    opts.append({
+                        "value": val,
+                        "label": f"微调自 {sub.name}/{pt.name}",
+                        "group": "finetune",
+                        "hint": "基于已部署权重继续训练",
+                    })
+        for value, path, label in candidates:
+            if path.is_file():
+                opts.insert(2, {
+                    "value": value,
+                    "label": label,
+                    "group": "finetune",
+                    "hint": str(path),
+                    "available": True,
+                })
+    return opts
+
+
+def _resolve_official_pretrained(name: str) -> str:
+    """官方短名优先解析为 backend/weights 下本地权重，不存在则回退 Ultralytics 自动下载。"""
+    path = PRETRAINED_WEIGHTS_DIR / name
+    if path.is_file():
+        return str(path)
+    return name
+
+
+def resolve_base_model(base_model: str, upload_root: Path | None = None) -> str:
+    """将 baseModel 解析为 Ultralytics YOLO() 可加载的路径或官方权重名。"""
+    name = (base_model or "yolo11n.pt").strip()
+    if not name:
+        name = "yolo11n.pt"
+    # 官方短名 -> backend/weights/*.pt（本地有则用之，否则由 Ultralytics 下载）
+    if name.endswith(".pt") and "/" not in name and "\\" not in name and not name.startswith("local:"):
+        return _resolve_official_pretrained(name)
+    if name.startswith("local:"):
+        rel = name[len("local:"):].replace("\\", "/").lstrip("/")
+        if upload_root:
+            # yolo11s-ball → models/yolo11s-ball/yolo11s-ball.pt
+            if "/" not in rel and not rel.endswith(".pt"):
+                cand = Path(upload_root) / "models" / rel / f"{rel}.pt"
+                if cand.is_file():
+                    return str(cand)
+            path = Path(upload_root) / "models" / rel
+            if path.is_file():
+                return str(path)
+            # models/<key>/best.pt
+            if not rel.endswith(".pt"):
+                for fname in ("best.pt", f"{Path(rel).name}.pt"):
+                    p2 = Path(upload_root) / "models" / rel / fname
+                    if p2.is_file():
+                        return str(p2)
+        raise ValueError(f"本地基座权重不存在: {name}")
+    # 绝对路径
+    p = Path(name)
+    if p.is_file():
+        return str(p)
+    if upload_root:
+        rel = Path(upload_root) / name
+        if rel.is_file():
+            return str(rel)
+    return name
+
+
+def badminton_deploy_defaults(job):
+    """羽毛球检测部署到模型管理的默认字段。"""
+    jid = getattr(job, "id", 0) or 0
+    base = (getattr(job, "base_model", "") or "").lower()
+    size = "s" if "yolo11s" in base or "yolov8s" in base else "n"
+    return {
+        "modelName": f"自训羽毛球 YOLO11{size}",
+        "modelKey": f"badminton-yolo11{size}-{jid}",
+        "category": "目标检测",
+        "task": "object-detection",
+        "library": "ultralytics",
+        "version": "v11",
+        "description": (
+            f"训练任务 #{jid} 产出的羽毛球（shuttlecock）检测权重。"
+            "可在「羽毛球分析」页作为羽毛球模型选用；可由 Roboflow 导出集 + 自有比赛抽帧微调。"
+        ),
+    }
+
+
 def build_from_native_yolo(source_dir: Path, yolo_dir: Path, class_names=None):
     """复制/校验已划分好的 YOLO 数据集（images/train|val + labels/train|val）。"""
     if yolo_dir.exists():
         shutil.rmtree(yolo_dir, ignore_errors=True)
+
+    source_dir = unwrap_dataset_root(source_dir)
 
     yaml_src = source_dir / "data.yaml"
     yaml_names = []
@@ -1315,12 +1516,13 @@ def build_dataset_unified(
             raise ValueError("import 格式需提供 sourcePath")
         return import_external_dataset(source_path, yolo_dir, class_names, app_base_dir)
 
-    work_dir = source_dir
+    work_dir = unwrap_dataset_root(Path(source_dir)) if source_dir else source_dir
     if fmt == "auto":
-        detected = detect_dataset_format(source_dir)
+        detected = detect_dataset_format(work_dir)
         if not detected:
             raise ValueError(
                 "自动检测失败：请确认目录包含 VOC、YOLO、COCO JSON 或 LabelMe JSON 结构"
+                "（Roboflow 导出请选 YOLOv8/YOLO11 格式 zip）"
             )
         fmt = detected
 
@@ -1456,6 +1658,17 @@ def run_training_worker(app, job_id):
         job = TrainingJob.query.get(job_id)
         if not job:
             return
+
+        upload_root = Path(app.config["UPLOAD_FOLDER"])
+
+        # 启动前若已取消（pending 被取消 / 残留标志），直接退出
+        if job.status in ("cancelled", "cancelling") or is_cancelled(job_id, upload_root):
+            job.status = "cancelled"
+            job.error_message = "用户取消训练"
+            db.session.commit()
+            clear_cancel(job_id, upload_root)
+            return
+
         ds = TrainingDataset.query.get(job.dataset_id)
         if not ds or ds.status != "ready" or not ds.yaml_path:
             job.status = "failed"
@@ -1463,7 +1676,6 @@ def run_training_worker(app, job_id):
             db.session.commit()
             return
 
-        upload_root = Path(app.config["UPLOAD_FOLDER"])
         yaml_abs = upload_root / ds.yaml_path
         if not yaml_abs.exists():
             job.status = "failed"
@@ -1493,21 +1705,66 @@ def run_training_worker(app, job_id):
             except OSError:
                 pass
 
+        def _mark_cancelled(reason="用户取消训练"):
+            j = TrainingJob.query.get(job_id)
+            if j is None:
+                return
+            j.status = "cancelled"
+            j.error_message = reason
+            db.session.commit()
+
+        def _stop_trainer(trainer, reason="收到取消请求，正在停止…"):
+            try:
+                trainer.stop = True
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                # 部分版本用此属性
+                if hasattr(trainer, "stopper"):
+                    trainer.stopper.possible_stop = True
+            except Exception:  # noqa: BLE001
+                pass
+            _log(reason)
+
+        # 仅清理「上一轮残留」标志；若此刻已取消则退出
+        if is_cancelled(job_id, upload_root):
+            _mark_cancelled()
+            clear_cancel(job_id, upload_root)
+            _log("启动前检测到取消，退出")
+            return
+        clear_cancel(job_id, upload_root)
+
         job.status = "running"
         job.total_epochs = epochs
         job.current_epoch = 0
         job.progress = 0
+        job.error_message = None
         job.log_dir = str(runs_root.relative_to(upload_root)).replace("\\", "/")
         db.session.commit()
-        clear_cancel(job_id)
 
         _log(f"训练开始: job={job_id} base={job.base_model} epochs={epochs} batch={batch} imgsz={imgsz} device={device}")
         _log(f"data.yaml: {ds.yaml_path}")
 
+        def _check_stop(trainer, where=""):
+            if not is_cancelled(job_id, upload_root):
+                # 同步读库状态（cancelling）
+                try:
+                    with app.app_context():
+                        j = TrainingJob.query.get(job_id)
+                        if j and j.status == "cancelling":
+                            request_cancel(job_id, upload_root)
+                except Exception:  # noqa: BLE001
+                    pass
+            if is_cancelled(job_id, upload_root):
+                _stop_trainer(trainer, f"收到取消请求（{where}），正在停止…")
+                return True
+            return False
+
+        def on_train_batch_end(trainer):
+            _check_stop(trainer, "batch")
+
         def on_train_epoch_end(trainer):
-            if is_cancelled(job_id):
-                trainer.stop = True
-                _log("收到取消请求，正在停止…")
+            if _check_stop(trainer, "epoch"):
                 return
             with app.app_context():
                 j = TrainingJob.query.get(job_id)
@@ -1522,11 +1779,41 @@ def run_training_worker(app, job_id):
                 lbox = latest.get("train/box_loss")
                 _log(f"Epoch {j.current_epoch}/{epochs} progress={j.progress}% mAP50={m50} box_loss={lbox}")
 
+        def on_fit_epoch_end(trainer):
+            _check_stop(trainer, "fit_epoch")
+
         try:
             from ultralytics import YOLO
 
-            model = YOLO(job.base_model or "yolov8n.pt")
+            if is_cancelled(job_id, upload_root):
+                _mark_cancelled()
+                _log("加载基座前已取消")
+                return
+
+            try:
+                base_resolved = resolve_base_model(job.base_model or "yolo11n.pt", upload_root)
+            except ValueError as e:
+                job.status = "failed"
+                job.error_message = str(e)
+                db.session.commit()
+                _log(str(e))
+                return
+
+            if is_cancelled(job_id, upload_root):
+                _mark_cancelled()
+                _log("解析基座后已取消")
+                return
+
+            _log(f"加载基座: {base_resolved}")
+            model = YOLO(base_resolved)
+            model.add_callback("on_train_batch_end", on_train_batch_end)
             model.add_callback("on_train_epoch_end", on_train_epoch_end)
+            model.add_callback("on_fit_epoch_end", on_fit_epoch_end)
+
+            if is_cancelled(job_id, upload_root):
+                _mark_cancelled()
+                _log("train() 前已取消")
+                return
 
             results = model.train(
                 data=str(yaml_abs),
@@ -1546,7 +1833,7 @@ def run_training_worker(app, job_id):
             if job is None:
                 return
 
-            if is_cancelled(job_id):
+            if is_cancelled(job_id, upload_root) or job.status == "cancelling":
                 job.status = "cancelled"
                 job.error_message = "用户取消训练"
                 _log("训练取消完成")
@@ -1571,7 +1858,7 @@ def run_training_worker(app, job_id):
         except Exception as e:  # noqa: BLE001
             job = TrainingJob.query.get(job_id)
             if job:
-                if is_cancelled(job_id):
+                if is_cancelled(job_id, upload_root) or job.status == "cancelling":
                     job.status = "cancelled"
                     job.error_message = "用户取消训练"
                     _log("训练取消（异常路径）")
@@ -1581,8 +1868,9 @@ def run_training_worker(app, job_id):
                     _log(f"训练异常：{e}")
         finally:
             db.session.commit()
-            clear_cancel(job_id)
-            _log(f"训练线程结束: status={job.status if job else 'unknown'}")
+            clear_cancel(job_id, upload_root)
+            j = TrainingJob.query.get(job_id)
+            _log(f"训练线程结束: status={j.status if j else 'unknown'}")
 
 
 def run_validate_worker(app, job_id):
@@ -1692,7 +1980,8 @@ def export_model(weight_abs: Path, out_dir: Path, fmt="onnx"):
     raise FileNotFoundError(f"导出失败: {fmt}")
 
 
-def deploy_to_ai_model(app, job, model_name, model_key, category, description=""):
+def deploy_to_ai_model(app, job, model_name, model_key, category, description="",
+                       task="object-detection", library="ultralytics", version="v11"):
     """将训练权重注册到 ai_model 表。"""
     from extensions import db
     from models import AiModel
@@ -1717,10 +2006,10 @@ def deploy_to_ai_model(app, job, model_name, model_key, category, description=""
     m = AiModel(
         model_name=model_name,
         model_key=model_key,
-        category=category or "自定义训练",
-        task="object-detection",
-        library="ultralytics",
-        version="v1",
+        category=category or "目标检测",
+        task=task or "object-detection",
+        library=library or "ultralytics",
+        version=version or "v11",
         file_path=rel,
         file_size=dest.stat().st_size,
         description=description or f"训练任务 #{job.id} 产出",

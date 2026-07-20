@@ -26,6 +26,8 @@ Thumbs.db
 
 # ===== 模型权重 / 上传媒体 / 推理输出（大文件，不提交）=====
 backend/uploads/
+mobileclip2_b.ts
+runs/
 
 # ===== 第三方推理代码（vendored，体积大，部署时各自 git clone）=====
 third_party/

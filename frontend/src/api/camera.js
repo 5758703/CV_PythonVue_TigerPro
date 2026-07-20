@@ -1,6 +1,14 @@
 import request from './request'
 import { useUserStore } from '../store/user'
 
+/** MJPEG 长连接开发态直连后端，避免经 Vite 代理断流时刷 ECONNRESET */
+function streamOrigin() {
+  const fromEnv = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '')
+  if (fromEnv) return fromEnv
+  if (import.meta.env.DEV) return 'http://127.0.0.1:5001'
+  return ''
+}
+
 export const cameraApi = {
   list: (params) => request.get('/camera', { params }),
   get: (id) => request.get(`/camera/${id}`),
@@ -16,6 +24,6 @@ export const cameraApi = {
     const token = useUserStore().token
     const q = bust ? `&_=${encodeURIComponent(bust)}` : ''
     const chk = check ? '&check=1' : ''
-    return `/api/camera/${id}/stream?jwt=${encodeURIComponent(token)}${q}${chk}`
+    return `${streamOrigin()}/api/camera/${id}/stream?jwt=${encodeURIComponent(token)}${q}${chk}`
   },
 }

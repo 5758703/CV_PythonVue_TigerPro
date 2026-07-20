@@ -3,10 +3,12 @@
     <el-tabs v-model="activeTab" type="border-card">
       <!-- ── 数据集管理 ── -->
       <el-tab-pane label="数据集管理" name="dataset">
-        <el-alert class="workflow-alert" type="success" :closable="false" title="平台闭环：新建数据集(yolo_flat) → 视频抽帧 → 数据标注 → 构建 → 训练任务 → 部署到模型管理" />
+        <el-alert class="workflow-alert" type="success" :closable="false"
+          title="平台闭环：Roboflow YOLO zip / 自有抽帧标注 → 构建 → YOLO11n/s 训练 → 部署到模型管理 → 羽毛球分析选用" />
         <div class="toolbar">
           <el-input v-model="dsQuery.name" placeholder="数据集名称" clearable style="width:200px" @keyup.enter="loadDatasets" />
           <el-button type="primary" :icon="Plus" @click="openDsDialog()">新建数据集</el-button>
+          <el-button type="warning" plain @click="applyBadmintonPreset">羽毛球自训预设</el-button>
           <el-button :icon="Refresh" @click="loadDatasets">刷新</el-button>
         </div>
         <el-table :data="datasets" v-loading="dsLoading" border stripe>
@@ -73,6 +75,7 @@
           <el-select v-model="jobQuery.status" placeholder="状态" clearable style="width:130px" @change="loadJobs">
             <el-option label="待训练" value="pending" />
             <el-option label="训练中" value="running" />
+            <el-option label="取消中" value="cancelling" />
             <el-option label="已完成" value="done" />
             <el-option label="失败" value="failed" />
             <el-option label="已取消" value="cancelled" />
@@ -106,7 +109,13 @@
             <template #default="{ row }">
               <el-button size="small" type="primary" v-if="row.status === 'pending' || row.status === 'failed'"
                 @click="startJob(row)">启动</el-button>
-              <el-button size="small" type="warning" v-if="row.status === 'running'" @click="cancelJob(row)">取消</el-button>
+              <el-button
+                size="small"
+                type="warning"
+                v-if="row.status === 'running' || row.status === 'cancelling'"
+                :loading="cancellingId === row.id"
+                @click="cancelJob(row)"
+              >{{ row.status === 'cancelling' ? '取消中' : '取消' }}</el-button>
               <el-button size="small" @click="openJobDetail(row)">监控</el-button>
               <el-button size="small" type="danger" :icon="Delete" @click="removeJob(row)">删除</el-button>
             </template>
@@ -250,10 +259,13 @@
           </el-select>
         </el-form-item>
         <el-form-item label="基座模型">
-          <el-select v-model="jobForm.baseModel" style="width:100%">
-            <el-option label="YOLOv8n（轻量）" value="yolov8n.pt" />
-            <el-option label="YOLOv8s" value="yolov8s.pt" />
-            <el-option label="YOLOv8m" value="yolov8m.pt" />
+          <el-select v-model="jobForm.baseModel" style="width:100%" filterable>
+            <el-option-group v-for="g in baseModelGroups" :key="g.label" :label="g.label">
+              <el-option v-for="o in g.options" :key="o.value" :label="o.label" :value="o.value">
+                <span>{{ o.label }}</span>
+                <span v-if="o.hint" class="opt-hint">{{ o.hint }}</span>
+              </el-option>
+            </el-option-group>
           </el-select>
         </el-form-item>
         <el-form-item label="训练轮数">
@@ -472,7 +484,7 @@
                   <span class="wf-step">04</span>
                   <div>
                     <div class="wf-title">部署到模型管理</div>
-                    <div class="wf-desc">注册权重后可在检测页直接使用</div>
+                    <div class="wf-desc">注册后可在羽毛球分析等页面选用（library=ultralytics）</div>
                   </div>
                 </div>
                 <div class="wf-body wf-deploy">
@@ -494,8 +506,10 @@
                         </el-form-item>
                       </el-col>
                     </el-row>
+                    <el-checkbox v-model="deployForm.forBadminton">部署为羽毛球检测模型（目标检测 / 分析页优先选用）</el-checkbox>
                   </el-form>
                   <div class="wf-actions">
+                    <el-button @click="fillBadmintonDeploy" :disabled="detailJob.status !== 'done'">填入羽毛球预设</el-button>
                     <el-button type="primary" :loading="deploying" :disabled="detailJob.status !== 'done'" @click="runDeploy">
                       注册到模型管理
                     </el-button>
@@ -551,12 +565,16 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Edit, Delete, Upload, Document, VideoCamera } from '@element-plus/icons-vue'
 import { trainingApi } from '../../../api/ai'
 import AnnotatePanel from './annotate.vue'
 import QualityPanel from './quality.vue'
 import ConvertPanel from './convert.vue'
+
+const route = useRoute()
+const router = useRouter()
 
 const ANNOTATION_DOC_URL = 'https://github.com/5758703/CV_PythonVue_TigerPro/blob/main/docs/数据标注功能说明.md'
 
@@ -836,15 +854,84 @@ const jobQuery = reactive({ status: '' })
 const jobDialog = ref(false)
 const jobSaving = ref(false)
 const jobForm = reactive({
-  jobName: '', datasetId: null, baseModel: 'yolov8n.pt',
+  jobName: '', datasetId: null, baseModel: 'yolo11n.pt',
   epochs: 100, batch: 8, imgsz: 640, device: 'cpu'
 })
+const baseModelOptions = ref([])
+const baseModelGroups = computed(() => {
+  const groups = [
+    { key: 'yolo11', label: 'YOLO11（推荐羽毛球）', options: [] },
+    { key: 'finetune', label: '本地微调起点', options: [] },
+    { key: 'yolov8', label: 'YOLOv8', options: [] },
+  ]
+  const map = Object.fromEntries(groups.map(g => [g.key, g]))
+  for (const o of baseModelOptions.value) {
+    const g = map[o.group] || map.yolov8
+    g.options.push(o)
+  }
+  return groups.filter(g => g.options.length)
+})
+
+async function loadBaseModels() {
+  try {
+    const res = await trainingApi.baseModels()
+    baseModelOptions.value = res.data || []
+  } catch {
+    baseModelOptions.value = [
+      { value: 'yolo11n.pt', label: 'YOLO11n', group: 'yolo11' },
+      { value: 'yolo11s.pt', label: 'YOLO11s', group: 'yolo11' },
+      { value: 'yolov8n.pt', label: 'YOLOv8n', group: 'yolov8' },
+    ]
+  }
+}
+
+async function applyBadmintonPreset() {
+  try {
+    const res = await trainingApi.badmintonPreset()
+    const p = res.data || {}
+    const ds = p.dataset || {}
+    Object.assign(dsForm, {
+      id: null,
+      name: ds.name || '羽毛球检测-Roboflow',
+      format: ds.format || 'auto',
+      classNames: [...(ds.classNames || ['badminton'])],
+      splitRatio: ds.splitRatio ?? 0.8,
+      description: ds.hint || '',
+      sourcePath: '',
+    })
+    const jb = p.job || {}
+    Object.assign(jobForm, {
+      jobName: jb.jobName || '羽毛球YOLO11n自训',
+      datasetId: null,
+      baseModel: jb.baseModel || 'yolo11n.pt',
+      epochs: jb.epochs ?? 80,
+      batch: jb.batch ?? 8,
+      imgsz: jb.imgsz ?? 960,
+      device: jb.device || 'cpu',
+    })
+    activeTab.value = 'dataset'
+    dsDialog.value = true
+    ElMessage.success('已套用羽毛球自训预设：上传 Roboflow YOLO zip 后构建，再新建训练任务')
+    const steps = (p.workflow || []).map((s, i) => `${i + 1}. ${s}`).join('\n')
+    if (steps) {
+      ElMessageBox.alert(steps, '羽毛球自训流程', { confirmButtonText: '知道了' })
+    }
+  } catch (e) {
+    ElMessage.error(e?.message || '加载预设失败')
+  }
+}
 
 function jobStatusType(s) {
-  return { pending: 'info', running: 'warning', done: 'success', failed: 'danger', cancelled: '' }[s] || 'info'
+  return {
+    pending: 'info', running: 'warning', cancelling: 'warning',
+    done: 'success', failed: 'danger', cancelled: 'info',
+  }[s] || 'info'
 }
 function jobStatusText(s) {
-  return { pending: '待训练', running: '训练中', done: '已完成', failed: '失败', cancelled: '已取消' }[s] || s
+  return {
+    pending: '待训练', running: '训练中', cancelling: '取消中',
+    done: '已完成', failed: '失败', cancelled: '已取消',
+  }[s] || s
 }
 function jobProgressStatus(row) {
   if (row.status === 'done') return 'success'
@@ -875,17 +962,24 @@ async function loadJobs() {
   } finally { jobLoading.value = false }
 }
 
-function openJobDialog() {
-  resetJobForm()
-  jobDialog.value = true
-  loadDatasets()
-}
-
 function resetJobForm() {
   Object.assign(jobForm, {
-    jobName: '', datasetId: null, baseModel: 'yolov8n.pt',
+    jobName: '', datasetId: null, baseModel: 'yolo11n.pt',
     epochs: 100, batch: 8, imgsz: 640, device: 'cpu'
   })
+}
+
+function openJobDialog() {
+  resetJobForm()
+  if (route.query.preset === 'badminton') {
+    jobForm.imgsz = 960
+    jobForm.epochs = 80
+    jobForm.jobName = '羽毛球YOLO11n自训'
+    jobForm.baseModel = 'yolo11n.pt'
+  }
+  jobDialog.value = true
+  loadDatasets()
+  loadBaseModels()
 }
 
 async function saveJob() {
@@ -909,10 +1003,55 @@ async function startJob(row) {
   openJobDetail(row)
 }
 
+const cancellingId = ref(null)
+
 async function cancelJob(row) {
-  await trainingApi.cancelJob(row.id)
-  ElMessage.info('已发送取消请求')
-  loadJobs()
+  if (cancellingId.value === row.id) return
+  try {
+    await ElMessageBox.confirm(
+      row.status === 'cancelling'
+        ? '仍在等待训练线程响应，是否再次发送取消请求？'
+        : '确定取消该训练任务？将在当前 batch 结束后停止（首轮可能需等待片刻）。',
+      '取消训练',
+      { type: 'warning', confirmButtonText: '确定取消', cancelButtonText: '返回' },
+    )
+  } catch {
+    return
+  }
+  cancellingId.value = row.id
+  try {
+    const res = await trainingApi.cancelJob(row.id)
+    ElMessage.success(res.message || '已请求取消')
+    row.status = res.data?.status || 'cancelling'
+    // 轮询直到真正 cancelled；超时则强制标记（应对后端重启后线程已死）
+    let done = false
+    for (let i = 0; i < 45; i++) {
+      await loadJobs()
+      const cur = jobs.value.find(j => j.id === row.id)
+      if (!cur || ['cancelled', 'failed', 'done'].includes(cur.status)) {
+        if (cur?.status === 'cancelled') ElMessage.success('训练已取消')
+        done = true
+        break
+      }
+      await new Promise(r => setTimeout(r, 2000))
+    }
+    if (!done) {
+      try {
+        await ElMessageBox.confirm(
+          '训练线程长时间未响应（可能后端已重启）。是否强制标记为「已取消」？',
+          '强制取消',
+          { type: 'warning', confirmButtonText: '强制取消', cancelButtonText: '继续等待' },
+        )
+        const fr = await trainingApi.cancelJob(row.id, { force: true })
+        ElMessage.success(fr.message || '已强制取消')
+      } catch { /* 用户选择继续等待 */ }
+    }
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e.message || '取消失败')
+  } finally {
+    cancellingId.value = null
+    loadJobs()
+  }
 }
 
 async function removeJob(row) {
@@ -1050,7 +1189,33 @@ const exporting = ref(false)
 const exportFmt = ref('onnx')
 const exportInfo = ref(null)
 const deploying = ref(false)
-const deployForm = reactive({ modelName: '', modelKey: '', category: '自定义训练' })
+const deployForm = reactive({
+  modelName: '', modelKey: '', category: '目标检测', forBadminton: false, description: '',
+})
+
+async function fillBadmintonDeploy() {
+  if (!detailJob.value) return
+  try {
+    const res = await trainingApi.badmintonPreset()
+    const d = { ...(res.data?.deploy || {}) }
+    // 用当前 job id 生成唯一 key
+    const jid = detailJob.value.id
+    deployForm.modelName = d.modelName || `自训羽毛球 YOLO11n`
+    deployForm.modelKey = (d.modelKey || `badminton-yolo11n-${jid}`).replace(/-0$/, `-${jid}`)
+    if (!deployForm.modelKey.includes(String(jid))) {
+      deployForm.modelKey = `badminton-yolo11n-${jid}`
+    }
+    deployForm.category = d.category || '目标检测'
+    deployForm.description = d.description || ''
+    deployForm.forBadminton = true
+    ElMessage.success('已填入羽毛球部署字段')
+  } catch {
+    deployForm.modelName = `自训羽毛球检测`
+    deployForm.modelKey = `badminton-yolo11n-${detailJob.value.id}`
+    deployForm.category = '目标检测'
+    deployForm.forBadminton = true
+  }
+}
 
 async function runValidate() {
   validating.value = true
@@ -1116,8 +1281,19 @@ async function runDeploy() {
   }
   deploying.value = true
   try {
-    const res = await trainingApi.deployJob(detailJob.value.id, { ...deployForm })
-    ElMessage.success(res.message)
+    const payload = {
+      modelName: deployForm.modelName,
+      modelKey: deployForm.modelKey,
+      category: deployForm.category,
+      description: deployForm.description,
+      forBadminton: !!deployForm.forBadminton,
+    }
+    const res = await trainingApi.deployJob(detailJob.value.id, payload)
+    ElMessage.success(
+      deployForm.forBadminton
+        ? `${res.message}，可到「羽毛球分析」选用`
+        : res.message,
+    )
     detailJob.value.outputModelId = res.data.modelId
     loadJobs()
   } finally { deploying.value = false }
@@ -1125,21 +1301,37 @@ async function runDeploy() {
 
 watch(detailOpen, (v) => {
   if (v && detailJob.value) {
-    deployForm.modelName = detailJob.value.jobName
-    deployForm.modelKey = `custom-${detailJob.value.id}`
+    const name = detailJob.value.jobName || ''
+    const isBdm = /羽毛球|badminton|shuttle/i.test(name) || route.query.preset === 'badminton'
+    deployForm.forBadminton = isBdm
+    if (isBdm) {
+      fillBadmintonDeploy()
+    } else {
+      deployForm.modelName = name
+      deployForm.modelKey = `custom-${detailJob.value.id}`
+      deployForm.category = '目标检测'
+      deployForm.description = ''
+    }
   }
 })
 
-onMounted(() => {
+onMounted(async () => {
   loadFormats()
+  loadBaseModels()
   loadDatasets()
   loadJobs()
+  if (route.query.preset === 'badminton') {
+    await applyBadmintonPreset()
+    // 清理 query，避免重复弹窗
+    router.replace({ path: route.path, query: { ...route.query, preset: undefined } })
+  }
 })
 </script>
 
 <style scoped>
 .training-root { padding: 0; }
 .toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.opt-hint { float: right; color: #909399; font-size: 12px; margin-left: 12px; }
 .pager { margin-top: 14px; justify-content: flex-end; }
 .epoch-hint { font-size: 12px; color: #909399; margin-left: 8px; }
 .mt16 { margin-top: 16px; }

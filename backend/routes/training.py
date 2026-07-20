@@ -24,6 +24,7 @@ from services.training import (
     is_allowed_import_path,
     run_training_worker,
     request_cancel,
+    clear_cancel,
     validate_model,
     test_predict,
     export_model,
@@ -32,6 +33,8 @@ from services.training import (
     parse_results_csv,
     run_validate_worker,
     IMG_EXTENSIONS,
+    list_base_models,
+    badminton_deploy_defaults,
 )
 from services.dataset_annotation import (
     ensure_annotation_dirs,
@@ -648,6 +651,47 @@ def convert_dataset(did):
 
 # ── 训练任务 ──────────────────────────────────────────
 
+@training_bp.get("/base-models")
+@permission_required("ai:training:query")
+def get_base_models():
+    """训练基座模型列表（含 YOLO11 / 本地羽毛球微调权重）。"""
+    opts = list_base_models(Path(current_app.config["UPLOAD_FOLDER"]))
+    return jsonify(code=0, data=opts)
+
+
+@training_bp.get("/presets/badminton")
+@permission_required("ai:training:query")
+def badminton_training_preset():
+    """羽毛球检测自训预设：数据集默认值 + 推荐基座 + 部署字段。"""
+    return jsonify(code=0, data={
+        "dataset": {
+            "name": "羽毛球检测-Roboflow",
+            "format": "auto",
+            "classNames": ["badminton"],
+            "splitRatio": 0.8,
+            "hint": "Roboflow 导出 YOLO11/YOLOv8 zip 上传到 raw；可用「抽帧」叠加自有比赛视频后标注微调",
+        },
+        "job": {
+            "jobName": "羽毛球YOLO11n自训",
+            "baseModel": "yolo11n.pt",
+            "epochs": 80,
+            "batch": 8,
+            "imgsz": 960,
+            "device": "cpu",
+            "patience": 25,
+        },
+        "finetuneBase": "local:yolo11s-ball",
+        "deploy": badminton_deploy_defaults(type("J", (), {"id": 0, "base_model": "yolo11n.pt"})()),
+        "workflow": [
+            "Roboflow Universe 选羽毛球/shuttlecock 数据集 → Export → YOLO11 或 YOLOv8 zip",
+            "训练页新建数据集（格式自动检测）→ 上传 zip → 构建",
+            "可选：抽帧自有比赛视频 → 标注 → 再构建（微调场景更准）",
+            "新建训练任务：基座 YOLO11n/s 或 local:yolo11s-ball → 启动训练",
+            "完成后「部署到羽毛球分析」→ 羽毛球分析页自动优先选用",
+        ],
+    })
+
+
 @training_bp.get("/jobs")
 @permission_required("ai:training:list")
 def list_jobs():
@@ -725,7 +769,7 @@ def create_job():
     job = TrainingJob(
         job_name=name,
         dataset_id=dataset_id,
-        base_model=data.get("baseModel") or "yolov8n.pt",
+        base_model=data.get("baseModel") or "yolo11n.pt",
         framework="ultralytics",
         status="pending",
         total_epochs=hp["epochs"],
@@ -761,18 +805,57 @@ def start_job(jid):
 @training_bp.post("/jobs/<int:jid>/cancel")
 @permission_required("ai:training:edit")
 def cancel_job(jid):
+    """取消训练：落盘取消标志 + 状态 cancelling/cancelled，训练线程在 batch 回调中停止。
+
+    body/query ``force=true``：立即标记为已取消（用于后端重启后训练线程已死亡的情况）。
+    """
     job = TrainingJob.query.get_or_404(jid)
+    upload_root = Path(current_app.config["UPLOAD_FOLDER"])
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get("force") or request.args.get("force") in ("1", "true", "yes"))
+
+    if job.status == "cancelled":
+        clear_cancel(jid, upload_root)
+        return jsonify(code=0, message="任务已取消", data=job.to_dict())
+
+    if force and job.status in ("running", "cancelling", "pending"):
+        request_cancel(jid, upload_root)
+        job.status = "cancelled"
+        job.error_message = "用户强制取消训练"
+        db.session.commit()
+        clear_cancel(jid, upload_root)
+        return jsonify(code=0, message="已强制标记为取消", data=job.to_dict())
+
+    if job.status == "cancelling":
+        request_cancel(jid, upload_root)
+        return jsonify(code=0, message="正在取消中，请稍候（当前 batch 结束后停止）", data=job.to_dict())
+
+    if job.status == "pending":
+        request_cancel(jid, upload_root)
+        job.status = "cancelled"
+        job.error_message = "用户取消训练"
+        db.session.commit()
+        return jsonify(code=0, message="已取消待启动任务", data=job.to_dict())
+
     if job.status != "running":
-        return jsonify(code=400, message="仅运行中的任务可取消"), 400
-    request_cancel(jid)
-    return jsonify(code=0, message="已发送取消请求")
+        return jsonify(code=400, message="仅待训练/训练中的任务可取消"), 400
+
+    request_cancel(jid, upload_root)
+    job.status = "cancelling"
+    job.error_message = "正在取消，将在当前 batch 结束后停止…"
+    db.session.commit()
+    return jsonify(
+        code=0,
+        message="已请求取消：训练将在当前 batch 结束后停止（首轮较慢时请稍候）",
+        data=job.to_dict(),
+    )
 
 
 @training_bp.delete("/jobs/<int:jid>")
 @permission_required("ai:training:remove")
 def delete_job(jid):
     job = TrainingJob.query.get_or_404(jid)
-    if job.status == "running":
+    if job.status in ("running", "cancelling"):
         return jsonify(code=400, message="请先取消运行中的任务"), 400
     root = _upload_root() / "training" / "runs" / str(jid)
     wroot = _upload_root() / "training" / "weights" / str(jid)
@@ -887,24 +970,37 @@ def download_export(jid):
 @training_bp.post("/jobs/<int:jid>/deploy")
 @permission_required("ai:training:edit")
 def deploy_job(jid):
-    """将 best.pt 注册到模型管理（ai_model）。"""
+    """将 best.pt 注册到模型管理（ai_model）。
+
+    body 可选 forBadminton=true：自动填写羽毛球分析可用的 category/task/modelKey。
+    """
     job = TrainingJob.query.get_or_404(jid)
     if job.status != "done":
         return jsonify(code=400, message="仅已完成的训练任务可部署"), 400
     data = request.get_json(silent=True) or {}
-    model_name = (data.get("modelName") or job.job_name).strip()
-    model_key = (data.get("modelKey") or f"custom-{jid}").strip()
-    category = (data.get("category") or "自定义训练").strip()
-    description = (data.get("description") or "").strip()
+    for_badminton = bool(data.get("forBadminton") or data.get("preset") == "badminton")
+    defaults = badminton_deploy_defaults(job) if for_badminton else {}
+    model_name = (data.get("modelName") or defaults.get("modelName") or job.job_name).strip()
+    model_key = (data.get("modelKey") or defaults.get("modelKey") or f"custom-{jid}").strip()
+    category = (data.get("category") or defaults.get("category") or "目标检测").strip()
+    description = (data.get("description") or defaults.get("description") or "").strip()
+    task = (data.get("task") or defaults.get("task") or "object-detection").strip()
+    library = (data.get("library") or defaults.get("library") or "ultralytics").strip()
+    version = (data.get("version") or defaults.get("version") or "v11").strip()
     if not model_name or not model_key:
         return jsonify(code=400, message="请填写模型名称与标识"), 400
     try:
         m = deploy_to_ai_model(
             current_app._get_current_object(), job,
             model_name, model_key, category, description,
+            task=task, library=library, version=version,
         )
     except ValueError as e:
         return jsonify(code=400, message=str(e)), 400
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"部署失败：{e}"), 500
-    return jsonify(code=0, message="已部署到模型管理", data={"modelId": m.id, "modelKey": m.model_key})
+    return jsonify(code=0, message="已部署到模型管理", data={
+        "modelId": m.id,
+        "modelKey": m.model_key,
+        "forBadminton": for_badminton,
+    })

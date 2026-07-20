@@ -31,9 +31,20 @@
             <el-button :icon="UploadFilled">选择图片</el-button>
           </el-upload>
         </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="VideoPlay" :loading="detecting" :disabled="!modelId || !file" @click="detect">开始检测</el-button>
-          <el-button :icon="Refresh" @click="clearAll">清空</el-button>
+        <el-form-item class="alert-action-item">
+          <div class="alert-action-row">
+            <el-button type="primary" :icon="VideoPlay" :loading="detecting" :disabled="!modelId || !file" @click="detect">开始检测</el-button>
+            <el-checkbox v-model="alertEnabled" :disabled="detecting" style="margin-left: 12px">启用告警</el-checkbox>
+            <el-alert
+              v-if="alertEnabled && allModels.length && filteredModels.length"
+              type="info"
+              :closable="false"
+              show-icon
+              class="alert-tip-inline"
+              title="总开关已开：仅「检测告警」页中已启用的规则会评估；单项开关请到检测告警页配置。越线规则需轨迹 ID，图片检测通常不触发。"
+            />
+            <el-button :icon="Refresh" @click="clearAll" style="margin-left: 8px">清空</el-button>
+          </div>
         </el-form-item>
       </el-form>
       <div v-if="imageInfo" class="picked">
@@ -43,10 +54,25 @@
         <el-tag size="small" type="info" effect="plain">{{ fmtSize(imageInfo.size) }}</el-tag>
       </div>
       <el-alert
-        v-if="!modelOptions.length"
+        v-if="!allModels.length"
         type="warning"
         :closable="false"
         title="暂无可用模型：请先到「模型管理」上传或拉取权重，并保持启用状态。"
+      />
+      <el-alert
+        v-else-if="alertEnabled && !filteredModels.length"
+        type="warning"
+        :closable="false"
+        title="启用告警后无可用模型：请选用 YOLO / RF-DETR / transformers 目标检测权重。"
+      />
+      <el-alert
+        v-if="lastAlertTitle"
+        type="warning"
+        :closable="true"
+        show-icon
+        class="alert-tip"
+        :title="lastAlertTitle"
+        @close="lastAlertTitle = ''"
       />
     </el-card>
 
@@ -249,20 +275,28 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ElMessage, ElNotification } from 'element-plus'
 import { UploadFilled, VideoPlay, Refresh, Download, ZoomIn, Picture } from '@element-plus/icons-vue'
 
-import { modelApi } from '../../../api/ai'
+import { modelApi, alertApi } from '../../../api/ai'
+import {
+  filterWorkbenchModels,
+  ensureModelInList,
+  categoriesFromModels,
+} from '../../../utils/alertModels'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 
-const modelOptions = ref([])
+const allModels = ref([])
 const modelId = ref(null)
 const category = ref('')
 const conf = ref(0.25)
+const alertEnabled = ref(false)
 const file = ref(null)
 const imageInfo = ref(null)
+const lastAlertTitle = ref('')
+const liveOverlay = ref(null)
 
 // 进度/预计剩余（单图无逐帧进度，按该模型上次耗时估算）
 const elapsedMs = ref(0)
@@ -296,14 +330,28 @@ const fmtSize = (bytes) => {
   return `${n.toFixed(i ? 1 : 0)} ${u[i]}`
 }
 
-const categories = computed(() => [...new Set(modelOptions.value.map((m) => m.category).filter(Boolean))])
+const categories = computed(() => categoriesFromModels(
+  filterWorkbenchModels(allModels.value, { alertEnabled: alertEnabled.value }),
+))
 const filteredModels = computed(() =>
-  category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value
+  filterWorkbenchModels(allModels.value, {
+    alertEnabled: alertEnabled.value,
+    category: category.value,
+  }),
 )
+const syncModelSelection = () => {
+  modelId.value = ensureModelInList(modelId.value, filteredModels.value)
+}
 const onCategoryChange = () => {
-  modelId.value = filteredModels.value[0]?.id || null
+  syncModelSelection()
   clearResult()
 }
+watch(alertEnabled, () => {
+  if (category.value && !categories.value.includes(category.value)) category.value = ''
+  syncModelSelection()
+})
+watch(filteredModels, () => { syncModelSelection() }, { immediate: true })
+
 const previewSrc = ref('')
 const detecting = ref(false)
 const result = ref(null)
@@ -370,6 +418,46 @@ const drawBoxes = () => {
     ctx.fillStyle = '#fff'
     ctx.fillText(label, x1 + 4, Math.max(0, y1 - fs - 3))
   })
+  if (alertEnabled.value && liveOverlay.value) {
+    drawAlertOverlay(ctx, cv, liveOverlay.value)
+  }
+}
+
+const drawAlertOverlay = (ctx, cv, style) => {
+  if (!style || style.enabled === false) return
+  const w = cv.width
+  const h = cv.height
+  const wr = Math.min(0.95, Math.max(0.3, Number(style.panelWidthRatio) || 0.72))
+  const hr = Math.min(0.8, Math.max(0.18, Number(style.panelHeightRatio) || 0.36))
+  const opacity = Math.min(0.85, Math.max(0.15, Number(style.opacity) || 0.45))
+  const pw = Math.round(w * wr)
+  const ph = Math.round(h * hr)
+  const x = Math.round((w - pw) / 2)
+  const y = Math.round((h - ph) / 2)
+  const cx = Math.round(w / 2)
+  ctx.save()
+  ctx.globalAlpha = opacity
+  ctx.fillStyle = style.fillColor || '#FFD400'
+  ctx.fillRect(x, y, pw, ph)
+  ctx.globalAlpha = 1
+  ctx.strokeStyle = style.borderColor || style.fillColor || '#E6B800'
+  ctx.lineWidth = Math.max(2, w / 400)
+  ctx.strokeRect(x, y, pw, ph)
+  const titles = style.titleLines || []
+  const subs = style.subtitleLines || []
+  const lines = [...titles, ...subs]
+  ctx.fillStyle = style.textColor || '#1A1A1A'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  let ty = y + Math.round(ph * 0.35)
+  const fs = Math.max(14, Math.round(h / 40))
+  lines.forEach((ln, i) => {
+    const isTitle = i < titles.length
+    ctx.font = `${isTitle ? 'bold ' : ''}${isTitle ? fs + 4 : fs}px "Microsoft YaHei", sans-serif`
+    ctx.fillText(String(ln), cx, ty)
+    ty += isTitle ? fs + 10 : fs + 6
+  })
+  ctx.restore()
 }
 
 const setActive = (i) => {
@@ -409,19 +497,18 @@ const onResize = () => syncCanvas()
 
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  // 仅保留 目标检测任务、已启用、有本地权重 的模型
-  modelOptions.value = (res.data.rows || []).filter(
+  allModels.value = (res.data.rows || []).filter(
     (m) => m.task === 'object-detection' && m.filePath && m.status === '0'
   )
-  if (modelOptions.value.length && !modelId.value) {
-    modelId.value = modelOptions.value[0].id
-  }
+  syncModelSelection()
 }
 
 const clearResult = () => {
   result.value = null
   activeIndex.value = -1
   report.value = null
+  lastAlertTitle.value = ''
+  liveOverlay.value = null
 }
 
 const onPick = (uploadFile) => {
@@ -445,6 +532,8 @@ const detect = async () => {
   detecting.value = true
   startTime = Date.now()
   elapsedMs.value = 0
+  lastAlertTitle.value = ''
+  liveOverlay.value = null
   progTimer = setInterval(() => { elapsedMs.value = Date.now() - startTime }, 100)
   try {
     const fd = new FormData()
@@ -455,6 +544,31 @@ const detect = async () => {
     result.value = res.data
     report.value = null
     activeIndex.value = -1
+    if (alertEnabled.value && res.data?.detections?.length) {
+      try {
+        const ar = await alertApi.evaluate({
+          detections: res.data.detections,
+          sourceKey: 'image-detect',
+          sourceType: 'image',
+          modelId: modelId.value,
+          persist: true,
+          frameWidth: res.data.width,
+          frameHeight: res.data.height,
+        })
+        const list = ar.data?.triggered || []
+        liveOverlay.value = ar.data?.overlay || null
+        list.filter((t) => t.notify).forEach((item) => {
+          ElNotification({
+            title: item.title || item.ruleName || '检测告警',
+            message: item.message || '请现场核实',
+            type: item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'info',
+            duration: item.severity === 'high' ? 0 : 8000,
+            position: 'top-right',
+          })
+          lastAlertTitle.value = item.title || item.ruleName || '告警'
+        })
+      } catch (_) { /* 告警失败不阻断检测 */ }
+    }
     await nextTick()
     syncCanvas()
   } finally {
@@ -545,8 +659,8 @@ const downloadResult = () => {
   a.click()
 }
 
-onMounted(() => {
-  loadModels()
+onMounted(async () => {
+  await loadModels()
   window.addEventListener('resize', onResize)
 })
 onBeforeUnmount(() => {
@@ -598,6 +712,28 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   font-size: 13px;
   color: var(--muted);
+}
+.alert-tip {
+  margin-top: 8px;
+}
+.alert-action-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 0;
+}
+.alert-tip-inline {
+  flex: 1 1 320px;
+  width: auto;
+  margin: 0 0 0 12px;
+  padding: 5px 12px;
+}
+.alert-tip-inline :deep(.el-alert__content) {
+  padding: 0;
+}
+.alert-tip-inline :deep(.el-alert__title) {
+  font-size: 13px;
+  line-height: 1.4;
 }
 .pk-name { font-weight: 600; color: var(--ink); }
 

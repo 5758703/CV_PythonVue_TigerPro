@@ -102,6 +102,7 @@ def _regroup_ai_menus():
         (206, 230, "/ai/imgcls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
         (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
         (274, 230, "/ai/face"),
+        (276, 230, "/ai/alert"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -178,7 +179,7 @@ def _regroup_model_menus():
 
 
 def _patch_video_surveillance_menu():
-    """「摄像头」目录更名为「视频监控」，并排在系统管理上方（幂等）。"""
+    """「摄像头」目录更名为「视频监控」；监控墙菜单命名对齐（幂等）。"""
     changed = False
     m245 = Menu.query.get(245)
     if m245:
@@ -188,6 +189,10 @@ def _patch_video_surveillance_menu():
         if m245.order_num != 1:
             m245.order_num = 1
             changed = True
+    m241 = Menu.query.get(241)
+    if m241 and m241.menu_name != "监控墙":
+        m241.menu_name = "监控墙"
+        changed = True
     m1 = Menu.query.get(1)
     if m1 and m1.order_num != 2:
         m1.order_num = 2
@@ -301,7 +306,7 @@ def seed_ai_menus():
     if _m240 and _m240.parent_id != 245:   # 把已存在的「摄像头管理」归入分组（幂等）
         _m240.parent_id = 245
         db.session.commit()
-    _ensure_ai_menu(241, 245, "实时监控大屏", "C", "camera:list",
+    _ensure_ai_menu(241, 245, "监控墙", "C", "camera:list",
                     path="/camera/wall", component="camera/wall/index", icon="Monitor",
                     order=2, grant_common=True)
     _patch_video_surveillance_menu()
@@ -328,6 +333,14 @@ def seed_ai_menus():
     _ensure_ai_menu(2742, 274, "人脸底库新增", "F", "ai:face:add")
     _ensure_ai_menu(2743, 274, "人脸底库修改", "F", "ai:face:edit")
     _ensure_ai_menu(2744, 274, "人脸底库删除", "F", "ai:face:remove")
+    # 检测告警（视觉识别 230 下）
+    _ensure_ai_menu(276, 230, "检测告警", "C", "ai:alert:list",
+                    path="/ai/alert", component="ai/alert/index", icon="Bell",
+                    order=14, grant_common=True)
+    _ensure_ai_menu(2761, 276, "告警查询", "F", "ai:alert:query", grant_common=True)
+    _ensure_ai_menu(2762, 276, "告警确认", "F", "ai:alert:edit")
+    _ensure_ai_menu(2763, 276, "告警删除", "F", "ai:alert:remove")
+    _ensure_ai_menu(2764, 276, "规则配置", "F", "ai:alert:edit")  # 与确认共用 edit 权限，管理员可改规则/样式
     # 老库曾误写 WaterMelon（非 Element Plus 图标名），修正为 Pouring
     _m250 = Menu.query.get(250)
     if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
@@ -606,6 +619,15 @@ def seed_ai_models():
         source_url="https://github.com/ChaoningZhang/MobileSAM",
         description="MobileSAM 轻量 SAM，支持点击/框选/全自动分割，CPU 可用。图像分割页。", status="0",
     ))
+    # Ultralytics YOLOE-26s 开放词汇实例分割（本地权重目录已预置）
+    created |= _ensure_ai_model("yoloe-26s-seg", dict(
+        model_name="YOLOE-26s 开放词汇分割", category="实例分割",
+        task="instance-segmentation", library="ultralytics", version="v26",
+        source_url="https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt",
+        file_path="models/yoloe-26s-seg/yoloe-26s-seg.pt",
+        description="Ultralytics YOLOE-26s-seg 开放词汇实例分割；图像分割页可自定义文本提示类别，默认 COCO 常用类。",
+        status="0",
+    ))
     # 阶段C 示例：transformers 图像分类
     created |= _ensure_ai_model("vit-base", dict(
         model_name="ViT 通用图像分类", category="图像分类",
@@ -719,6 +741,16 @@ def seed_ai_models():
         source_url="https://huggingface.co/Ultralytics/YOLO11#yolo11n-pose.pt",
         description="Ultralytics YOLO11n Pose，球员骨架检测。姿态估计页 / 羽毛球分析页使用。", status="0",
     ))
+    # 羽毛球专用检测（Good-Badminton yolo11s-ball，本地权重幂等绑定）
+    created |= _ensure_ai_model("yolo11s-ball", dict(
+        model_name="YOLO11s 羽毛球检测", category="目标检测",
+        task="object-detection", library="ultralytics", version="v11",
+        source_url="https://github.com/yo-WASSUP/Good-Badminton/releases/download/v0.1.0/yolo11s-ball.pt",
+        file_path="models/yolo11s-ball/yolo11s-ball.pt",
+        description="Good-Badminton 发布的 YOLO11s 羽毛球（shuttlecock）检测权重，Apache-2.0。"
+                    "羽毛球分析页「羽毛球模型」推荐选用。",
+        status="0",
+    ))
     # RTMO 姿态（rtmlib ONNX，羽毛球分析推荐）
     created |= _ensure_ai_model("rtmo-s", dict(
         model_name="RTMO-S 姿态估计", category="姿态估计",
@@ -764,13 +796,369 @@ def seed_ai_models():
     _bind_local_brain_tumor_weight()
     _bind_local_rocket_detect_weight()
     _bind_local_insightface()
+    _bind_local_yoloe_seg_weight()
+    _bind_local_yolo11s_ball_weight()
     return created
+
+
+def _bind_local_yolo11s_ball_weight():
+    """绑定本地 Good-Badminton yolo11s-ball.pt（幂等）。"""
+    m = AiModel.query.filter_by(model_key="yolo11s-ball").first()
+    if not m:
+        return False
+    base = os.path.dirname(os.path.abspath(__file__))
+    uploads = os.path.join(base, "uploads")
+    rel_file = "models/yolo11s-ball/yolo11s-ball.pt"
+    abs_file = os.path.join(uploads, rel_file.replace("/", os.sep))
+    if not os.path.isfile(abs_file):
+        if m.status != "1":
+            m.status = "1"
+            db.session.commit()
+            return True
+        return False
+    size = os.path.getsize(abs_file)
+    changed = False
+    if m.file_path != rel_file:
+        m.file_path = rel_file
+        changed = True
+    if m.model_name != "YOLO11s 羽毛球检测":
+        m.model_name = "YOLO11s 羽毛球检测"
+        changed = True
+    if m.category != "目标检测":
+        m.category = "目标检测"
+        changed = True
+    if (m.task or "") != "object-detection":
+        m.task = "object-detection"
+        changed = True
+    if (m.library or "") != "ultralytics":
+        m.library = "ultralytics"
+        changed = True
+    if size > 0 and m.file_size != size:
+        m.file_size = size
+        changed = True
+    if size > 0 and m.status != "0":
+        m.status = "0"
+        changed = True
+    # 来源 URL 对齐 Release，便于「拉取权重」回退下载
+    src = "https://github.com/yo-WASSUP/Good-Badminton/releases/download/v0.1.0/yolo11s-ball.pt"
+    if (m.source_url or "") != src:
+        m.source_url = src
+        changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def _bind_local_yoloe_seg_weight():
+    """绑定本地已下载的 YOLOE-26s-seg 权重（幂等更新 file_path/file_size/status）。"""
+    m = AiModel.query.filter_by(model_key="yoloe-26s-seg").first()
+    if not m:
+        return False
+    base = os.path.dirname(os.path.abspath(__file__))
+    uploads = os.path.join(base, "uploads")
+    rel_file = "models/yoloe-26s-seg/yoloe-26s-seg.pt"
+    abs_file = os.path.join(uploads, rel_file.replace("/", os.sep))
+    if not os.path.isfile(abs_file):
+        # 目录内再找任意 .pt
+        abs_dir = os.path.join(uploads, "models", "yoloe-26s-seg")
+        wp = None
+        if os.path.isdir(abs_dir):
+            for root, _dirs, files in os.walk(abs_dir):
+                for f in files:
+                    if f.lower().endswith(".pt"):
+                        wp = os.path.join(root, f)
+                        break
+                if wp:
+                    break
+        if not wp:
+            if m.status != "1":
+                m.status = "1"
+                db.session.commit()
+                return True
+            return False
+        abs_file = wp
+        rel_file = os.path.relpath(wp, uploads).replace(os.sep, "/")
+    size = os.path.getsize(abs_file)
+    changed = False
+    if m.file_path != rel_file:
+        m.file_path = rel_file
+        changed = True
+    if m.model_name != "YOLOE-26s 开放词汇分割":
+        m.model_name = "YOLOE-26s 开放词汇分割"
+        changed = True
+    if m.category != "实例分割":
+        m.category = "实例分割"
+        changed = True
+    if (m.task or "") != "instance-segmentation":
+        m.task = "instance-segmentation"
+        changed = True
+    if (m.library or "") != "ultralytics":
+        m.library = "ultralytics"
+        changed = True
+    if size > 0 and m.file_size != size:
+        m.file_size = size
+        changed = True
+    if size > 0 and m.status != "0":
+        m.status = "0"
+        changed = True
+    if size <= 0 and m.status != "1":
+        m.status = "1"
+        changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def seed_alert_rules():
+    """默认告警规则：烟火 / 聚集 / PPE 未戴帽 / 越线入侵（幂等补齐缺失键；默认停用）。"""
+    import json
+    from models import AlertRule
+
+    fire_overlay = {
+        "enabled": True,
+        "priority": 0,
+        "fillColor": "#FF1A1A",
+        "borderColor": "#CC0000",
+        "textColor": "#FFFFFF",
+        "titleLines": ["FIRE", "DANGEROUS", "ALERT"],
+        "subtitleLines": [],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#B00000",
+    }
+    crowd_overlay = {
+        "enabled": True,
+        "priority": 10,
+        "fillColor": "#FFD400",
+        "borderColor": "#E6B800",
+        "textColor": "#1A1A1A",
+        "titleLines": ["CROWD ALERT"],
+        "subtitleLines": ["注意安全", "防止拥挤踩踏"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#1A1A1A",
+        "triangleMark": "#FFFFFF",
+    }
+    ppe_overlay = {
+        "enabled": True,
+        "priority": 5,
+        "fillColor": "#FF7A00",
+        "borderColor": "#CC6200",
+        "textColor": "#FFFFFF",
+        "titleLines": ["NO HARDHAT"],
+        "subtitleLines": ["未佩戴安全帽", "立即纠正"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#CC6200",
+    }
+    line_overlay = {
+        "enabled": True,
+        "priority": 15,
+        "fillColor": "#9254DE",
+        "borderColor": "#722ED1",
+        "textColor": "#FFFFFF",
+        "titleLines": ["INTRUSION"],
+        "subtitleLines": ["越线告警", "请勿闯入"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#722ED1",
+    }
+    stranger_overlay = {
+        "enabled": True,
+        "priority": 8,
+        "fillColor": "#409EFF",
+        "borderColor": "#1D6FBF",
+        "textColor": "#FFFFFF",
+        "titleLines": ["STRANGER"],
+        "subtitleLines": ["陌生人脸", "请核验身份"],
+        "panelWidthRatio": 0.68,
+        "panelHeightRatio": 0.32,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#1D6FBF",
+    }
+    fire_cfg = {
+        "classes": ["fire", "smoke", "flame"],
+        "min_confidence": 0.35,
+        "consecutive_frames": 2,
+        "cooldown_sec": 30,
+        "title_template": "疑似烟火：检测到 {classes}",
+        "message_template": "立即核实火情、就近取用灭火器并启动应急预案；确认消防通道畅通。",
+        "overlay": fire_overlay,
+    }
+    crowd_cfg = {
+        "class_names": ["person", "people", "human", "pedestrian", "人", "行人"],
+        "class_name": "person",
+        "min_count": 4,
+        "video_min_count": 3,
+        "min_confidence": 0.25,
+        "consecutive_frames": 2,
+        "cooldown_sec": 60,
+        "title_template": "人员聚集：当前 {count} 人（阈值 {minCount}）",
+        "message_template": "注意安全，防止拥挤踩踏；评估区域承载并做人流疏导。",
+        "overlay": crowd_overlay,
+    }
+    ppe_cfg = {
+        "classes": ["NO-Hardhat", "no-hardhat"],
+        "min_confidence": 0.35,
+        "consecutive_frames": 2,
+        "cooldown_sec": 45,
+        "title_template": "未戴安全帽：检测到 {classes}",
+        "message_template": "立即提醒未戴安全帽人员补戴或撤离危险区域；入口增设佩戴检查。",
+        "overlay": ppe_overlay,
+    }
+    line_cfg = {
+        "classes": ["person", "Person", "people", "human", "pedestrian", "人", "行人"],
+        "line": [0.1, 0.5, 0.9, 0.5],
+        "direction": "both",
+        "min_confidence": 0.25,
+        "consecutive_frames": 1,
+        "cooldown_sec": 30,
+        "title_template": "越线入侵：{crossCount} 次穿越",
+        "message_template": "核查越线人员身份与事由；必要时广播劝离并联动门禁/安保。",
+        "overlay": line_overlay,
+    }
+    stranger_cfg = {
+        "min_confidence": 0.0,
+        "consecutive_frames": 2,
+        "cooldown_sec": 60,
+        "title_template": "陌生人脸：检测到 {count} 张未匹配人脸",
+        "message_template": "核查现场人员身份；必要时登记访客或联动门禁/安保。",
+        "overlay": stranger_overlay,
+    }
+    defaults = [
+        dict(
+            rule_key="fire-smoke",
+            name="烟火告警",
+            description="检测到 fire/smoke 类目标时触发（建议配合 fire-smoke-detection 模型）",
+            rule_type="class_presence",
+            config_json=json.dumps(fire_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",  # 默认不启用，需在检测告警页手动打开单项开关
+        ),
+        dict(
+            rule_key="crowd-gathering",
+            name="人员聚集告警",
+            description="画面中 person 数量超过阈值时触发（建议配合 YOLO 等含 person 的通用检测模型）",
+            rule_type="count_threshold",
+            config_json=json.dumps(crowd_cfg, ensure_ascii=False),
+            severity="medium",
+            status="1",
+        ),
+        dict(
+            rule_key="ppe-no-hardhat",
+            name="PPE未戴安全帽",
+            description="检测到 NO-Hardhat 时触发（建议配合 ppe-detection / PPE穿戴识别模型）",
+            rule_type="class_presence",
+            config_json=json.dumps(ppe_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
+        dict(
+            rule_key="line-intrusion",
+            name="越线/入侵告警",
+            description="目标穿越警戒线时触发（需带 trackId 的追踪结果；目标追踪页画线可覆盖默认线）",
+            rule_type="line_crossing",
+            config_json=json.dumps(line_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
+        dict(
+            rule_key="stranger-face",
+            name="陌生人脸告警",
+            description="人脸识别未匹配底库时触发（建议在「人脸识别」页开启启用告警）",
+            rule_type="unmatched_face",
+            config_json=json.dumps(stranger_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
+    ]
+    created = False
+    updated = False
+    merge_map = {
+        "fire-smoke": fire_cfg,
+        "crowd-gathering": crowd_cfg,
+        "ppe-no-hardhat": ppe_cfg,
+        "line-intrusion": line_cfg,
+        "stranger-face": stranger_cfg,
+    }
+    for fields in defaults:
+        existing = AlertRule.query.filter_by(rule_key=fields["rule_key"]).first()
+        if existing:
+            cfg = existing.config()
+            desired = merge_map[fields["rule_key"]]
+            # 仅补齐缺失键，不覆盖管理员已改字段（overlay 子键也仅补缺失）
+            changed = False
+            for k, v in desired.items():
+                if k == "overlay":
+                    ov = dict(cfg.get("overlay") or {})
+                    for ok, ovv in v.items():
+                        if ok not in ov:
+                            ov[ok] = ovv
+                            changed = True
+                    if changed or "overlay" not in cfg:
+                        cfg["overlay"] = ov
+                        changed = True
+                elif k not in cfg:
+                    cfg[k] = v
+                    changed = True
+            if changed:
+                existing.config_json = json.dumps(cfg, ensure_ascii=False)
+                updated = True
+            continue
+        db.session.add(AlertRule(**fields))
+        created = True
+
+    # 一次性：将旧种子「默认启用」对齐为「默认停用」（之后保留管理员手动设置）
+    align_default_off = False
+    try:
+        from flask import current_app
+        import os
+        flag_path = os.path.join(current_app.instance_path or ".", ".alert_rules_default_off_v1")
+        if not os.path.exists(flag_path):
+            for fields in defaults:
+                row = AlertRule.query.filter_by(rule_key=fields["rule_key"]).first()
+                if row and row.status == "0":
+                    row.status = "1"
+                    updated = True
+            align_default_off = True
+            _alert_off_flag = flag_path
+        else:
+            _alert_off_flag = None
+    except Exception:
+        _alert_off_flag = None
+        align_default_off = False
+
+    if created or updated:
+        db.session.commit()
+    if align_default_off and _alert_off_flag:
+        try:
+            import os
+            os.makedirs(os.path.dirname(os.path.abspath(_alert_off_flag)) or ".", exist_ok=True)
+            with open(_alert_off_flag, "w", encoding="utf-8") as f:
+                f.write("1\n")
+        except Exception:
+            pass
+    return created or updated
 
 
 def init_seed():
     if User.query.first():
         seed_ai_menus()   # 用户已存在也补齐 AI 菜单种子
         seed_ai_models()  # 用户已存在也补齐 AI 模型种子
+        seed_alert_rules()
         return False  # 已初始化
 
     _seed_depts()
@@ -819,6 +1207,7 @@ def init_seed():
 
     seed_ai_menus()
     seed_ai_models()
+    seed_alert_rules()
     return True
 
 

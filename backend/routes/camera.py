@@ -11,7 +11,7 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import Camera
 from security import permission_required, current_user, has_perm
-from services.camera_stream import mjpeg_stream, list_dshow_devices, check_source_ready
+from services.camera_stream import list_dshow_devices, check_source_ready
 
 camera_bp = Blueprint("camera", __name__, url_prefix="/api/camera")
 
@@ -158,22 +158,34 @@ def stream_camera(cid):
     check_only = request.args.get("check") == "1"
     upload_folder = current_app.config["UPLOAD_FOLDER"]
     try:
-        from services.camera_stream import _resolve_source, probe_file_mjpeg
+        from services.camera_stream import (
+            _resolve_source, probe_file_mjpeg, probe_rtsp_mjpeg, mjpeg_stream_shared,
+        )
         source = _resolve_source(cam, upload_folder)
-        if cam.source_type == "file" and check_only:
-            probe_err = probe_file_mjpeg(cam, upload_folder)
-            if probe_err:
-                return jsonify(code=500, message=f"本地视频转流失败：{probe_err}"), 500
+        if check_only:
+            if cam.source_type == "file":
+                probe_err = probe_file_mjpeg(cam, upload_folder)
+                if probe_err:
+                    return jsonify(code=500, message=f"本地视频转流失败：{probe_err}"), 500
+            elif cam.source_type == "rtsp":
+                probe_err = probe_rtsp_mjpeg(cam, upload_folder)
+                if probe_err:
+                    return jsonify(code=500, message=f"RTSP 探活失败：{probe_err}"), 500
             return jsonify(code=0, message="ok")
     except FileNotFoundError as e:
         return jsonify(code=404, message=str(e)), 404
     except ValueError as e:
         return jsonify(code=400, message=str(e)), 400
-    if check_only:
-        return jsonify(code=0, message="ok")
+    # 监控墙多路预览：共享拉流，避免每格一个 ffmpeg
+    shared = request.args.get("shared", "1") != "0"
+    gen = mjpeg_stream_shared(
+        cam.id, cam.source_type, source, cam.resolution, cam.fps,
+    ) if shared else None
+    if gen is None:
+        from services.camera_stream import mjpeg_stream
+        gen = mjpeg_stream(cam.source_type, source, cam.resolution, cam.fps)
     resp = Response(
-        stream_with_context(mjpeg_stream(
-            cam.source_type, source, cam.resolution, cam.fps)),
+        stream_with_context(gen),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"

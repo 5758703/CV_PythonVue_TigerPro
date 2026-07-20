@@ -190,6 +190,8 @@ export const trainingApi = {
   buildDataset: (id) => request.post(`/ai/training/datasets/${id}/build`, null, { timeout: 0 }),
   datasetSamples: (id) => request.get(`/ai/training/datasets/${id}/samples`),
   datasetFormats: () => request.get('/ai/training/datasets/formats'),
+  baseModels: () => request.get('/ai/training/base-models'),
+  badmintonPreset: () => request.get('/ai/training/presets/badminton'),
   extractFrames: (id, formData) =>
     request.post(`/ai/training/datasets/${id}/extract-frames`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -218,7 +220,7 @@ export const trainingApi = {
   jobProgress: (id) => request.get(`/ai/training/jobs/${id}/progress`),
   addJob: (data) => request.post('/ai/training/jobs', data),
   startJob: (id) => request.post(`/ai/training/jobs/${id}/start`, null, { timeout: 0 }),
-  cancelJob: (id) => request.post(`/ai/training/jobs/${id}/cancel`),
+  cancelJob: (id, data) => request.post(`/ai/training/jobs/${id}/cancel`, data || {}),
   removeJob: (id) => request.delete(`/ai/training/jobs/${id}`),
   validateJob: (id) => request.post(`/ai/training/jobs/${id}/validate`, null, { timeout: 0 }),
   validateProgress: (id) => request.get(`/ai/training/jobs/${id}/validate-progress`),
@@ -253,4 +255,16 @@ export const faceApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0,
     }),
+}
+
+// ---------------- 检测告警
+export const alertApi = {
+  listRules: () => request.get('/alerts/rules'),
+  getRule: (id) => request.get(`/alerts/rules/${id}`),
+  updateRule: (id, data) => request.put(`/alerts/rules/${id}`, data),
+  listEvents: (params) => request.get('/alerts/events', { params }),
+  evaluate: (data) => request.post('/alerts/evaluate', data),
+  ackEvent: (id) => request.put(`/alerts/events/${id}/ack`),
+  removeEvent: (id) => request.delete(`/alerts/events/${id}`),
+  resetRuntime: (data) => request.post('/alerts/reset-runtime', data || {}),
 }

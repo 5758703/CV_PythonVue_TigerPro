@@ -323,7 +323,7 @@ _WEIGHT_EXT = (".pt", ".onnx", ".pth")
 
 
 def _pick_local_weight(folder):
-    """从已下载目录里挑单文件权重（优先 best.pt，其次路径最短）。"""
+    """从已下载目录里挑单文件权重（优先 best.pt，其次 .pt > .pth > .onnx，再路径最短）。"""
     cands = []
     for root, _dirs, files in os.walk(folder):
         for f in files:
@@ -331,7 +331,14 @@ def _pick_local_weight(folder):
                 cands.append(os.path.join(root, f))
     if not cands:
         return None
-    cands.sort(key=lambda p: (not os.path.basename(p).lower().endswith("best.pt"), len(p)))
+
+    def _rank(p):
+        name = os.path.basename(p).lower()
+        ext = os.path.splitext(name)[1]
+        ext_rank = {".pt": 0, ".pth": 1, ".onnx": 2}.get(ext, 9)
+        return (0 if name.endswith("best.pt") else 1, ext_rank, len(p))
+
+    cands.sort(key=_rank)
     return cands[0]
 
 
@@ -484,19 +491,32 @@ MOBILESAM_WEIGHT_URL = (
 
 def _fetch_mobilesam_weight(folder, sub):
     """拉取 MobileSAM 官方 mobile_sam.pt（GitHub）。"""
+    return _fetch_direct_weight(MOBILESAM_WEIGHT_URL, folder, sub, fname="mobile_sam.pt")
+
+
+def _fetch_direct_weight(url, folder, sub, fname=None):
+    """从直链下载单文件权重（.pt/.onnx/.pth），如 GitHub Release。"""
     import requests
-    fname = "mobile_sam.pt"
+    if not url:
+        raise ValueError("缺少下载地址")
+    name = fname or os.path.basename(urlparse(url).path) or "weight.pt"
+    name = secure_filename(name) or "weight.pt"
     _ensure_dir(folder)
-    dest = os.path.join(folder, fname)
-    resp = requests.get(MOBILESAM_WEIGHT_URL, stream=True, timeout=600)
+    dest = os.path.join(folder, name)
+    resp = requests.get(url, stream=True, timeout=600, allow_redirects=True)
     resp.raise_for_status()
     with open(dest, "wb") as f:
         for chunk in resp.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
     if not os.path.isfile(dest) or os.path.getsize(dest) < 1024:
-        raise ValueError("MobileSAM 权重下载失败")
-    return f"models/{sub}/{fname}", os.path.getsize(dest)
+        raise ValueError(f"权重下载失败或文件过小：{url}")
+    return f"models/{sub}/{name}", os.path.getsize(dest)
+
+
+def _is_direct_weight_url(url):
+    path = (urlparse(url or "").path or "").lower()
+    return path.endswith((".pt", ".onnx", ".pth"))
 
 
 def _roboflow_inference_model_id(api_key, workspace, project, version_num):
@@ -651,6 +671,8 @@ def fetch_weight(mid):
             rel, size = _fetch_rtmlib_weight(folder, sub, m.model_key)
         elif lib == "insightface":
             rel, size = _fetch_insightface_weight(m)
+        elif _is_direct_weight_url(m.source_url):
+            rel, size = _fetch_direct_weight(m.source_url, folder, sub)
         else:
             hub = _hub_of(m.source_url)
             if hub == "roboflow":
@@ -1150,7 +1172,7 @@ def pose_route(mid):
 @ai_model_bp.post("/<int:mid>/segment")
 @permission_required("ai:model:query")
 def segment_route(mid):
-    """实例/交互分割：RF-DETR-Seg 或 MobileSAM。"""
+    """实例/交互分割：RF-DETR-Seg / Ultralytics(YOLOE) / MobileSAM。"""
     m = AiModel.query.get_or_404(mid)
     lib = _detect_lib(m)
     task = (m.task or "").lower()
@@ -1175,6 +1197,12 @@ def segment_route(mid):
             from inference import segment_image_rfdetr
             result = segment_image_rfdetr(abs_path, file.read(), conf=conf, draw=draw,
                                           model_key=m.model_key or "rf-detr-seg-medium")
+        elif lib == "ultralytics":
+            from inference import segment_image_ultralytics
+            result = segment_image_ultralytics(
+                abs_path, file.read(), conf=conf, draw=draw,
+                classes=request.form.get("classes"),
+            )
         elif lib == "mobilesam":
             import json
             from inference import segment_image_mobilesam
@@ -1193,7 +1221,7 @@ def segment_route(mid):
                 abs_path, file.read(), points=points, point_labels=point_labels,
                 box=box, mode=mode, draw=draw)
         else:
-            return jsonify(code=400, message="分割仅支持 rfdetr 或 mobilesam 引擎"), 400
+            return jsonify(code=400, message="分割仅支持 rfdetr、ultralytics 或 mobilesam 引擎"), 400
     except ValueError as e:
         return jsonify(code=400, message=str(e)), 400
     except Exception as e:  # noqa: BLE001
@@ -1201,8 +1229,9 @@ def segment_route(mid):
     return jsonify(code=0, message="分割完成", data=result)
 
 
-def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_key):
-    """后台线程：RF-DETR-Seg 逐帧视频分割。"""
+def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_key,
+                    lib="rfdetr", classes=None):
+    """后台线程：RF-DETR-Seg / Ultralytics 逐帧视频分割。"""
     def cb(processed, total):
         with _video_jobs_lock:
             j = _video_jobs.get(job_id)
@@ -1210,9 +1239,14 @@ def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_
                 j["processed"] = processed
                 j["total"] = total
     try:
-        from inference import segment_video_rfdetr
-        stats = segment_video_rfdetr(abs_path, src_path, out_path, conf=conf,
-                                     model_key=model_key or "rf-detr-seg-medium", progress_cb=cb)
+        if lib == "ultralytics":
+            from inference import segment_video_ultralytics
+            stats = segment_video_ultralytics(
+                abs_path, src_path, out_path, conf=conf, classes=classes, progress_cb=cb)
+        else:
+            from inference import segment_video_rfdetr
+            stats = segment_video_rfdetr(abs_path, src_path, out_path, conf=conf,
+                                         model_key=model_key or "rf-detr-seg-medium", progress_cb=cb)
         stats["output"] = out_name
         with _video_jobs_lock:
             _video_jobs[job_id].update(status="done", stats=stats,
@@ -1231,11 +1265,11 @@ def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_
 @ai_model_bp.post("/<int:mid>/segment-video")
 @permission_required("ai:model:query")
 def segment_video_route(mid):
-    """RF-DETR-Seg 视频分割：异步任务，进度复用 video-progress。"""
+    """实例分割视频：RF-DETR-Seg 或 Ultralytics(YOLOE)，异步任务。"""
     m = AiModel.query.get_or_404(mid)
     lib = _detect_lib(m)
-    if lib != "rfdetr" or (m.task or "") != "instance-segmentation":
-        return jsonify(code=400, message="视频分割仅支持 RF-DETR-Seg 实例分割模型"), 400
+    if (m.task or "") != "instance-segmentation" or lib not in ("rfdetr", "ultralytics"):
+        return jsonify(code=400, message="视频分割仅支持 RF-DETR-Seg 或 Ultralytics 实例分割模型"), 400
     abs_path = _detect_model_path(m)
     if abs_path is None:
         return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
@@ -1251,6 +1285,7 @@ def segment_video_route(mid):
         conf = float(request.form.get("conf", 0.25))
     except (TypeError, ValueError):
         conf = 0.25
+    classes = request.form.get("classes")
 
     video_folder = current_app.config["VIDEO_FOLDER"]
     out_folder = current_app.config["OUTPUT_FOLDER"]
@@ -1270,7 +1305,7 @@ def segment_video_route(mid):
                                "stats": None, "error": None}
     threading.Thread(
         target=_segment_worker,
-        args=(job_id, abs_path, src_path, out_path, out_name, conf, m.model_key or ""),
+        args=(job_id, abs_path, src_path, out_path, out_name, conf, m.model_key or "", lib, classes),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
@@ -1312,7 +1347,18 @@ _video_jobs = {}
 _video_jobs_lock = threading.Lock()
 
 
-def _video_worker(job_id, library, task, abs_path, src_path, out_path, out_name, conf, model_key=""):
+def _video_worker(
+    job_id,
+    library,
+    task,
+    abs_path,
+    src_path,
+    out_path,
+    out_name,
+    conf,
+    model_key="",
+    alert_rules_payload=None,
+):
     """后台线程：逐帧检测，按帧上报进度，完成写结果。"""
     def cb(processed, total):
         with _video_jobs_lock:
@@ -1324,15 +1370,19 @@ def _video_worker(job_id, library, task, abs_path, src_path, out_path, out_name,
         lib = (library or "ultralytics").lower()
         if lib == "transformers":
             from inference import detect_video_hf
-            stats = detect_video_hf(abs_path, src_path, out_path, conf=conf, task=task, progress_cb=cb)
+            stats = detect_video_hf(abs_path, src_path, out_path, conf=conf, task=task, progress_cb=cb,
+                                    alert_rules=alert_rules_payload, alert_source_key=job_id)
         elif lib == "rfdetr":
             from inference import detect_video_rfdetr
             stats = detect_video_rfdetr(abs_path, src_path, out_path, conf=conf,
-                                        model_key=model_key, progress_cb=cb)
+                                        model_key=model_key, progress_cb=cb,
+                                        alert_rules=alert_rules_payload, alert_source_key=job_id)
         else:
             from inference import detect_video
             stats = detect_video(abs_path, src_path, out_path, conf=conf,
-                                 progress_cb=cb, model_key=model_key)
+                                 progress_cb=cb, model_key=model_key,
+                                 alert_rules=alert_rules_payload,
+                                 alert_source_key=job_id)
         stats["output"] = out_name
         with _video_jobs_lock:
             _video_jobs[job_id].update(status="done", stats=stats,
@@ -1370,6 +1420,28 @@ def detect_video_route(mid):
     except (TypeError, ValueError):
         conf = 0.25
 
+    alert_enabled = str(request.form.get("alertEnabled", "0")).strip().lower() in ("1", "true", "on", "yes")
+    rules_payload = None
+    if alert_enabled:
+        from services.alert_rules_query import (
+            load_enabled_alert_rules,
+            parse_rule_keys,
+            serialize_alert_rules_payload,
+        )
+        # alertRuleKeys: JSON 数组；未传则全部启用规则
+        raw_keys = request.form.get("alertRuleKeys")
+        if raw_keys is None or str(raw_keys).strip() == "":
+            rule_keys = None
+        else:
+            rule_keys = parse_rule_keys(raw_keys)
+        enabled_rules = load_enabled_alert_rules(rule_keys)
+        if not enabled_rules:
+            return jsonify(
+                code=400,
+                message="当前没有启用中的告警规则；请到「检测告警」页启用至少一条规则",
+            ), 400
+        rules_payload = serialize_alert_rules_payload(enabled_rules)
+
     video_folder = current_app.config["VIDEO_FOLDER"]
     out_folder = current_app.config["OUTPUT_FOLDER"]
     _ensure_dir(video_folder)
@@ -1389,7 +1461,7 @@ def detect_video_route(mid):
     threading.Thread(
         target=_video_worker,
         args=(job_id, lib, m.task or "object-detection", abs_path, src_path, out_path, out_name, conf,
-              m.model_key or ""),
+              m.model_key or "", rules_payload),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
@@ -1487,7 +1559,8 @@ def pose_video_route(mid):
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
-def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line):
+def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line,
+                  alert_rules_payload=None):
     """后台线程：逐帧追踪，按帧上报进度，完成写结果。"""
     def cb(processed, total):
         with _video_jobs_lock:
@@ -1497,8 +1570,11 @@ def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, l
                 j["total"] = total
     try:
         from inference import track_video
-        stats = track_video(abs_path, src_path, out_path, conf=conf, imgsz=imgsz,
-                            line=line, progress_cb=cb)
+        stats = track_video(
+            abs_path, src_path, out_path, conf=conf, imgsz=imgsz,
+            line=line, progress_cb=cb,
+            alert_rules=alert_rules_payload, alert_source_key=job_id,
+        )
         stats["output"] = out_name
         with _video_jobs_lock:
             _video_jobs[job_id].update(status="done", stats=stats,
@@ -1552,6 +1628,29 @@ def track_video_route(mid):
         except (ValueError, TypeError):
             line = None
 
+    alert_enabled = str(request.form.get("alertEnabled", "0")).strip().lower() in (
+        "1", "true", "on", "yes"
+    )
+    rules_payload = None
+    if alert_enabled:
+        from services.alert_rules_query import (
+            load_enabled_alert_rules,
+            parse_rule_keys,
+            serialize_alert_rules_payload,
+        )
+        raw_keys = request.form.get("alertRuleKeys")
+        if raw_keys is None or str(raw_keys).strip() == "":
+            rule_keys = None
+        else:
+            rule_keys = parse_rule_keys(raw_keys)
+        enabled_rules = load_enabled_alert_rules(rule_keys)
+        if not enabled_rules:
+            return jsonify(
+                code=400,
+                message="当前没有启用中的告警规则；请到「检测告警」页启用至少一条规则",
+            ), 400
+        rules_payload = serialize_alert_rules_payload(enabled_rules)
+
     video_folder = current_app.config["VIDEO_FOLDER"]
     out_folder = current_app.config["OUTPUT_FOLDER"]
     _ensure_dir(video_folder)
@@ -1570,7 +1669,7 @@ def track_video_route(mid):
                                "stats": None, "error": None}
     threading.Thread(
         target=_track_worker,
-        args=(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line),
+        args=(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line, rules_payload),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})

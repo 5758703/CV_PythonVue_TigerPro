@@ -12,12 +12,17 @@
               </el-select>
             </el-form-item>
             <el-form-item label="羽毛球模型">
-              <el-select v-model="ballId" placeholder="可选 YOLO 检测" clearable style="width:200px">
-                <el-option v-for="m in ballModels" :key="m.id" :label="m.modelName" :value="m.id" />
+              <el-select v-model="ballId" placeholder="推荐自训 / YOLO11s-ball" clearable style="width:240px">
+                <el-option v-for="m in ballModels" :key="m.id"
+                  :label="ballModelLabel(m)" :value="m.id" />
               </el-select>
+              <el-button link type="primary" class="train-link" @click="goTrainBallModel">自训提高精度</el-button>
             </el-form-item>
             <el-form-item label="置信度">
               <el-slider v-model="conf" :min="0.1" :max="0.9" :step="0.05" style="width:120px" />
+            </el-form-item>
+            <el-form-item label="球检测阈值">
+              <el-slider v-model="ballConf" :min="0.08" :max="0.5" :step="0.02" style="width:120px" />
             </el-form-item>
             <el-form-item>
               <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPickVideo" accept="video/*">
@@ -26,7 +31,7 @@
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :icon="VideoPlay" :loading="running"
-                :disabled="!poseId || !file || courtPoints.length < 4" @click="runAnalyze">
+                :disabled="!canAnalyze" @click="runAnalyze">
                 开始分析
               </el-button>
               <el-button :icon="Refresh" @click="resetAll">清空</el-button>
@@ -46,9 +51,11 @@
 
           <el-alert v-if="!poseModels.length" type="warning" :closable="false" class="tip-alert"
             title="暂无姿态模型：请到「模型管理」拉取 YOLO Pose / RTMO / RTMPose（rtmlib）权重。" />
+          <el-alert v-else-if="!ballModels.length" type="info" :closable="false" class="tip-alert"
+            title="未检测到羽毛球模型：请拉取 yolo11s-ball，或点击「自训提高精度」用 Roboflow 数据集 + 自有比赛视频训练 YOLO11n/s 后部署。" />
         </el-card>
 
-        <el-empty v-if="!file && !running && !resultVideoUrl" description="选择姿态模型与比赛视频，标注球场四角后开始分析"
+        <el-empty v-if="!file && !running && !resultVideoUrl" description="选择姿态模型与比赛视频，标注球场四角与网线后开始分析"
           :image-size="96" class="empty-main" />
 
         <template v-else>
@@ -72,23 +79,47 @@
               <div class="media-panel">
                 <div class="panel-hd">
                   <span class="panel-title">
-                    <el-icon><Aim /></el-icon> 球场四角标注
+                    <el-icon><Aim /></el-icon> 球场与网线标注
                   </span>
                   <span class="hint">{{ courtHint }}</span>
-                  <el-button v-if="file" link type="primary" size="small" :loading="detectingCourt"
-                    @click="runAutoDetect">自动检测</el-button>
-                  <el-button v-if="courtPoints.length" link type="warning" size="small" @click="clearCourt">重标</el-button>
+                </div>
+                <div class="annot-toolbar">
+                  <el-radio-group v-model="annotMode" size="small">
+                    <el-radio-button value="corner">四角</el-radio-button>
+                    <el-radio-button value="net" :disabled="courtPoints.length < 4">网线</el-radio-button>
+                    <el-radio-button value="edit" :disabled="courtPoints.length < 4">拖拽修正</el-radio-button>
+                  </el-radio-group>
+                  <div class="annot-actions">
+                    <el-button v-if="file" link type="primary" size="small" :loading="detectingCourt"
+                      @click="runAutoDetect">自动检测</el-button>
+                    <el-button v-if="courtPoints.length >= 4" link type="success" size="small"
+                      @click="resetNetFromCorners">网线按四角重算</el-button>
+                    <el-button v-if="courtPoints.length" link type="warning" size="small" @click="clearCourt">清空</el-button>
+                  </div>
                 </div>
                 <div class="media-body dark">
                   <div v-if="!frameSrc" class="media-placeholder">加载首帧中…</div>
                   <div v-else class="frame-box">
-                    <canvas ref="courtCanvas" class="court-canvas" @click="onCourtClick" />
+                    <canvas
+                      ref="courtCanvas"
+                      class="court-canvas"
+                      :class="{ dragging: !!dragTarget }"
+                      @mousedown="onAnnotDown"
+                      @mousemove="onAnnotMove"
+                      @mouseup="onAnnotUp"
+                      @mouseleave="onAnnotUp"
+                      @click="onAnnotClick"
+                    />
                   </div>
                 </div>
                 <div class="court-tip">
-                  上传视频后将自动检测球场四角；检测失败请手动点击标注（左上 → 右上 → 右下 → 左下）
+                  四角顺序：左上 → 右上 → 右下 → 左下；网线：左端 → 右端（可拖拽修正）。
+                  四角完成后默认用左右边中点生成网线，也可切换「网线」模式手动画线。
                   <el-tag v-if="courtAutoDetected" type="success" size="small" effect="plain" class="court-tag">
                     自动检测 {{ courtConfidenceText }}
+                  </el-tag>
+                  <el-tag v-if="netManual" type="warning" size="small" effect="plain" class="court-tag">
+                    网线已手改
                   </el-tag>
                 </div>
               </div>
@@ -120,93 +151,37 @@
         </template>
       </el-tab-pane>
 
-      <!-- ── 分析结果（统计 / 图表 / 说明 同页） ── -->
+      <!-- ── 分析结果（球员对比 / 热区落点 / AI 洞察 / 训练建议） ── -->
       <el-tab-pane label="分析结果" name="results">
-        <div class="results-page">
-          <!-- 统计摘要 -->
-          <section class="result-section">
-            <div class="section-head">
-              <h3>统计摘要</h3>
-              <el-tag v-if="stats" type="success" size="small">分析完成</el-tag>
-              <el-tag v-else type="info" size="small">暂无数据</el-tag>
-            </div>
-            <div v-if="stats" class="stat-grid">
-              <div class="stat-card">
-                <div class="stat-val">{{ stats.frames }}</div>
-                <div class="stat-label">总帧数</div>
-              </div>
-              <div class="stat-card accent-blue">
-                <div class="stat-val">{{ stats.rallyCount }}</div>
-                <div class="stat-label">回合数</div>
-              </div>
-              <div class="stat-card accent-green">
-                <div class="stat-val">{{ stats.totalPersons }}</div>
-                <div class="stat-label">人体检测累计</div>
-              </div>
-              <div class="stat-card accent-orange">
-                <div class="stat-val">{{ stats.shuttleDetections }}</div>
-                <div class="stat-label">羽毛球检出帧</div>
-              </div>
-            </div>
-            <el-empty v-else description="完成分析后将在此展示统计数据" :image-size="72" />
-
-            <div v-if="distRows.length" class="player-table-wrap">
-              <div class="sub-title">球员移动统计</div>
-              <el-table :data="distRows" size="small" border stripe class="player-table">
-                <el-table-column prop="label" label="球员" width="100" />
-                <el-table-column label="移动距离 (m)">
-                  <template #default="{ row }">{{ row.dist }}</template>
-                </el-table-column>
-                <el-table-column label="峰值速度 (m/s)">
-                  <template #default="{ row }">{{ row.speed }}</template>
-                </el-table-column>
-              </el-table>
-            </div>
-          </section>
-
-          <!-- 热力图 + 散点图 -->
-          <el-row :gutter="16" class="chart-row">
+        <BadmintonMatchReport
+          v-if="stats?.report"
+          :report="stats.report"
+          :summary="stats"
+          :heatmap-url="heatmapUrl"
+          :scatter-url="scatterUrl"
+          :result-video-url="resultVideoUrl"
+          @play-video="scrollToResultVideo"
+        />
+        <div v-else class="results-page">
+          <el-empty description="完成分析后将展示技战术报告（球员对比、热区、落点、AI 洞察与训练建议）" :image-size="96" />
+          <el-row v-if="heatmapUrl || scatterUrl" :gutter="16" class="chart-row">
             <el-col :xs="24" :md="12">
               <section class="result-section chart-section">
-                <div class="section-head">
-                  <h3>位置热力图</h3>
-                </div>
+                <div class="section-head"><h3>位置热力图</h3></div>
                 <div v-if="heatmapUrl" class="chart-frame">
                   <img :src="heatmapUrl" class="chart-img" alt="heatmap" />
                 </div>
-                <el-empty v-else description="暂无热力图" :image-size="64" />
               </section>
             </el-col>
             <el-col :xs="24" :md="12">
               <section class="result-section chart-section">
-                <div class="section-head">
-                  <h3>位置散点图</h3>
-                </div>
+                <div class="section-head"><h3>位置散点图</h3></div>
                 <div v-if="scatterUrl" class="chart-frame">
                   <img :src="scatterUrl" class="chart-img" alt="scatter" />
                 </div>
-                <el-empty v-else description="暂无散点图" :image-size="64" />
               </section>
             </el-col>
           </el-row>
-
-          <!-- 功能说明 -->
-          <section class="result-section guide-section">
-            <div class="section-head">
-              <h3>功能说明</h3>
-            </div>
-            <el-row :gutter="16" class="guide-grid">
-              <el-col :xs="24" :sm="12" :lg="6" v-for="item in guideItems" :key="item.title">
-                <div class="guide-card">
-                  <div class="guide-icon" :class="item.color">{{ item.icon }}</div>
-                  <div class="guide-title">{{ item.title }}</div>
-                  <div class="guide-desc">{{ item.desc }}</div>
-                </div>
-              </el-col>
-            </el-row>
-            <el-alert type="info" :closable="false" show-icon class="guide-alert"
-              title="支持 YOLO Pose / RTMO / RTMPose（rtmlib）姿态引擎；上传视频后自动检测球场线，可手动修正四角；可选羽毛球 YOLO 权重。" />
-          </section>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -215,24 +190,24 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, VideoPlay, Refresh, Download, VideoCamera, Aim, Film } from '@element-plus/icons-vue'
 import { modelApi, badmintonApi } from '../../../api/ai'
+import BadmintonMatchReport from './BadmintonMatchReport.vue'
+
+const router = useRouter()
 
 const COURT_LABELS = ['左上', '右上', '右下', '左下']
-
-const guideItems = [
-  { icon: '🏸', title: '球员姿态', desc: 'YOLO / RTMO / RTMPose 骨架检测，结合球场区域过滤场外干扰', color: 'c-blue' },
-  { icon: '📐', title: '球场映射', desc: '自动线检测预填四角，支持手动修正与单应性映射', color: 'c-orange' },
-  { icon: '⚡', title: '羽毛球追踪', desc: '可选专用 YOLO 权重，追踪球路与落点', color: 'c-green' },
-  { icon: '📊', title: '分析输出', desc: '标注视频、detections.jsonl、热力图与散点图', color: 'c-purple' },
-]
+const NET_LABELS = ['网左', '网右']
+const HIT_RADIUS = 14
 
 const activeTab = ref('analyze')
 const allModels = ref([])
 const poseId = ref(null)
 const ballId = ref(null)
 const conf = ref(0.25)
+const ballConf = ref(0.15)
 const file = ref(null)
 const fileName = ref('')
 const originalVideoUrl = ref('')
@@ -240,10 +215,16 @@ const frameSrc = ref('')
 const frameW = ref(0)
 const frameH = ref(0)
 const courtPoints = ref([])
+const netPoints = ref([])
+const netManual = ref(false)
+const annotMode = ref('corner')
 const courtCanvas = ref(null)
 const detectingCourt = ref(false)
 const courtAutoDetected = ref(false)
 const courtConfidence = ref(0)
+const dragTarget = ref(null) // { kind: 'corner'|'net', index: number }
+let suppressClick = false
+let canvasScale = { dw: 1, dh: 1 }
 
 const running = ref(false)
 const jobId = ref('')
@@ -281,23 +262,57 @@ const percent = computed(() => {
 })
 const courtHint = computed(() => {
   if (detectingCourt.value) return '正在自动检测球场线…'
+  if (annotMode.value === 'edit') return '拖拽彩色角点或橙色网线端点修正'
+  if (annotMode.value === 'net') {
+    if (netPoints.value.length >= 2) return '网线已标注，可切换「拖拽修正」微调'
+    return `请点击网线：${NET_LABELS[netPoints.value.length] || '完成'}`
+  }
   if (courtPoints.value.length >= 4) {
-    return courtAutoDetected.value ? '四角已自动检测，可点击修正' : '四角已标注完成'
+    return courtAutoDetected.value
+      ? '四角已自动检测，可拖拽修正或编辑网线'
+      : '四角已完成，可拖拽修正或切换「网线」手动画线'
   }
   return `请依次点击：${COURT_LABELS[courtPoints.value.length] || '完成'}`
 })
 const courtConfidenceText = computed(() =>
   courtConfidence.value ? `${Math.round(courtConfidence.value * 100)}%` : '')
-const distRows = computed(() => {
-  if (!stats.value?.playerDistances) return []
-  const speeds = stats.value.playerMaxSpeed || {}
-  return Object.entries(stats.value.playerDistances).map(([id, dist]) => ({
-    id,
-    label: `球员 P${id}`,
-    dist,
-    speed: speeds[id] ?? '-',
-  }))
-})
+const canAnalyze = computed(() =>
+  !!poseId.value && !!file.value && courtPoints.value.length >= 4 && netPoints.value.length >= 2)
+function scrollToResultVideo() {
+  activeTab.value = 'analyze'
+  nextTick(() => {
+    document.querySelector('.result-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+function isCustomBallModel(m) {
+  const k = (m.modelKey || '').toLowerCase()
+  const n = (m.modelName || '').toLowerCase()
+  return k.startsWith('badminton-yolo')
+    || (k.startsWith('custom-') && (n.includes('羽毛球') || n.includes('badminton') || n.includes('shuttle')))
+    || (n.includes('自训') && (n.includes('羽毛') || n.includes('ball')))
+}
+
+function ballModelLabel(m) {
+  if (isCustomBallModel(m)) return `${m.modelName}（自训）`
+  if (m.modelKey === 'yolo11s-ball') return `${m.modelName}（预置）`
+  return m.modelName
+}
+
+function pickPreferredBall(models) {
+  const rank = (m) => {
+    if (isCustomBallModel(m)) return 0
+    if (m.modelKey === 'yolo11s-ball') return 1
+    if ((m.modelName || '').includes('羽毛球') || (m.modelKey || '').includes('badminton')) return 2
+    if (m.modelKey === 'tennis-ball') return 3
+    return 9
+  }
+  return [...models].sort((a, b) => rank(a) - rank(b))[0]
+}
+
+function goTrainBallModel() {
+  router.push({ name: 'aiTraining', query: { preset: 'badminton' } })
+}
 
 async function loadModels() {
   const res = await modelApi.list({ pageNum: 1, pageSize: 200 })
@@ -308,8 +323,7 @@ async function loadModels() {
     poseId.value = pref?.id || poseModels.value[0].id
   }
   if (!ballId.value && ballModels.value.length) {
-    const pref = ballModels.value.find(m =>
-      m.modelKey === 'tennis-ball' || m.modelName === 'tennis-ball')
+    const pref = pickPreferredBall(ballModels.value)
     if (pref) ballId.value = pref.id
   }
 }
@@ -323,6 +337,9 @@ function onPickVideo(uploadFile) {
   file.value = uploadFile.raw
   fileName.value = uploadFile.name || '比赛视频'
   courtPoints.value = []
+  netPoints.value = []
+  netManual.value = false
+  annotMode.value = 'corner'
   courtAutoDetected.value = false
   courtConfidence.value = 0
   stats.value = null
@@ -332,11 +349,39 @@ function onPickVideo(uploadFile) {
   runAutoDetect(uploadFile.raw)
 }
 
+function midNetFromCorners(corners) {
+  if (!corners || corners.length < 4) return []
+  const [tl, tr, br, bl] = corners
+  return [
+    [+((tl[0] + bl[0]) / 2).toFixed(4), +((tl[1] + bl[1]) / 2).toFixed(4)],
+    [+((tr[0] + br[0]) / 2).toFixed(4), +((tr[1] + br[1]) / 2).toFixed(4)],
+  ]
+}
+
+function syncNetFromCorners(force = false) {
+  if (courtPoints.value.length < 4) {
+    netPoints.value = []
+    return
+  }
+  if (!force && netManual.value && netPoints.value.length === 2) return
+  netPoints.value = midNetFromCorners(courtPoints.value)
+  if (force) netManual.value = false
+}
+
+function resetNetFromCorners() {
+  syncNetFromCorners(true)
+  drawCourtCanvas()
+  ElMessage.success('已按四角左右边中点重算网线')
+}
+
 async function runAutoDetect(raw) {
   const video = raw || file.value
   if (!video) return
   detectingCourt.value = true
   courtPoints.value = []
+  netPoints.value = []
+  netManual.value = false
+  annotMode.value = 'corner'
   courtAutoDetected.value = false
   courtConfidence.value = 0
   const fd = new FormData()
@@ -351,7 +396,9 @@ async function runAutoDetect(raw) {
       courtPoints.value = d.courtPoints
       courtAutoDetected.value = true
       courtConfidence.value = d.confidence || 0
-      ElMessage.success(`球场四角已自动检测（置信度 ${Math.round((d.confidence || 0) * 100)}%）`)
+      syncNetFromCorners(true)
+      annotMode.value = 'edit'
+      ElMessage.success(`球场四角已自动检测（置信度 ${Math.round((d.confidence || 0) * 100)}%），可拖拽修正四角/网线`)
     } else {
       ElMessage.warning('未能自动识别球场，请手动标注四角')
     }
@@ -364,6 +411,33 @@ async function runAutoDetect(raw) {
   }
 }
 
+function canvasNormFromEvent(e) {
+  const cv = courtCanvas.value
+  if (!cv) return null
+  const rect = cv.getBoundingClientRect()
+  const x = (e.clientX - rect.left) / cv.width
+  const y = (e.clientY - rect.top) / cv.height
+  return [
+    +Math.min(1, Math.max(0, x)).toFixed(4),
+    +Math.min(1, Math.max(0, y)).toFixed(4),
+  ]
+}
+
+function hitTest(nx, ny) {
+  const cv = courtCanvas.value
+  if (!cv) return null
+  const r = HIT_RADIUS / Math.max(cv.width, cv.height)
+  const near = (pts, kind) => {
+    for (let i = 0; i < pts.length; i++) {
+      const dx = pts[i][0] - nx
+      const dy = pts[i][1] - ny
+      if (Math.hypot(dx, dy) <= r * 1.8) return { kind, index: i }
+    }
+    return null
+  }
+  return near(netPoints.value, 'net') || near(courtPoints.value, 'corner')
+}
+
 function drawCourtCanvas() {
   const cv = courtCanvas.value
   if (!cv || !frameSrc.value) return
@@ -373,6 +447,7 @@ function drawCourtCanvas() {
     const scale = Math.min(1, maxW / img.width)
     const dw = Math.round(img.width * scale)
     const dh = Math.round(img.height * scale)
+    canvasScale = { dw, dh }
     cv.width = dw
     cv.height = dh
     const ctx = cv.getContext('2d')
@@ -380,12 +455,8 @@ function drawCourtCanvas() {
 
     ctx.fillStyle = 'rgba(0, 180, 255, 0.04)'
     const grid = 32
-    for (let gx = 0; gx < dw; gx += grid) {
-      ctx.fillRect(gx, 0, 1, dh)
-    }
-    for (let gy = 0; gy < dh; gy += grid) {
-      ctx.fillRect(0, gy, dw, 1)
-    }
+    for (let gx = 0; gx < dw; gx += grid) ctx.fillRect(gx, 0, 1, dh)
+    for (let gy = 0; gy < dh; gy += grid) ctx.fillRect(0, gy, dw, 1)
 
     if (courtPoints.value.length) {
       const pts = courtPoints.value.map(p => [p[0] * dw, p[1] * dh])
@@ -416,25 +487,131 @@ function drawCourtCanvas() {
         ctx.fillText(COURT_LABELS[i], p[0] + 14, p[1] - 6)
       })
     }
+
+    if (netPoints.value.length) {
+      const npts = netPoints.value.map(p => [p[0] * dw, p[1] * dh])
+      ctx.strokeStyle = 'rgba(255, 170, 0, 0.95)'
+      ctx.lineWidth = 2.5
+      ctx.setLineDash([8, 5])
+      ctx.beginPath()
+      if (npts.length >= 2) {
+        ctx.moveTo(npts[0][0], npts[0][1])
+        ctx.lineTo(npts[1][0], npts[1][1])
+      }
+      ctx.stroke()
+      ctx.setLineDash([])
+      npts.forEach((p, i) => {
+        ctx.beginPath()
+        ctx.arc(p[0], p[1], 8, 0, Math.PI * 2)
+        ctx.fillStyle = '#ffaa00'
+        ctx.fill()
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+        ctx.fillStyle = 'rgba(8, 12, 20, 0.75)'
+        ctx.font = '600 11px "Segoe UI", sans-serif'
+        const label = NET_LABELS[i]
+        const tw = ctx.measureText(label).width
+        ctx.fillRect(p[0] + 10, p[1] + 6, tw + 8, 16)
+        ctx.fillStyle = '#ffe8c2'
+        ctx.fillText(label, p[0] + 14, p[1] + 18)
+      })
+    }
   }
   img.src = frameSrc.value
 }
 
-function onCourtClick(e) {
-  if (!frameSrc.value || courtPoints.value.length >= 4) return
+function onAnnotDown(e) {
+  if (!frameSrc.value) return
+  const norm = canvasNormFromEvent(e)
+  if (!norm) return
+  const hit = hitTest(norm[0], norm[1])
+  if (hit) {
+    dragTarget.value = hit
+    suppressClick = true
+    courtAutoDetected.value = false
+    if (hit.kind === 'net') netManual.value = true
+    e.preventDefault()
+  }
+}
+
+function onAnnotMove(e) {
+  if (!dragTarget.value) return
+  const norm = canvasNormFromEvent(e)
+  if (!norm) return
+  const { kind, index } = dragTarget.value
+  if (kind === 'corner' && courtPoints.value[index]) {
+    courtPoints.value[index] = norm
+    if (!netManual.value) syncNetFromCorners(false)
+  } else if (kind === 'net' && netPoints.value[index]) {
+    netPoints.value[index] = norm
+    netManual.value = true
+  }
+  drawCourtCanvas()
+  suppressClick = true
+}
+
+function onAnnotUp() {
+  if (dragTarget.value) {
+    dragTarget.value = null
+    setTimeout(() => { suppressClick = false }, 0)
+  }
+}
+
+function onAnnotClick(e) {
+  if (suppressClick || dragTarget.value) return
+  if (!frameSrc.value) return
+  const norm = canvasNormFromEvent(e)
+  if (!norm) return
+
+  if (annotMode.value === 'edit') return
+
+  if (annotMode.value === 'net') {
+    if (courtPoints.value.length < 4) return
+    courtAutoDetected.value = false
+    if (netPoints.value.length >= 2) {
+      const hit = hitTest(norm[0], norm[1])
+      if (hit?.kind === 'net') {
+        netPoints.value[hit.index] = norm
+      } else {
+        netPoints.value = [norm]
+      }
+      netManual.value = true
+    } else {
+      netPoints.value.push(norm)
+      netManual.value = true
+    }
+    drawCourtCanvas()
+    return
+  }
+
   courtAutoDetected.value = false
-  const cv = courtCanvas.value
-  const rect = cv.getBoundingClientRect()
-  const x = (e.clientX - rect.left) / cv.width
-  const y = (e.clientY - rect.top) / cv.height
-  courtPoints.value.push([+x.toFixed(4), +y.toFixed(4)])
+  if (courtPoints.value.length >= 4) {
+    const hit = hitTest(norm[0], norm[1])
+    if (hit?.kind === 'corner') {
+      courtPoints.value[hit.index] = norm
+      if (!netManual.value) syncNetFromCorners(false)
+    }
+    drawCourtCanvas()
+    return
+  }
+  courtPoints.value.push(norm)
+  if (courtPoints.value.length === 4) {
+    syncNetFromCorners(true)
+    annotMode.value = 'edit'
+    ElMessage.success('四角与默认网线已就绪，可拖拽修正或切换「网线」重画')
+  }
   drawCourtCanvas()
 }
 
 function clearCourt() {
   courtPoints.value = []
+  netPoints.value = []
+  netManual.value = false
+  annotMode.value = 'corner'
   courtAutoDetected.value = false
   courtConfidence.value = 0
+  dragTarget.value = null
   drawCourtCanvas()
 }
 
@@ -448,7 +625,7 @@ function revokeUrls() {
 }
 
 async function runAnalyze() {
-  if (!file.value || !poseId.value || courtPoints.value.length < 4) return
+  if (!canAnalyze.value) return
   running.value = true
   stats.value = null
   revokeUrls()
@@ -460,7 +637,9 @@ async function runAnalyze() {
   fd.append('poseId', poseId.value)
   if (ballId.value) fd.append('ballId', ballId.value)
   fd.append('courtPoints', JSON.stringify(courtPoints.value))
+  fd.append('netPoints', JSON.stringify(netPoints.value))
   fd.append('conf', conf.value)
+  fd.append('ballConf', ballConf.value)
   fd.append('showSkeleton', opts.showSkeleton ? '1' : '0')
   fd.append('showTrajectories', opts.showTrajectories ? '1' : '0')
   fd.append('showShuttle', opts.showShuttle ? '1' : '0')
@@ -545,8 +724,12 @@ function resetAll() {
   fileName.value = ''
   frameSrc.value = ''
   courtPoints.value = []
+  netPoints.value = []
+  netManual.value = false
+  annotMode.value = 'corner'
   courtAutoDetected.value = false
   courtConfidence.value = 0
+  dragTarget.value = null
   running.value = false
   stats.value = null
   jobId.value = ''
@@ -555,7 +738,7 @@ function resetAll() {
   revokeOriginalUrl()
 }
 
-watch(courtPoints, () => nextTick(drawCourtCanvas), { deep: true })
+watch([courtPoints, netPoints], () => nextTick(drawCourtCanvas), { deep: true })
 
 onMounted(loadModels)
 onBeforeUnmount(() => { stopPoll(); revokeUrls(); revokeOriginalUrl() })
@@ -567,6 +750,7 @@ onBeforeUnmount(() => { stopPoll(); revokeUrls(); revokeOriginalUrl() })
 
 .cfg-card { margin-bottom: 16px; border: none; }
 .cfg-form { flex-wrap: wrap; }
+.train-link { margin-left: 6px; }
 .vis-item :deep(.el-form-item__content) {
   display: flex;
   flex-wrap: wrap;
@@ -625,7 +809,17 @@ onBeforeUnmount(() => { stopPoll(); revokeUrls(); revokeOriginalUrl() })
 .media-placeholder { color: #909399; font-size: 14px; }
 .player { width: 100%; max-height: 420px; border-radius: 6px; background: #000; }
 .frame-box { width: 100%; text-align: center; }
-.court-canvas { max-width: 100%; cursor: crosshair; border-radius: 4px; }
+.annot-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+.annot-actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.court-canvas { max-width: 100%; cursor: crosshair; border-radius: 4px; user-select: none; }
+.court-canvas.dragging { cursor: grabbing; }
 .court-tip {
   padding: 8px 16px 12px;
   font-size: 12px;

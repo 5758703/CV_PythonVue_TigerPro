@@ -49,6 +49,15 @@
               开始识别
             </el-button>
             <el-button v-else type="danger" :icon="SwitchButton" @click="stop">停止</el-button>
+            <el-checkbox v-model="alertEnabled" :disabled="running" style="margin-left: 12px">启用告警</el-checkbox>
+            <el-alert
+              v-if="alertEnabled && modelOptions.length"
+              type="info"
+              :closable="false"
+              show-icon
+              class="alert-tip-inline"
+              title="总开关已开：仅「检测告警」页已启用的「陌生人脸」规则会生效。单项开关请到检测告警页配置。"
+            />
           </el-form-item>
         </el-form>
         <el-alert
@@ -72,6 +81,7 @@
               <el-tag type="success" effect="dark">{{ fps }} FPS</el-tag>
               <el-tag type="warning" effect="dark">人脸 {{ dets.length }}</el-tag>
               <el-tag v-if="matchedCount" type="primary" effect="dark">已识别 {{ matchedCount }}</el-tag>
+              <el-tag v-if="alertEnabled && lastAlertTitle" type="danger" effect="dark">{{ lastAlertTitle }}</el-tag>
             </div>
           </div>
           <div class="side">
@@ -158,8 +168,16 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="enrollDlg" title="登记人脸" width="480px">
-      <p class="enroll-tip">选择识别模型并上传 1～5 张清晰正脸照（同人多图将平均特征）。换模型需重新登记。</p>
+    <el-dialog
+      v-model="enrollDlg"
+      title="登记人脸"
+      width="640px"
+      destroy-on-close
+      @closed="stopEnrollCam"
+    >
+      <p class="enroll-tip">
+        选择识别模型，可本地上传或摄像头拍照（合计 1～5 张清晰正脸照，同人多图将平均特征）。换模型需重新登记。
+      </p>
       <el-form label-width="90px">
         <el-form-item label="人员">{{ enrollPerson?.name }}</el-form-item>
         <el-form-item label="识别模型" required>
@@ -173,16 +191,49 @@
           </el-select>
         </el-form-item>
         <el-form-item label="人脸照片" required>
-          <el-upload
-            ref="uploadRef"
-            :auto-upload="false"
-            :limit="5"
-            accept="image/*"
-            list-type="picture-card"
-            v-model:file-list="enrollFiles"
-          >
-            <el-icon><Plus /></el-icon>
-          </el-upload>
+          <div class="enroll-photos">
+            <el-upload
+              ref="uploadRef"
+              :auto-upload="false"
+              :limit="5"
+              accept="image/*"
+              list-type="picture-card"
+              v-model:file-list="enrollFiles"
+            >
+              <el-icon><Plus /></el-icon>
+            </el-upload>
+          </div>
+        </el-form-item>
+        <el-form-item label="摄像头">
+          <div class="enroll-cam">
+            <div class="enroll-cam-bar">
+              <el-select
+                v-model="enrollDeviceId"
+                placeholder="默认摄像头"
+                style="width: 220px"
+                :disabled="enrollCamOn"
+              >
+                <el-option
+                  v-for="d in devices"
+                  :key="d.deviceId"
+                  :label="d.label || `摄像头 ${d.idx}`"
+                  :value="d.deviceId"
+                />
+              </el-select>
+              <el-button v-if="!enrollCamOn" type="primary" :icon="VideoCamera" @click="startEnrollCam">
+                打开摄像头
+              </el-button>
+              <template v-else>
+                <el-button type="success" @click="captureEnrollPhoto">拍照添加</el-button>
+                <el-button type="danger" :icon="SwitchButton" @click="stopEnrollCam">关闭摄像头</el-button>
+              </template>
+            </div>
+            <div v-show="enrollCamOn" class="enroll-cam-stage">
+              <video ref="enrollVideoEl" class="enroll-video" autoplay playsinline muted></video>
+              <canvas ref="enrollSnapEl" class="enroll-snap"></canvas>
+            </div>
+            <div v-if="enrollCamOn" class="enroll-cam-hint">正对镜头、光线充足后点击「拍照添加」</div>
+          </div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -195,10 +246,12 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { VideoCamera, SwitchButton, Plus } from '@element-plus/icons-vue'
 
-import { modelApi, faceApi } from '../../../api/ai'
+import { modelApi, faceApi, alertApi } from '../../../api/ai'
+
+const ALERT_SOURCE_KEY = 'face-live'
 
 const tab = ref('live')
 const modelOptions = ref([])
@@ -207,6 +260,8 @@ const threshold = ref(0.4)
 const skipFrames = ref(2)
 const devices = ref([])
 const deviceId = ref('')
+const alertEnabled = ref(false)
+const lastAlertTitle = ref('')
 
 const videoEl = ref(null)
 const overlayEl = ref(null)
@@ -237,6 +292,11 @@ const enrollPerson = ref(null)
 const enrollModelId = ref(null)
 const enrollFiles = ref([])
 const enrolling = ref(false)
+const enrollDeviceId = ref('')
+const enrollCamOn = ref(false)
+const enrollVideoEl = ref(null)
+const enrollSnapEl = ref(null)
+let enrollStream = null
 
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
@@ -302,6 +362,7 @@ const start = async () => {
   fps.value = 0
   skipCounter = 0
   lastDets = []
+  lastAlertTitle.value = ''
   fpsTimer = setInterval(() => {
     fps.value = frameCount
     frameCount = 0
@@ -357,6 +418,9 @@ const loop = () => {
       dets.value = tracked
       drawBoxes(tracked)
       frameCount++
+      if (alertEnabled.value) {
+        await evaluateFaceAlerts(tracked, capCanvas.width, capCanvas.height)
+      }
     } catch (_) {
       /* 单帧失败忽略 */
     } finally {
@@ -364,6 +428,44 @@ const loop = () => {
       if (running.value) requestAnimationFrame(loop)
     }
   }, 'image/jpeg', 0.6)
+}
+
+const evaluateFaceAlerts = async (list, frameW, frameH) => {
+  const unknowns = (list || []).filter((d) => !d.matched)
+  if (!unknowns.length) return
+  try {
+    const detections = unknowns.map((d) => ({
+      className: d.name || 'unknown',
+      name: d.name || 'unknown',
+      confidence: Number(d.score) || 0,
+      score: Number(d.score) || 0,
+      bbox: d.bbox,
+      matched: false,
+      personId: d.personId ?? null,
+    }))
+    const res = await alertApi.evaluate({
+      detections,
+      sourceKey: ALERT_SOURCE_KEY,
+      sourceType: 'face',
+      modelId: modelId.value,
+      persist: true,
+      frameWidth: frameW,
+      frameHeight: frameH,
+    })
+    const triggered = res.data?.triggered || []
+    triggered.filter((t) => t.notify).forEach((item) => {
+      ElNotification({
+        title: item.title || item.ruleName || '陌生人脸告警',
+        message: item.message || '请核验身份',
+        type: item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'info',
+        duration: item.severity === 'high' ? 0 : 8000,
+        position: 'top-right',
+      })
+      lastAlertTitle.value = item.title || item.ruleName || '陌生人脸'
+    })
+  } catch (_) {
+    /* 告警失败不阻断识别 */
+  }
 }
 
 const drawBoxes = (list) => {
@@ -406,6 +508,10 @@ const stop = () => {
   dets.value = []
   lastDets = []
   fps.value = 0
+  lastAlertTitle.value = ''
+  try {
+    alertApi.resetRuntime({ sourceKey: ALERT_SOURCE_KEY })
+  } catch (_) { /* ignore */ }
 }
 
 const loadPersons = async () => {
@@ -461,11 +567,89 @@ const onRemove = async (row) => {
   await loadPersons()
 }
 
-const openEnroll = (row) => {
+const openEnroll = async (row) => {
   enrollPerson.value = row
   enrollFiles.value = []
   if (!enrollModelId.value && modelOptions.value.length) enrollModelId.value = modelOptions.value[0].id
   enrollDlg.value = true
+  await enumCams()
+}
+
+const stopEnrollCam = () => {
+  enrollCamOn.value = false
+  if (enrollStream) {
+    enrollStream.getTracks().forEach((t) => t.stop())
+    enrollStream = null
+  }
+  if (enrollVideoEl.value) enrollVideoEl.value.srcObject = null
+}
+
+const startEnrollCam = async () => {
+  if (enrollFiles.value.length >= 5) {
+    ElMessage.warning('最多 5 张照片，请先删除后再拍')
+    return
+  }
+  // 避免与实时识别抢同一摄像头
+  if (running.value) stop()
+  try {
+    const constraints = {
+      video: enrollDeviceId.value ? { deviceId: { exact: enrollDeviceId.value } } : true,
+      audio: false,
+    }
+    enrollStream = await navigator.mediaDevices.getUserMedia(constraints)
+  } catch (_) {
+    ElMessage.error('无法访问摄像头，请检查设备与浏览器权限')
+    return
+  }
+  enrollCamOn.value = true
+  await new Promise((r) => requestAnimationFrame(r))
+  if (enrollVideoEl.value) {
+    enrollVideoEl.value.srcObject = enrollStream
+    await enrollVideoEl.value.play()
+  }
+  await enumCams()
+}
+
+const captureEnrollPhoto = async () => {
+  if (!enrollVideoEl.value || !enrollCamOn.value) return
+  if (enrollFiles.value.length >= 5) {
+    ElMessage.warning('最多 5 张照片')
+    return
+  }
+  const video = enrollVideoEl.value
+  const vw = video.videoWidth
+  const vh = video.videoHeight
+  if (!vw || !vh) {
+    ElMessage.warning('摄像头尚未就绪，请稍候再拍')
+    return
+  }
+  const canvas = enrollSnapEl.value || document.createElement('canvas')
+  const maxW = 640
+  const capW = Math.min(vw, maxW)
+  const capH = Math.round((vh * capW) / vw)
+  canvas.width = capW
+  canvas.height = capH
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(video, 0, 0, capW, capH)
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+  if (!blob) {
+    ElMessage.error('拍照失败')
+    return
+  }
+  const name = `cam_${Date.now()}.jpg`
+  const file = new File([blob], name, { type: 'image/jpeg' })
+  const uid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  enrollFiles.value = [
+    ...enrollFiles.value,
+    {
+      name,
+      uid,
+      status: 'ready',
+      raw: file,
+      url: URL.createObjectURL(blob),
+    },
+  ]
+  ElMessage.success(`已添加拍照（${enrollFiles.value.length}/5）`)
 }
 
 const doEnroll = async () => {
@@ -475,7 +659,7 @@ const doEnroll = async () => {
   }
   const rawFiles = enrollFiles.value.map((f) => f.raw).filter(Boolean)
   if (!rawFiles.length) {
-    ElMessage.warning('请上传人脸照片')
+    ElMessage.warning('请上传或拍照添加人脸照片')
     return
   }
   const fd = new FormData()
@@ -485,6 +669,7 @@ const doEnroll = async () => {
   try {
     await faceApi.enroll(enrollPerson.value.id, fd)
     ElMessage.success('登记成功')
+    stopEnrollCam()
     enrollDlg.value = false
     await loadPersons()
   } finally {
@@ -501,7 +686,10 @@ onMounted(async () => {
   await loadModels()
   await enumCams()
 })
-onBeforeUnmount(stop)
+onBeforeUnmount(() => {
+  stop()
+  stopEnrollCam()
+})
 </script>
 
 <style scoped>
@@ -513,6 +701,21 @@ onBeforeUnmount(stop)
 }
 .cfg-card {
   margin-bottom: 12px;
+}
+.alert-tip-inline {
+  display: inline-flex;
+  width: auto;
+  max-width: min(520px, 48vw);
+  margin: 0 0 0 12px;
+  padding: 5px 12px;
+  vertical-align: middle;
+}
+.alert-tip-inline :deep(.el-alert__content) {
+  padding: 0;
+}
+.alert-tip-inline :deep(.el-alert__title) {
+  font-size: 13px;
+  line-height: 1.4;
 }
 .hint {
   margin-left: 8px;
@@ -574,5 +777,40 @@ onBeforeUnmount(stop)
   font-size: 13px;
   margin: 0 0 12px;
   line-height: 1.5;
+}
+.enroll-photos :deep(.el-upload-list--picture-card) {
+  margin: 0;
+}
+.enroll-cam {
+  width: 100%;
+}
+.enroll-cam-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.enroll-cam-stage {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 4 / 3;
+  background: #0c1733;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.enroll-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.enroll-snap {
+  display: none;
+}
+.enroll-cam-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #909399;
 }
 </style>
