@@ -28,6 +28,16 @@ Thumbs.db
 backend/uploads/
 mobileclip2_b.ts
 runs/
+backend/yolo_dataset/runs/
+backend/yolo_dataset/labels/*.cache
+backend/weights/water_gauge_yolo1.pt
+
+# ===== 调试输出（临时图片/脚本产物）=====
+backend/debug_yolo_*.jpg
+backend/debug_*.jpg
+
+# ===== 测试缓存 =====
+.pytest_cache/
 
 # ===== 第三方推理代码（vendored，体积大，部署时各自 git clone）=====
 third_party/
