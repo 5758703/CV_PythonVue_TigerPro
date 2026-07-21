@@ -17,17 +17,76 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="摄像头">
-          <el-select v-model="deviceId" placeholder="默认摄像头" style="width: 200px" :disabled="running">
-            <el-option v-for="d in devices" :key="d.deviceId" :label="d.label || `摄像头 ${d.idx}`" :value="d.deviceId" />
+        <el-form-item label="视频源">
+          <el-select
+            v-model="videoSource"
+            placeholder="选择视频源"
+            style="width: 160px"
+            :disabled="running"
+            @change="onVideoSourceChange"
+          >
+            <el-option label="本地摄像头" value="local" />
+            <el-option label="网络摄像头" value="network" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="摄像头">
+          <el-select
+            v-if="videoSource === 'local'"
+            v-model="deviceId"
+            placeholder="默认本地摄像头"
+            style="width: 220px"
+            :disabled="running"
+          >
+            <el-option label="默认本地摄像头" value="" />
+            <el-option
+              v-for="d in devices"
+              :key="d.deviceId"
+              :label="d.label ? `${d.label}（本地）` : `本地摄像头 ${d.idx}`"
+              :value="d.deviceId"
+            />
+          </el-select>
+          <template v-else>
+            <el-select
+              v-model="cameraId"
+              placeholder="选择网络摄像头"
+              filterable
+              clearable
+              style="width: 240px"
+              :disabled="running"
+              :loading="camerasLoading"
+            >
+              <el-option
+                v-for="c in managedCameras"
+                :key="c.id"
+                :label="cameraLabel(c)"
+                :value="c.id"
+              />
+            </el-select>
+            <el-button
+              link
+              type="primary"
+              :disabled="running"
+              style="margin-left: 4px"
+              @click="loadManagedCameras"
+            >
+              刷新
+            </el-button>
+          </template>
         </el-form-item>
         <el-form-item label="置信度">
           <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" style="width: 140px" />
         </el-form-item>
         <el-form-item class="alert-action-item">
           <div class="alert-action-row">
-            <el-button v-if="!running" type="primary" :icon="VideoCamera" :disabled="!modelId" @click="start">开始检测</el-button>
+            <el-button
+              v-if="!running"
+              type="primary"
+              :icon="VideoCamera"
+              :disabled="!modelId || (videoSource === 'network' && !cameraId)"
+              @click="start"
+            >
+              开始检测
+            </el-button>
             <el-button v-else type="danger" :icon="SwitchButton" @click="stop">停止</el-button>
             <el-checkbox v-model="alertEnabled" :disabled="running" style="margin-left: 12px">启用告警</el-checkbox>
             <el-alert
@@ -53,14 +112,35 @@
         :closable="false"
         title="启用告警后无可用模型：请选用 YOLO / RF-DETR / transformers 目标检测权重（如烟火、PPE、YOLO26）。"
       />
+      <el-alert
+        v-else-if="videoSource === 'network' && !camerasLoading && !managedCameras.length"
+        type="warning"
+        :closable="false"
+        class="net-cam-tip"
+        title="暂无可用网络摄像头：请先到「摄像头管理」添加并启用（支持 RTSP / 文件 / 设备）。"
+      />
     </el-card>
 
     <el-card shadow="never">
       <div class="live-grid">
         <div class="stage">
-          <video ref="videoEl" class="cam-video" autoplay playsinline muted></video>
+          <video
+            v-show="localPreview && videoSource === 'local'"
+            ref="videoEl"
+            class="cam-video"
+            autoplay
+            playsinline
+            muted
+          ></video>
+          <img
+            v-show="running && videoSource === 'network'"
+            ref="streamEl"
+            class="cam-video"
+            alt="网络摄像头"
+            @error="onStreamError"
+          />
           <canvas ref="overlayEl" class="overlay"></canvas>
-          <div v-if="!running" class="stage-hint">
+          <div v-if="!running && !localPreview" class="stage-hint">
             <el-icon :size="40"><VideoCamera /></el-icon>
             <span>点击「开始检测」启用摄像头</span>
           </div>
@@ -87,10 +167,11 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElNotification } from 'element-plus'
 import { VideoCamera, SwitchButton } from '@element-plus/icons-vue'
 import { modelApi, alertApi } from '../../../api/ai'
+import { cameraApi } from '../../../api/camera'
 import {
   filterWorkbenchModels,
   ensureModelInList,
@@ -98,12 +179,19 @@ import {
 } from '../../../utils/alertModels'
 
 const ALERT_SOURCE_KEY = 'camera-live'
+const SOURCE_TYPE_LABEL = { rtsp: 'RTSP', file: '文件', device: '设备' }
 
 const allModels = ref([])
 const modelId = ref(null)
 const category = ref('')
 const conf = ref(0.25)
 const devices = ref([])
+const deviceId = ref('')
+const videoSource = ref('local') // local | network
+const localPreview = ref(false)
+const managedCameras = ref([])
+const cameraId = ref(null)
+const camerasLoading = ref(false)
 const alertEnabled = ref(false)
 const lastAlertTitle = ref('')
 const liveOverlay = ref(null)
@@ -129,9 +217,9 @@ watch(alertEnabled, () => {
   syncModelSelection()
 })
 watch(filteredModels, () => { syncModelSelection() }, { immediate: true })
-const deviceId = ref('')
 
 const videoEl = ref(null)
+const streamEl = ref(null)
 const overlayEl = ref(null)
 
 const running = ref(false)
@@ -139,11 +227,20 @@ const dets = ref([])
 const fps = ref(0)
 
 let stream = null
-let capCanvas = null         // 离屏抓帧画布
-let busy = false             // 串行：上一帧未返回不发下一帧
+let capCanvas = null
+let busy = false
 let frameCount = 0
 let fpsTimer = null
+let loopTimer = null
+let streamReady = false
+let streamErrorCooldown = 0
 const COLORS = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#9254de', '#13c2c2']
+
+const cameraLabel = (c) => {
+  const tag = SOURCE_TYPE_LABEL[c.sourceType] || c.sourceType || ''
+  const kind = tag ? `网络·${tag}` : '网络'
+  return `${c.name}（${kind}）`
+}
 
 const notifyAlert = (item) => {
   const type = item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'info'
@@ -193,66 +290,299 @@ const loadModels = async () => {
 const enumCams = async () => {
   try {
     const list = await navigator.mediaDevices.enumerateDevices()
-    devices.value = list.filter((d) => d.kind === 'videoinput').map((d, i) => ({ deviceId: d.deviceId, label: d.label, idx: i + 1 }))
-  } catch (e) {
+    devices.value = list
+      .filter((d) => d.kind === 'videoinput')
+      .map((d, i) => ({ deviceId: d.deviceId, label: d.label, idx: i + 1 }))
+  } catch (_) {
     /* 权限授予前 label 可能为空 */
   }
 }
 
-const start = async () => {
+const loadManagedCameras = async () => {
+  camerasLoading.value = true
   try {
-    const constraints = { video: deviceId.value ? { deviceId: { exact: deviceId.value } } : true, audio: false }
-    stream = await navigator.mediaDevices.getUserMedia(constraints)
-  } catch (e) {
-    ElMessage.error('无法访问摄像头，请检查设备与浏览器权限')
+    const res = await cameraApi.list({ pageNum: 1, pageSize: 100, status: '0' })
+    managedCameras.value = res.data?.rows || []
+    if (cameraId.value && !managedCameras.value.some((c) => c.id === cameraId.value)) {
+      cameraId.value = null
+    }
+    if (!cameraId.value && managedCameras.value.length) {
+      cameraId.value = managedCameras.value[0].id
+    }
+  } catch (_) {
+    managedCameras.value = []
+    /* 无 camera:list 权限时软失败，不阻断本地摄像头 */
+  } finally {
+    camerasLoading.value = false
+  }
+}
+
+const onVideoSourceChange = async () => {
+  if (running.value) stop()
+  localPreview.value = false
+  if (videoSource.value === 'network') await loadManagedCameras()
+  else await enumCams()
+}
+
+const waitForVideoReady = (video, timeoutMs = 8000) =>
+  new Promise((resolve, reject) => {
+    if (video.videoWidth > 0 && video.readyState >= 2) {
+      resolve()
+      return
+    }
+    const started = Date.now()
+    let settled = false
+    const finish = (ok, err) => {
+      if (settled) return
+      settled = true
+      clearInterval(poll)
+      clearTimeout(timer)
+      video.removeEventListener('loadedmetadata', onReady)
+      video.removeEventListener('loadeddata', onReady)
+      video.removeEventListener('playing', onReady)
+      if (ok) resolve()
+      else reject(err || new Error('timeout'))
+    }
+    const onReady = () => {
+      if (video.videoWidth > 0) finish(true)
+    }
+    const poll = setInterval(() => {
+      if (video.videoWidth > 0 && video.readyState >= 2) finish(true)
+      else if (Date.now() - started > timeoutMs) finish(false, new Error('timeout'))
+    }, 100)
+    const timer = setTimeout(() => finish(false, new Error('timeout')), timeoutMs)
+    video.addEventListener('loadedmetadata', onReady)
+    video.addEventListener('loadeddata', onReady)
+    video.addEventListener('playing', onReady)
+  })
+
+const waitForImgReady = (img, timeoutMs = 15000) =>
+  new Promise((resolve, reject) => {
+    if (img.complete && img.naturalWidth > 0) {
+      resolve()
+      return
+    }
+    const started = Date.now()
+    let settled = false
+    const finish = (ok, err) => {
+      if (settled) return
+      settled = true
+      clearInterval(poll)
+      clearTimeout(timer)
+      img.removeEventListener('load', onLoad)
+      img.removeEventListener('error', onError)
+      if (ok) resolve()
+      else reject(err || new Error('timeout'))
+    }
+    const onLoad = () => {
+      if (img.naturalWidth > 0) finish(true)
+    }
+    const onError = () => finish(false, new Error('load'))
+    const poll = setInterval(() => {
+      if (img.naturalWidth > 0) finish(true)
+      else if (Date.now() - started > timeoutMs) finish(false, new Error('timeout'))
+    }, 200)
+    const timer = setTimeout(() => finish(false, new Error('timeout')), timeoutMs)
+    img.addEventListener('load', onLoad)
+    img.addEventListener('error', onError)
+  })
+
+const onStreamError = () => {
+  if (!running.value || videoSource.value !== 'network') return
+  if (!streamReady) return
+  const now = Date.now()
+  if (now - streamErrorCooldown < 3000) return
+  streamErrorCooldown = now
+  const img = streamEl.value
+  if (img && cameraId.value) {
+    img.removeAttribute('crossorigin')
+    img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
+  }
+}
+
+const getFrameSourceSize = () => {
+  if (videoSource.value === 'network') {
+    const img = streamEl.value
+    return { w: img?.naturalWidth || 0, h: img?.naturalHeight || 0, el: img }
+  }
+  const video = videoEl.value
+  return { w: video?.videoWidth || 0, h: video?.videoHeight || 0, el: video }
+}
+
+const scheduleLoop = (delayMs = 0) => {
+  if (!running.value) return
+  if (loopTimer) clearTimeout(loopTimer)
+  loopTimer = setTimeout(() => {
+    loopTimer = null
+    loop()
+  }, delayMs)
+}
+
+const start = async () => {
+  if (!modelId.value) {
+    ElMessage.warning('请选择检测模型')
     return
   }
-  videoEl.value.srcObject = stream
-  await videoEl.value.play()
-  await enumCams()  // 授权后可拿到 label
 
-  // 抓帧分辨率（限宽 640 提速）
-  const vw = videoEl.value.videoWidth
-  const vh = videoEl.value.videoHeight
+  if (videoSource.value === 'network') {
+    if (!cameraId.value) {
+      ElMessage.warning('请选择网络摄像头')
+      return
+    }
+    localPreview.value = false
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop())
+      stream = null
+    }
+    if (videoEl.value) videoEl.value.srcObject = null
+
+    running.value = true
+    streamReady = false
+    await nextTick()
+    const img = streamEl.value
+    if (!img) {
+      ElMessage.error('预览组件未就绪')
+      running.value = false
+      return
+    }
+    // 检测抓帧必须走同源 /api，避免 dev 下跨域导致 canvas 污染
+    img.removeAttribute('crossorigin')
+    img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
+    try {
+      await waitForImgReady(img)
+      streamReady = true
+    } catch (_) {
+      ElMessage.error('无法连接网络摄像头，请检查摄像头管理中的源地址与状态')
+      img.removeAttribute('src')
+      running.value = false
+      streamReady = false
+      return
+    }
+  } else {
+    if (streamEl.value) streamEl.value.removeAttribute('src')
+    localPreview.value = true
+    await nextTick()
+    try {
+      const constraints = {
+        video: deviceId.value
+          ? { deviceId: { exact: deviceId.value }, width: { ideal: 640 }, height: { ideal: 480 } }
+          : { width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      }
+      stream = await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (_) {
+      localPreview.value = false
+      ElMessage.error('无法访问摄像头，请检查设备与浏览器权限')
+      return
+    }
+    const video = videoEl.value
+    if (!video) {
+      localPreview.value = false
+      ElMessage.error('预览组件未就绪')
+      return
+    }
+    video.srcObject = stream
+    try {
+      await video.play()
+    } catch (_) {
+      /* autoplay 策略偶发拒绝 */
+    }
+    try {
+      await waitForVideoReady(video)
+    } catch (_) {
+      ElMessage.error('本地摄像头尚未就绪，请重试')
+      stop()
+      return
+    }
+    enumCams()
+  }
+
+  const { w: vw, h: vh } = getFrameSourceSize()
+  if (!vw || !vh) {
+    ElMessage.error('无法获取画面尺寸')
+    stop()
+    return
+  }
   const capW = Math.min(vw, 640)
   const capH = Math.round((vh * capW) / vw)
   capCanvas = document.createElement('canvas')
   capCanvas.width = capW
   capCanvas.height = capH
-  overlayEl.value.width = capW
-  overlayEl.value.height = capH
+  if (overlayEl.value) {
+    overlayEl.value.width = capW
+    overlayEl.value.height = capH
+  }
 
   running.value = true
   frameCount = 0
   fps.value = 0
-  fpsTimer = setInterval(() => { fps.value = frameCount; frameCount = 0 }, 1000)
-  loop()
+  lastAlertTitle.value = ''
+  liveOverlay.value = null
+  busy = false
+  if (fpsTimer) clearInterval(fpsTimer)
+  fpsTimer = setInterval(() => {
+    fps.value = frameCount
+    frameCount = 0
+  }, 1000)
+
+  scheduleLoop(0)
 }
 
 const loop = () => {
   if (!running.value) return
-  if (busy) { requestAnimationFrame(loop); return }
+  if (busy) {
+    scheduleLoop(40)
+    return
+  }
   busy = true
 
+  const { el, w, h } = getFrameSourceSize()
+  if (!el || !capCanvas || !w || !h) {
+    busy = false
+    scheduleLoop(50)
+    return
+  }
+  const capW = Math.min(w, 640)
+  const capH = Math.round((h * capW) / w)
+  if (capCanvas.width !== capW || capCanvas.height !== capH) {
+    capCanvas.width = capW
+    capCanvas.height = capH
+    if (overlayEl.value) {
+      overlayEl.value.width = capW
+      overlayEl.value.height = capH
+    }
+  }
   const ctx = capCanvas.getContext('2d')
-  ctx.drawImage(videoEl.value, 0, 0, capCanvas.width, capCanvas.height)
+  try {
+    ctx.drawImage(el, 0, 0, capCanvas.width, capCanvas.height)
+  } catch (_) {
+    busy = false
+    scheduleLoop(50)
+    return
+  }
+
   capCanvas.toBlob(async (blob) => {
-    if (!running.value || !blob) { busy = false; return }
+    if (!running.value || !blob) {
+      busy = false
+      if (running.value) scheduleLoop(videoSource.value === 'network' ? 80 : 0)
+      return
+    }
     try {
       const fd = new FormData()
       fd.append('file', blob, 'frame.jpg')
       fd.append('conf', conf.value)
-      fd.append('draw', '0')  // 仅取坐标，客户端画框
+      fd.append('draw', '0')
       const res = await modelApi.detect(modelId.value, fd)
+      if (!running.value) return
       dets.value = res.data.detections
       await evaluateAlerts(res.data.detections)
       drawBoxes(res.data.detections, liveOverlay.value)
       frameCount++
-    } catch (e) {
+    } catch (_) {
       /* 单帧失败忽略，继续下一帧 */
     } finally {
       busy = false
-      if (running.value) requestAnimationFrame(loop)
+      if (running.value) scheduleLoop(videoSource.value === 'network' ? 80 : 0)
     }
   }, 'image/jpeg', 0.6)
 }
@@ -348,9 +678,26 @@ const drawBoxes = (list, overlayStyle = null) => {
 
 const stop = async () => {
   running.value = false
-  if (fpsTimer) { clearInterval(fpsTimer); fpsTimer = null }
-  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null }
+  streamReady = false
+  localPreview.value = false
+  busy = false
+  if (loopTimer) {
+    clearTimeout(loopTimer)
+    loopTimer = null
+  }
+  if (fpsTimer) {
+    clearInterval(fpsTimer)
+    fpsTimer = null
+  }
+  if (stream) {
+    stream.getTracks().forEach((t) => t.stop())
+    stream = null
+  }
   if (videoEl.value) videoEl.value.srcObject = null
+  if (streamEl.value) {
+    streamEl.value.removeAttribute('src')
+    streamEl.value.removeAttribute('srcset')
+  }
   if (overlayEl.value) {
     const ctx = overlayEl.value.getContext('2d')
     ctx.clearRect(0, 0, overlayEl.value.width, overlayEl.value.height)
@@ -365,7 +712,7 @@ const stop = async () => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadModels(), enumCams()])
+  await Promise.all([loadModels(), enumCams(), loadManagedCameras()])
 })
 onBeforeUnmount(stop)
 </script>
@@ -373,6 +720,9 @@ onBeforeUnmount(stop)
 <style scoped>
 .cfg-card {
   margin-bottom: 12px;
+}
+.net-cam-tip {
+  margin-top: 8px;
 }
 .alert-action-row {
   display: flex;
