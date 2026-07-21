@@ -9,6 +9,85 @@ frontend/   Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 <img width="1920" height="869" alt="image" src="https://github.com/user-attachments/assets/0301e97a-85f5-441d-90cb-8d86d15efec8" />
 
 
+<img width="774" height="480" alt="微信图片_20260719005341_513_226" src="https://github.com/user-attachments/assets/cc54a1ee-6334-4b0f-a520-6fabf47f50b4" />
+<img width="1920" height="869" alt="ScreenShot_2026-07-05_122934_328" src="https://github.com/user-attachments/assets/ee916e47-bf88-4fbd-a75c-6761fd999aba" />
+<img width="1920" height="869" alt="微信图片_20260717110139_502_226" src="https://github.com/user-attachments/assets/af77fd04-2eab-4994-96ab-5964b7c7529b" />
+
+
+https://github.com/user-attachments/assets/69ead2ad-c3d6-4e38-a808-3f53a44be973
+
+
+
+https://github.com/user-attachments/assets/797b89e0-3330-4c33-9315-e2d34c9c8517
+
+
+
+https://github.com/user-attachments/assets/be7e76bc-f0f3-42fb-b380-4cf3643d62b1
+
+
+
+https://github.com/user-attachments/assets/9e2abc22-ecfe-414d-b3e2-8f72f904d416
+
+
+
+https://github.com/user-attachments/assets/ce3d8ab3-18fe-406f-b1ab-fc147299acb6
+
+
+
+https://github.com/user-attachments/assets/ab4ecbfa-39ea-4480-bb06-1da073eb855e
+
+
+
+https://github.com/user-attachments/assets/9839f84d-97d5-4507-bbaf-f86b3d1b8d28
+
+<img width="1645" height="1616" alt="微信图片_20260719050319_517_226" src="https://github.com/user-attachments/assets/d91426a3-54aa-48d5-be13-c17c5fb42d71" />
+
+
+https://github.com/user-attachments/assets/9cc0e219-2d54-4da3-93b6-ad3befb1f4d9
+
+
+
+https://github.com/user-attachments/assets/91eab844-0848-4b06-aebd-30076f1a2dc4
+
+
+
+https://github.com/user-attachments/assets/0c88fac9-9f05-4054-8092-a0a0a676820c
+
+
+
+https://github.com/user-attachments/assets/4adb3002-c697-4d0e-a795-89166f1c2734
+
+
+
+https://github.com/user-attachments/assets/e50ffe56-197e-476a-a92c-55b5c40db184
+
+
+
+https://github.com/user-attachments/assets/43fb406a-1f5b-4f78-a785-bf266aa4f9a0
+
+
+
+https://github.com/user-attachments/assets/661d3ead-cb44-447a-8670-419b52612612
+
+
+
+https://github.com/user-attachments/assets/0d52f28b-b3e3-4790-9d78-f19ae5618632
+
+<img width="774" height="480" alt="微信图片_20260719005341_513_226" src="https://github.com/user-attachments/assets/ff2e2c00-f651-4c31-9dbd-10dce529554c" />
+<img width="579" height="575" alt="微信图片_20260709055050_436_226" src="https://github.com/user-attachments/assets/c185531d-b2df-4043-bde8-f39abbe41fb4" />
+<img width="1639" height="869" alt="微信图片_20260719013021_514_226" src="https://github.com/user-attachments/assets/df69d5e3-205b-4e5c-b537-2ba5cb3bb030" />
+<img width="570" height="845" alt="微信图片_20260709055035_435_226" src="https://github.com/user-attachments/assets/ff246778-0dc9-4c45-b783-c7a7fff7bb4e" />
+<img width="1500" height="830" alt="微信图片_20260719013047_515_226" src="https://github.com/user-attachments/assets/2e9fe963-6991-47ea-9683-36bfb9ca8928" />
+<img width="1920" height="910" alt="微信图片_20260709055007_434_226" src="https://github.com/user-attachments/assets/f0821d2b-67ab-4da2-89eb-3448d0dfa811" />
+<img width="1920" height="1080" alt="微信图片_20260717110704_504_226" src="https://github.com/user-attachments/assets/b1dbfebc-5c29-4d48-b0b5-eb929ed7ad4a" />
+<img width="1645" height="1502" alt="FireShot Capture 017 - Tiger AI Platform · 多任务AI模型管理与测试平台 -  localhost" src="https://github.com/user-attachments/assets/25a0a9c2-666a-4e12-b48e-0e35c6daf9e1" />
+<img width="463" height="617" alt="demo_result_on_your_image" src="https://github.com/user-attachments/assets/c94e004a-1b56-489c-b816-8885ec1292c2" />
+<img width="1665" height="850" alt="微信图片_20260718031938_508_226" src="https://github.com/user-attachments/assets/4b54483e-5e5a-422a-92c7-148ca115909f" />
+<img width="1920" height="869" alt="微信图片_20260717105559_500_226" src="https://github.com/user-attachments/assets/cdcd0c34-a6cd-4363-b771-c8b3fa380758" />
+<img width="1640" height="785" alt="微信图片_20260704112908_365_226" src="https://github.com/user-attachments/assets/93c3913e-3e10-4c33-8cfa-1658c18f3fe4" />
+<img width="1920" height="869" alt="微信图片_20260704235432_374_226" src="https://github.com/user-attachments/assets/fb1596b1-02be-4e89-b861-a765aa416d16" />
+
+
 
 https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 
