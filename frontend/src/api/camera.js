@@ -20,10 +20,12 @@ export const cameraApi = {
   upload: (formData) =>
     request.post('/camera/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
   // MJPEG 预览：<img> 不能带 header，token 走 query
-  streamUrl: (id, bust = '', check = false) => {
+  // forCapture=true 时走同源 /api 代理，供 canvas 抓帧（避免 127.0.0.1 跨域污染画布）
+  streamUrl: (id, bust = '', check = false, forCapture = false) => {
     const token = useUserStore().token
     const q = bust ? `&_=${encodeURIComponent(bust)}` : ''
     const chk = check ? '&check=1' : ''
-    return `${streamOrigin()}/api/camera/${id}/stream?jwt=${encodeURIComponent(token)}${q}${chk}`
+    const origin = forCapture ? '' : streamOrigin()
+    return `${origin}/api/camera/${id}/stream?jwt=${encodeURIComponent(token)}${q}${chk}`
   },
 }

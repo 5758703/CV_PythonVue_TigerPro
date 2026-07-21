@@ -190,4 +190,5 @@ def stream_camera(cid):
     )
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp

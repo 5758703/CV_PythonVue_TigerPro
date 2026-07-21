@@ -606,6 +606,23 @@ const scheduleLoop = (delayMs = 0) => {
   }, delayMs)
 }
 
+const canvasToBlob = (canvas, type = 'image/jpeg', quality = 0.55, timeoutMs = 3000) =>
+  new Promise((resolve) => {
+    let done = false
+    const finish = (blob) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(blob || null)
+    }
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    try {
+      canvas.toBlob((blob) => finish(blob), type, quality)
+    } catch (_) {
+      finish(null)
+    }
+  })
+
 const waitForImgReady = (img, timeoutMs = 15000) =>
   new Promise((resolve, reject) => {
     if (img.complete && img.naturalWidth > 0) {
@@ -651,7 +668,8 @@ const onStreamError = () => {
   // 尝试强制刷新同一摄像头流，与监控墙重连策略类似
   const img = streamEl.value
   if (img && cameraId.value) {
-    img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false)
+    img.removeAttribute('crossorigin')
+    img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
   }
 }
 
@@ -708,8 +726,9 @@ const start = async () => {
       running.value = false
       return
     }
-    // 勿传 check=1：该参数返回 JSON 探活结果，不是 MJPEG，会导致 <img> 加载失败
-    img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false)
+    // 识别抓帧必须走同源 /api，避免 dev 下 127.0.0.1 跨域导致 canvas 污染、toBlob 失败
+    img.removeAttribute('crossorigin')
+    img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
     try {
       await waitForImgReady(img)
       streamReady = true
@@ -844,11 +863,12 @@ const loop = () => {
 
   const mySeq = ++inferSeq
   inferPending.value = true
-  capCanvas.toBlob(async (blob) => {
+  ;(async () => {
+    const blob = await canvasToBlob(capCanvas, 'image/jpeg', 0.55)
     if (!running.value || !blob || mySeq !== inferSeq) {
       busy = false
       inferPending.value = false
-      if (running.value) scheduleLoop(0)
+      if (running.value) scheduleLoop(videoSource.value === 'network' ? 80 : 0)
       return
     }
     try {
@@ -860,7 +880,6 @@ const loop = () => {
       const res = await faceApi.recognize(fd)
       if (!running.value || mySeq !== inferSeq) return
       const list = res.data.detections || []
-      // 简单 IoU 跟踪：跨帧保留姓名标签更稳
       const tracked = list.map((d) => {
         const prev = lastDets.find((p) => iou(p.bbox, d.bbox) > 0.3)
         if (prev && !d.matched && prev.matched) {
@@ -881,9 +900,9 @@ const loop = () => {
     } finally {
       busy = false
       inferPending.value = false
-      if (running.value) scheduleLoop(0)
+      if (running.value) scheduleLoop(videoSource.value === 'network' ? 80 : 0)
     }
-  }, 'image/jpeg', 0.55)
+  })()
 }
 
 const evaluateFaceAlerts = async (list, frameW, frameH) => {
@@ -1149,7 +1168,8 @@ const startEnrollCam = async () => {
       enrollCamOn.value = false
       return
     }
-    img.src = cameraApi.streamUrl(enrollCameraId.value, String(Date.now()), false)
+    img.removeAttribute('crossorigin')
+    img.src = cameraApi.streamUrl(enrollCameraId.value, String(Date.now()), false, true)
     try {
       await waitForImgReady(img)
     } catch (_) {
