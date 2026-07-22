@@ -152,6 +152,15 @@ export const waterLevelApi = {
     }),
 }
 
+// ---------------- 表格识别（YOLO 检表 → RapidOCR → SLANet_plus）
+export const tableApi = {
+  recognize: (formData) =>
+    request.post('/ai/table/recognize', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
+}
+
 // ---------------- 羽毛球视频分析
 export const badmintonApi = {
   extractFrame: (formData) =>

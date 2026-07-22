@@ -3346,15 +3346,29 @@ def _find_onnx(model_dir):
 
 
 def _extract_rec_keys(rec_dir):
-    """从 rec 目录 inference.yml 的 PostProcess.character_dict 提取字符字典，写 rec_keys.txt（幂等）。"""
+    """从 rec 目录提取字符字典路径（幂等）。
+
+    优先已有 keys 文件；否则从 inference.yml 的 PostProcess.character_dict 生成 rec_keys.txt。
+    """
     import os
     import yaml
     keys_path = os.path.join(rec_dir, "rec_keys.txt")
     if os.path.isfile(keys_path) and os.path.getsize(keys_path) > 0:
         return keys_path
+    for name in ("ppocr_keys_v1.txt", "dict.txt", "keys.txt"):
+        cand = os.path.join(rec_dir, name)
+        if os.path.isfile(cand) and os.path.getsize(cand) > 0:
+            return cand
+    for root, _dirs, files in os.walk(rec_dir):
+        for f in files:
+            low = f.lower()
+            if low.endswith(".txt") and ("key" in low or "dict" in low):
+                cand = os.path.join(root, f)
+                if os.path.getsize(cand) > 0:
+                    return cand
     yml_path = os.path.join(rec_dir, "inference.yml")
     if not os.path.isfile(yml_path):
-        raise ValueError("识别模型目录缺少 inference.yml")
+        raise ValueError("识别模型目录缺少 inference.yml / 字典文件(rec_keys.txt)")
     with open(yml_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     chars = (cfg or {}).get("PostProcess", {}).get("character_dict")
@@ -3411,6 +3425,122 @@ def paddle_ocr(det_dir, rec_dir, image_bytes):
         "width": w,
         "height": h,
     }
+
+
+# ------------------------------------------------------------ 表格结构（rapid-table / SLANet_plus）
+_table_cache = {}  # (model_path, model_type) -> RapidTable
+
+
+def _resolve_table_model_type(model_key=None, model_type=None):
+    """将 model_key / 显式类型映射为 rapid_table.ModelType。"""
+    from rapid_table import ModelType
+
+    raw = (model_type or model_key or "slanet_plus").strip().lower().replace("-", "_")
+    aliases = {
+        "slanet_plus": ModelType.SLANETPLUS,
+        "slanetplus": ModelType.SLANETPLUS,
+        "rapidtable_slanet_plus": ModelType.SLANETPLUS,
+        "ppstructure_zh": ModelType.PPSTRUCTURE_ZH,
+        "ppstructure_en": ModelType.PPSTRUCTURE_EN,
+        "unitable": ModelType.UNITABLE,
+    }
+    if raw in aliases:
+        return aliases[raw]
+    for mt in ModelType:
+        if mt.value == raw or mt.name.lower() == raw:
+            return mt
+    return ModelType.SLANETPLUS
+
+
+def _get_table_engine(model_path=None, model_key=None, model_type=None):
+    """加载/缓存 RapidTable 引擎（结构识别；OCR 由外部 RapidOCR 注入）。"""
+    mt = _resolve_table_model_type(model_key=model_key, model_type=model_type)
+    path_key = os.path.abspath(model_path) if model_path else ""
+    key = (path_key, mt.value)
+    with _lock:
+        cached = _table_cache.get(key)
+        if cached is not None:
+            return cached
+        try:
+            from rapid_table import RapidTable, RapidTableInput
+        except ImportError as e:
+            raise RuntimeError(
+                "表格结构引擎需安装 rapid-table：pip install rapid-table"
+            ) from e
+        cfg_kwargs = {"model_type": mt, "use_ocr": True}
+        if model_path and os.path.isfile(model_path):
+            cfg_kwargs["model_dir_or_path"] = model_path
+        engine = RapidTable(RapidTableInput(**cfg_kwargs))
+        _table_cache[key] = engine
+        return engine
+
+
+def _lines_to_rapid_ocr_tuple(lines, img_h, img_w):
+    """项目 RapidOCR lines → rapid-table format_ocr_results 输入 [boxes, txts, scores]。"""
+    boxes, txts, scores = [], [], []
+    for ln in lines or []:
+        box = ln.get("box") or []
+        txt = ln.get("text") or ""
+        score = float(ln.get("score") or 0)
+        if not box or not txt:
+            continue
+        pts = []
+        for p in box:
+            if isinstance(p, (list, tuple)) and len(p) >= 2:
+                x = float(np.clip(p[0], 0, img_w))
+                y = float(np.clip(p[1], 0, img_h))
+                pts.append([x, y])
+        if len(pts) < 4:
+            continue
+        boxes.append(pts[:4])
+        txts.append(txt)
+        scores.append(score)
+    if not boxes:
+        return [np.zeros((0, 4, 2), dtype=np.float32), tuple(), tuple()]
+    return [np.asarray(boxes, dtype=np.float32), tuple(txts), tuple(scores)]
+
+
+def _cell_bboxes_to_list(cell_bboxes):
+    """rapid-table cell_bboxes → JSON 友好 list。"""
+    if cell_bboxes is None:
+        return []
+    arr = np.asarray(cell_bboxes)
+    if arr.size == 0:
+        return []
+    out = []
+    for cell in arr:
+        cell = np.asarray(cell).reshape(-1)
+        if cell.size >= 8:
+            pts = cell.reshape(-1, 2)[:4]
+            out.append([[round(float(x), 1), round(float(y), 1)] for x, y in pts])
+        elif cell.size >= 4:
+            x1, y1, x2, y2 = [round(float(v), 1) for v in cell[:4]]
+            out.append([x1, y1, x2, y2])
+    return out
+
+
+def table_structure(model_path, image_bgr, ocr_lines, model_key=None, model_type=None):
+    """SLANet_plus 等结构识别：BGR 图 + OCR lines → HTML / 单元格框。
+
+    model_path 可为本地 .onnx；为空则让 rapid-table 按 model_type 自动下载默认权重。
+    """
+    if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+        raise ValueError("表格裁剪图为空")
+    h, w = image_bgr.shape[:2]
+    engine = _get_table_engine(model_path=model_path, model_key=model_key, model_type=model_type)
+    ocr_tuple = _lines_to_rapid_ocr_tuple(ocr_lines, h, w)
+    # 单图 batch：ocr_results 为「每张图一组 [boxes, txts, scores]」
+    result = engine(image_bgr, ocr_results=[ocr_tuple])
+    html = ""
+    cell_bboxes = []
+    elapse = float(getattr(result, "elapse", 0) or 0)
+    pred_htmls = getattr(result, "pred_htmls", None) or []
+    if pred_htmls:
+        html = pred_htmls[0] or ""
+    cells = getattr(result, "cell_bboxes", None) or []
+    if cells:
+        cell_bboxes = _cell_bboxes_to_list(cells[0])
+    return {"html": html, "cellBboxes": cell_bboxes, "elapse": round(elapse, 4)}
 
 
 # ---------------------------------------------------------------------------

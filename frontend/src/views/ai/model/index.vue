@@ -112,6 +112,7 @@
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
             <el-option label="voxcpm（语音合成/克隆/音色设计）" value="voxcpm" />
             <el-option label="rapidocr（PaddleOCR onnx）" value="rapidocr" />
+            <el-option label="rapidtable（表格结构 ONNX）" value="rapidtable" />
             <el-option label="insightface（人脸识别）" value="insightface" />
             <el-option label="linly（数字人）" value="linly" />
           </el-select>
@@ -127,6 +128,7 @@
             <el-option label="文字识别 OCR" value="ocr" />
             <el-option label="文本检测 text-detection" value="text-detection" />
             <el-option label="文本识别 text-recognition" value="text-recognition" />
+            <el-option label="表格结构 table-structure" value="table-structure" />
             <el-option label="文本分类 text-classification" value="text-classification" />
             <el-option label="零样本分类 zero-shot-classification" value="zero-shot-classification" />
             <el-option label="完形填空 fill-mask" value="fill-mask" />
@@ -273,6 +275,7 @@ const TASK_LABELS = {
   "ocr": "OCR(端到端)",
   "text-detection": "文本检测",
   "text-recognition": "文本识别(行)",
+  "table-structure": "表格结构",
   "text-classification": "文本分类",
   "zero-shot-classification": "零样本分类",
   "fill-mask": "完形填空",
@@ -301,6 +304,8 @@ const LIB_DEFAULT_TASK = {
   "vibevoice": "text-to-speech",
   "voxcpm": "text-to-speech",
   "linly": "talking-head",
+  "rapidocr": "text-detection",
+  "rapidtable": "table-structure",
 };
 const onLibChange = (lib) => {
   if (lib === "transformers" && form.task === "object-detection") form.task = "text-classification";
@@ -586,7 +591,11 @@ const TASK_PAGE = {
   "pose-estimation": { path: "/ai/pose", label: "姿态估计" },
   "automatic-speech-recognition": { path: "/ai/asr", label: "语音识别" },
   "text-to-speech": { path: "/ai/tts", label: "文本转语音" },
-  "talking-head": { path: "/ai/talker", label: "数字人合成" }
+  "talking-head": { path: "/ai/talker", label: "数字人合成" },
+  "ocr": { path: "/ai/ocr", label: "文字识别" },
+  "text-detection": { path: "/ai/paddleocr", label: "PaddleOCR 识别" },
+  "text-recognition": { path: "/ai/paddleocr", label: "PaddleOCR 识别" },
+  "table-structure": { path: "/ai/table", label: "表格识别" },
 };
 
 const openTest = (row) => {

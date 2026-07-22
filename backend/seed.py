@@ -103,6 +103,7 @@ def _regroup_ai_menus():
         (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
         (274, 230, "/ai/face"),
         (276, 230, "/ai/alert"),
+        (278, 230, "/ai/table"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -291,6 +292,10 @@ def seed_ai_menus():
     _ensure_ai_menu(216, 230, "PaddleOCR 识别", "C", "ai:paddleocr:list",
                     path="/ai/paddleocr", component="ai/paddleocr/index", icon="Document",
                     order=8, grant_common=True)
+    _ensure_ai_menu(278, 230, "表格识别", "C", "ai:table:list",
+                    path="/ai/table", component="ai/table/index", icon="Grid",
+                    order=9, grant_common=True)
+    _ensure_ai_menu(2781, 278, "表格识别查询", "F", "ai:table:query", grant_common=True)
     # 视频监控（顶级目录，order=1 排在 AI(0) 与系统管理(2) 之间）
     _ensure_ai_menu(240, 0, "摄像头管理", "C", "camera:list",
                     path="/camera", component="camera/index", icon="VideoCamera",
@@ -554,12 +559,19 @@ def seed_ai_models():
         source_url="https://huggingface.co/Hexmon/vyra-yolo-ppe-detection",
         description="基于 YOLO 的个人防护装备(PPE)穿戴检测模型，识别安全帽、反光衣等。", status="0",
     ))
-    # YOLOv8 文档表格检测（drop-in，复用图片/视频/摄像头检测页）
+    # YOLOv8 文档表格检测（表格识别流水线 + 图片/视频/摄像头检测页）
     created |= _ensure_ai_model("yolov8m-table-extraction", dict(
         model_name="文档表格检测", category="文档解析",
         task="object-detection", library="ultralytics", version="v1",
         source_url="https://huggingface.co/keremberke/yolov8m-table-extraction",
-        description="YOLOv8 文档表格检测（bordered/borderless），用于图片/视频/摄像头检测页。", status="0",
+        description="YOLOv8 文档表格检测（bordered/borderless），用于表格识别流水线及图片/视频/摄像头检测页。", status="0",
+    ))
+    # SLANet_plus 表格结构（rapid-table / ONNX，CPU）
+    created |= _ensure_ai_model("rapidtable-slanet-plus", dict(
+        model_name="SLANet_plus 表格结构", category="文档解析",
+        task="table-structure", library="rapidtable", version="v2",
+        source_url="https://www.modelscope.cn/models/RapidAI/RapidTable/resolve/v2.0.0/slanet-plus.onnx",
+        description="PaddleOCR SLANet_plus 表格结构识别（ONNX）。与 YOLO 检表 + RapidOCR 组合输出 HTML/CSV。", status="0",
     ))
     # YOLO26 官方通用检测权重（单仓多权重，靠来源链接锚点 #yolo26X.pt 精确拉取）
     created |= _ensure_ai_model("yolo26n", dict(

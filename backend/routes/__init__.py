@@ -11,9 +11,12 @@ from .training import training_bp
 from .badminton import badminton_bp
 from .face import face_bp
 from .alert import alert_bp
+from .table_recog import table_recog_bp
 
 all_blueprints = [auth_bp, user_bp, role_bp, dept_bp, job_bp, menu_bp, ai_model_bp,
-                  camera_bp, water_level_bp, training_bp, badminton_bp, face_bp, alert_bp]
+                  camera_bp, water_level_bp, training_bp, badminton_bp, face_bp, alert_bp,
+                  table_recog_bp]
 
 __all__ = ["all_blueprints", "auth_bp", "user_bp", "role_bp", "dept_bp", "job_bp", "menu_bp",
-           "ai_model_bp", "camera_bp", "water_level_bp", "training_bp", "badminton_bp", "face_bp", "alert_bp"]
+           "ai_model_bp", "camera_bp", "water_level_bp", "training_bp", "badminton_bp", "face_bp",
+           "alert_bp", "table_recog_bp"]

@@ -121,6 +121,7 @@ const TASK_LABELS = {
   "ocr": "OCR(端到端)",
   "text-detection": "文本检测",
   "text-recognition": "文本识别(行)",
+  "table-structure": "表格结构",
   "text-classification": "文本分类",
   "zero-shot-classification": "零样本分类",
   "fill-mask": "完形填空",
