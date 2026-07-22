@@ -57,8 +57,8 @@
       <!-- ── 数据标注 ── -->
       <el-tab-pane label="数据标注" name="annotate">
         <el-tabs v-model="annotateSubTab" type="card" class="annotate-sub-tabs">
-          <el-tab-pane label="在线标注" name="canvas">
-            <AnnotatePanel ref="annotateRef" :initial-dataset-id="annotateDatasetId" />
+          <el-tab-pane label="标注工具" name="canvas">
+            <AnnotateToolsPanel ref="annotateRef" :initial-dataset-id="annotateDatasetId" />
           </el-tab-pane>
           <el-tab-pane label="质量检测" name="quality">
             <QualityPanel ref="qualityRef" :initial-dataset-id="annotateDatasetId" />
@@ -569,7 +569,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Edit, Delete, Upload, Document, VideoCamera } from '@element-plus/icons-vue'
 import { trainingApi } from '../../../api/ai'
-import AnnotatePanel from './annotate.vue'
+import AnnotateToolsPanel from './annotateTools.vue'
 import QualityPanel from './quality.vue'
 import ConvertPanel from './convert.vue'
 

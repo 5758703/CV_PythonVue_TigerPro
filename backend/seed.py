@@ -104,6 +104,7 @@ def _regroup_ai_menus():
         (274, 230, "/ai/face"),
         (276, 230, "/ai/alert"),
         (278, 230, "/ai/table"),
+        (280, 230, "/ai/vehicle"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -296,6 +297,10 @@ def seed_ai_menus():
                     path="/ai/table", component="ai/table/index", icon="Grid",
                     order=9, grant_common=True)
     _ensure_ai_menu(2781, 278, "表格识别查询", "F", "ai:table:query", grant_common=True)
+    _ensure_ai_menu(280, 230, "车辆追踪", "C", "ai:vehicle:list",
+                    path="/ai/vehicle", component="ai/vehicle/index", icon="Van",
+                    order=10, grant_common=True)
+    _ensure_ai_menu(2801, 280, "车辆追踪查询", "F", "ai:vehicle:query", grant_common=True)
     # 视频监控（顶级目录，order=1 排在 AI(0) 与系统管理(2) 之间）
     _ensure_ai_menu(240, 0, "摄像头管理", "C", "camera:list",
                     path="/camera", component="camera/index", icon="VideoCamera",
@@ -566,6 +571,53 @@ def seed_ai_models():
         source_url="https://huggingface.co/keremberke/yolov8m-table-extraction",
         description="YOLOv8 文档表格检测（bordered/borderless），用于表格识别流水线及图片/视频/摄像头检测页。", status="0",
     ))
+    # 车牌检测（车辆追踪）：YOLOv8（Koushim）+ YOLOv5n/m（keremberke）
+    created |= _ensure_ai_model("yolov8-license-plate", dict(
+        model_name="车牌检测 YOLOv8（Koushim）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v8",
+        source_url="https://huggingface.co/Koushim/yolov8-license-plate-detection",
+        description="YOLOv8n 车牌定位（Koushim/yolov8-license-plate-detection，Ultralytics）。车辆追踪车牌检测可用。", status="0",
+    ))
+    created |= _ensure_ai_model("keremberke-yolov5n-license-plate", dict(
+        model_name="车牌检测 YOLOv5n（keremberke）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v5",
+        source_url="https://huggingface.co/keremberke/yolov5n-license-plate",
+        description="YOLOv5n 车牌定位（keremberke）。车辆追踪兼容项，经专用加载器推理。", status="0",
+    ))
+    created |= _ensure_ai_model("keremberke-yolov5m-license-plate", dict(
+        model_name="车牌检测 YOLOv5m（keremberke）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v5",
+        source_url="https://huggingface.co/keremberke/yolov5m-license-plate",
+        description="YOLOv5m 车牌定位（keremberke，精度高于 n）。车辆追踪兼容项，经专用加载器推理。", status="0",
+    ))
+    # YOLOv11 车牌检测（morsetechlab，车辆追踪推荐；单仓多权重靠锚点选 n/s）
+    created |= _ensure_ai_model("yolov11-license-plate-n", dict(
+        model_name="车牌检测 YOLOv11n（推荐·CPU）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v11",
+        source_url="https://huggingface.co/morsetechlab/yolov11-license-plate-detection#license-plate-finetune-v1n.pt",
+        description="YOLOv11 nano 车牌定位（morsetechlab）。CPU 友好，车辆追踪号牌检测推荐。", status="0",
+    ))
+    created |= _ensure_ai_model("yolov11-license-plate-s", dict(
+        model_name="车牌检测 YOLOv11s（推荐·精度）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v11",
+        source_url="https://huggingface.co/morsetechlab/yolov11-license-plate-detection#license-plate-finetune-v1s.pt",
+        description="YOLOv11 small 车牌定位（morsetechlab）。精度更高，CPU 仍可用。", status="0",
+    ))
+    # RapidOCR PP-OCRv6 small（CPU/ONNX，行驶号牌推荐）
+    created |= _ensure_ai_model("PP-OCRv6_small_det_onnx", dict(
+        model_name="PP-OCRv6 small 检测（推荐）", category="文档解析",
+        task="text-detection", library="rapidocr", version="v6",
+        source_url="https://www.modelscope.cn/models/RapidAI/RapidOCR",
+        file_path="models/PP-OCRv6_small_det_onnx",
+        description="PP-OCRv6 small 文本检测 ONNX（CPU）。车辆追踪/PaddleOCR/表格识别推荐。", status="0",
+    ))
+    created |= _ensure_ai_model("PP-OCRv6_small_rec_onnx", dict(
+        model_name="PP-OCRv6 small 识别（推荐）", category="文档解析",
+        task="text-recognition", library="rapidocr", version="v6",
+        source_url="https://www.modelscope.cn/models/RapidAI/RapidOCR",
+        file_path="models/PP-OCRv6_small_rec_onnx",
+        description="PP-OCRv6 small 文本识别 ONNX（CPU）。与 det 配对用于号牌 OCR。", status="0",
+    ))
     # SLANet_plus 表格结构（rapid-table / ONNX，CPU）
     created |= _ensure_ai_model("rapidtable-slanet-plus", dict(
         model_name="SLANet_plus 表格结构", category="文档解析",
@@ -578,13 +630,13 @@ def seed_ai_models():
         model_name="YOLO26n 通用检测", category="通用目标检测",
         task="object-detection", library="ultralytics", version="v26",
         source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26n.pt",
-        description="Ultralytics YOLO26 nano 通用目标检测权重（最轻量，CPU 友好），用于检测/追踪/视频页。", status="0",
+        description="Ultralytics YOLO26 nano（COCO 通用目标检测，轻量）。", status="0",
     ))
     created |= _ensure_ai_model("yolo26s", dict(
         model_name="YOLO26s 通用检测", category="通用目标检测",
         task="object-detection", library="ultralytics", version="v26",
         source_url="https://huggingface.co/Ultralytics/YOLO26#yolo26s.pt",
-        description="Ultralytics YOLO26 small 通用目标检测权重（精度更高），用于检测/追踪/视频页。", status="0",
+        description="Ultralytics YOLO26 small（COCO 通用目标检测）。", status="0",
     ))
     created |= _ensure_ai_model("brain-tumor-yolo-opennoor", dict(
         model_name="脑肿瘤医学影像检测（OpenNoorIlm）", category="医学影像-脑肿瘤",
@@ -810,7 +862,106 @@ def seed_ai_models():
     _bind_local_insightface()
     _bind_local_yoloe_seg_weight()
     _bind_local_yolo11s_ball_weight()
+    _bind_vehicle_track_models()
     return created
+
+
+def _bind_vehicle_track_models():
+    """绑定车辆追踪推荐权重元信息与本地 PP-OCRv6 目录（幂等）。"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    uploads = os.path.join(base, "uploads")
+    changed = False
+
+    meta = {
+        "yolo26s": {
+            "model_name": "YOLO26s 通用检测",
+            "category": "通用目标检测",
+            "description": "Ultralytics YOLO26 small（COCO 通用目标检测）。",
+        },
+        "yolo26n": {
+            "model_name": "YOLO26n 通用检测",
+            "category": "通用目标检测",
+            "description": "Ultralytics YOLO26 nano（COCO 通用目标检测，轻量）。",
+        },
+        "yolov8-license-plate": {
+            "model_name": "车牌检测 YOLOv8（Koushim）",
+            "category": "交通车辆",
+            "description": "YOLOv8n 车牌定位（Koushim/yolov8-license-plate-detection，Ultralytics）。车辆追踪车牌检测可用。",
+            "source_url": "https://huggingface.co/Koushim/yolov8-license-plate-detection",
+        },
+        "keremberke-yolov5n-license-plate": {
+            "model_name": "车牌检测 YOLOv5n（keremberke）",
+            "category": "交通车辆",
+            "description": "YOLOv5n 车牌定位（keremberke）。车辆追踪兼容项，经专用加载器推理。",
+            "source_url": "https://huggingface.co/keremberke/yolov5n-license-plate",
+        },
+        "keremberke-yolov5m-license-plate": {
+            "model_name": "车牌检测 YOLOv5m（keremberke）",
+            "category": "交通车辆",
+            "description": "YOLOv5m 车牌定位（keremberke，精度高于 n）。车辆追踪兼容项，经专用加载器推理。",
+            "source_url": "https://huggingface.co/keremberke/yolov5m-license-plate",
+        },
+        "yolov11-license-plate-n": {
+            "model_name": "车牌检测 YOLOv11n（推荐·CPU）",
+            "category": "交通车辆",
+            "description": "YOLOv11 nano 车牌定位（morsetechlab）。CPU 友好，车辆追踪号牌检测推荐。",
+            "source_url": "https://huggingface.co/morsetechlab/yolov11-license-plate-detection#license-plate-finetune-v1n.pt",
+        },
+        "yolov11-license-plate-s": {
+            "model_name": "车牌检测 YOLOv11s（推荐·精度）",
+            "category": "交通车辆",
+            "description": "YOLOv11 small 车牌定位（morsetechlab）。精度更高，CPU 仍可用。",
+            "source_url": "https://huggingface.co/morsetechlab/yolov11-license-plate-detection#license-plate-finetune-v1s.pt",
+        },
+    }
+    for key, fields in meta.items():
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            continue
+        for k, v in fields.items():
+            if getattr(m, k, None) != v:
+                setattr(m, k, v)
+                changed = True
+
+    ocr_specs = [
+        ("PP-OCRv6_small_det_onnx", "PP-OCRv6 small 检测（推荐）", "text-detection", "models/PP-OCRv6_small_det_onnx"),
+        ("PP-OCRv6_small_rec_onnx", "PP-OCRv6 small 识别（推荐）", "text-recognition", "models/PP-OCRv6_small_rec_onnx"),
+    ]
+    for key, name, task, rel in ocr_specs:
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            continue
+        abs_dir = os.path.join(uploads, rel.replace("/", os.sep))
+        if not os.path.isdir(abs_dir):
+            continue
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.model_name != name:
+            m.model_name = name
+            changed = True
+        if m.task != task:
+            m.task = task
+            changed = True
+        if (m.library or "").lower() != "rapidocr":
+            m.library = "rapidocr"
+            changed = True
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+
+    if changed:
+        db.session.commit()
+    return changed
 
 
 def _bind_local_yolo11s_ball_weight():

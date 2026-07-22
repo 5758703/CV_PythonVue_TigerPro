@@ -27,6 +27,7 @@ def create_app():
 
     @jwt.invalid_token_loader
     def _invalid_token(reason):
+        
         return jsonify(code=401, message="令牌无效"), 401
 
     @jwt.expired_token_loader

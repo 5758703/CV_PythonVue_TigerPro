@@ -46,8 +46,16 @@ class Config:
     HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")
     # ModelScope（模搭社区）访问令牌（拉取受限模型权重时用）
     MODELSCOPE_TOKEN = os.getenv("MODELSCOPE_TOKEN") or os.getenv("MODELSCOPE_API_TOKEN")
-    # Roboflow API Key（拉取 Universe 公开模型权重，如 NASASpaceflight Rocket Detect）
+    # Roboflow API Key（拉取 Universe 公开模型权重 / 标注工具）
     ROBOFLOW_API_KEY = os.getenv("ROBOFLOW_API_KEY")
+    ROBOFLOW_PUBLIC_API_KEY = os.getenv("ROBOFLOW_PUBLIC_API_KEY")
+    ROBOFLOW_WORKSPACE = os.getenv("ROBOFLOW_WORKSPACE")
+    # CVAT 自托管 / 云端标注
+    CVAT_URL = os.getenv("CVAT_URL")
+    CVAT_TOKEN = os.getenv("CVAT_TOKEN")
+    CVAT_USERNAME = os.getenv("CVAT_USERNAME")
+    CVAT_PASSWORD = os.getenv("CVAT_PASSWORD")
+    XANYLABELING_CMD = os.getenv("XANYLABELING_CMD")
 
     # DeepSeek（检测结果 AI 分析报告）：OpenAI 兼容接口
     DEEPSEEK_API_KEY = os.getenv(

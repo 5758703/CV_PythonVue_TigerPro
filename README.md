@@ -101,7 +101,8 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 - 权限分类：
   - 功能权限 — 菜单(M目录/C菜单)、按钮(F，前端 `v-permission`)、API 接口(A，后端校验)
   - 数据权限 — 角色 `data_scope`：1 仅本人 / 2 本部门 / 3 本部门及下级 / 4 全部
-- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace 底库 1:N）** 等
+- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace 底库 1:N）** / **表格识别（YOLO+RapidOCR+SLANet）** / **车辆追踪** 等
+- 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**
 
 ## 默认账号（种子数据自动写入）
 
@@ -179,15 +180,13 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 | [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、姿态/球模型、球场与网线、HUD、API；含 [§11 Roboflow 导出 YOLO zip 与自训指南](docs/badminton-analysis.md#11-附录roboflow-导出-yolo11--yolov8-zip-与平台自训指南) |
 | [图像/视频分割模块](docs/image-segmentation.md) | 技术栈、依赖、模型权重、API 与使用流程（RF-DETR-Seg / YOLOE 图片视频 / MobileSAM） |
 | [数据标注功能说明](docs/数据标注功能说明.md) | 视频抽帧、Canvas 标注、YOLO 格式、构建训练集、API 与 FAQ |
-<<<<<<< HEAD
+| [外接标注工具操作说明](docs/外接标注工具操作说明.md) | X-AnyLabeling / CVAT / Roboflow 小白入门、分步举例与回灌说明 |
 | [姿态估计模型选型说明](docs/姿态估计模型选型说明.md) | 平台 7 款姿态模型对比；含羽毛球页六模型速查 |
-=======
-| [姿态估计模型选型说明](docs/姿态估计模型选型说明.md) | 平台内置姿态模型对比、RTMPose/DWPose 接入与选型建议 |
->>>>>>> 2b83a8c4845ad48bb127bba63b07e3c722e4fdbe
-| [数据标注质量检测与格式转换](docs/公众号-数据标注质量检测与格式转换.md) | 质量检测指标解读、五类格式转换与训前检查清单（公众号文） |
-| [TigerAI平台模型框架与类型汇总](docs/公众号-TigerAI平台模型框架与类型汇总.md) | 推理框架 / 任务类型 / 种子模型与工作台对照（公众号文，含配图位） |
+| [数据标注质量检测与格式转换](docs/数据标注质量检测与格式转换.md) | 质量检测指标解读、五类格式转换与训前检查清单（公众号文） |
+| [TigerAI平台模型框架与类型汇总](docs/TigerAI平台模型框架与类型汇总.md) | 推理框架 / 任务类型 / 种子模型与工作台对照（公众号文，含配图位） |
 | [人脸识别模块](docs/face-recognition.md) | InsightFace 1:N、底库登记、API、阈值/隔帧与许可隐私说明 |
 | [人脸识别功能汇总](docs/人脸识别功能汇总.md) | 框架/模型对比、本项目选型、底库与实时识别、API、配图占位 |
+| [表格识别功能汇总](docs/表格识别功能汇总.md) | YOLO 检表 → RapidOCR → SLANet_plus；模型、API、前端与代码位置 |
 | [检测告警模块](docs/detection-alerts.md) | P0 烟火/聚集 + P1 PPE未戴帽/越线入侵、规则引擎与事件 |
 | [P2 监控墙与陌生人脸告警](docs/p2-监控墙与陌生人脸告警.md) | RTSP 监控墙 7×24、陌生人脸告警使用与实现 |
 | [烟火与人员聚集告警功能汇总](docs/烟火与人员聚集告警功能汇总.md) | 框架与检测模型配合、规则阈值、叠加/事件实践、配图占位 |

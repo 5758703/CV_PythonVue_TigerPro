@@ -43,7 +43,7 @@ MySQL（元数据） + uploads/（模型权重 / 上传媒体 / 输出）
 |---|---|
 | Web 框架 | Flask 3 + Flask-Cors + Flask-JWT-Extended |
 | ORM / DB | Flask-SQLAlchemy + PyMySQL → **MySQL 8** |
-| 运行时 | Python 3.10（conda 环境 `cv_python_tigerpro`） |
+| 运行时 | Python **3.12**（推荐 `backend/.venv312`；RapidOCR 1.4.4 不支持 3.13） |
 | 深度学习 | torch / torchvision / torchaudio **2.11（CPU）** |
 | 推理引擎 | ultralytics(YOLO)、transformers 4.51、funasr、funasr_onnx、sherpa-onnx、onnxruntime |
 | 模型来源 | huggingface_hub、modelscope |
@@ -77,10 +77,23 @@ backend/
 CREATE DATABASE cv_python_tigerpro DEFAULT CHARACTER SET utf8mb4;
 ```
 
-### 2. Python 环境（建议 conda）
+### 2. Python 环境（推荐 3.12 虚拟环境）
+
+车辆追踪 / 车牌 OCR 依赖 `rapidocr_onnxruntime==1.4.4`，**须 Python 3.12 及以下**（3.13 仅能装 1.2.x 且识别异常）。
+
+**方式 A：项目自带 venv（Windows 推荐）**
+
+```powershell
+cd backend
+py -3.12 -m venv .venv312
+.\.venv312\Scripts\pip install -r requirements.txt
+.\scripts\run_backend.ps1
+```
+
+**方式 B：conda**
 
 ```bash
-conda create -n cv_python_tigerpro python=3.10 -y
+conda create -n cv_python_tigerpro python=3.12 -y
 conda activate cv_python_tigerpro
 pip install -r requirements.txt
 ```
@@ -115,8 +128,15 @@ git clone https://github.com/microsoft/VibeVoice  backend/uploads/models/third_p
 
 ## 本地运行
 
+```powershell
+# Windows（推荐）
+cd backend
+.\scripts\run_backend.ps1
+```
+
 ```bash
-conda activate cv_python_tigerpro
+# 或手动激活环境
+conda activate cv_python_tigerpro   # 或 backend/.venv312
 cd backend
 python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 ```

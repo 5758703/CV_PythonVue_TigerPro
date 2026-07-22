@@ -539,6 +539,161 @@ def annotate_labels_delete(did, stem):
     return jsonify(code=0, message="标签已清除", data={"stats": stats})
 
 
+# ── 四套独立标注工具（Web / X-AnyLabeling / CVAT / Roboflow）──
+
+@training_bp.get("/datasets/<int:did>/annotate/tools")
+@permission_required("ai:training:query")
+def annotate_tools_list(did):
+    """列出四套标注工具状态（互不影响的独立工作区）。"""
+    from services.annotate_tools import list_tools
+
+    ds = TrainingDataset.query.get_or_404(did)
+    if ds.format == "import":
+        return jsonify(code=400, message="import 格式请使用外部目录，不走平台工具工作区"), 400
+    tools = list_tools(_dataset_dir(did))
+    return jsonify(code=0, data={"dataset": ds.to_dict(), "tools": tools})
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/<tool>/export")
+@permission_required("ai:training:add")
+def annotate_tool_export(did, tool):
+    """X-AnyLabeling：导出独立标注包 zip。"""
+    from services.annotate_tools import TOOL_XANY, export_xanylabeling_pack
+
+    if tool != TOOL_XANY:
+        return jsonify(code=400, message="当前仅 X-AnyLabeling 支持导出标注包"), 400
+    ds = TrainingDataset.query.get_or_404(did)
+    try:
+        pack = export_xanylabeling_pack(_dataset_dir(did), ds.class_list())
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    return send_file(pack, as_attachment=True, download_name=pack.name)
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/<tool>/import")
+@permission_required("ai:training:edit")
+def annotate_tool_import(did, tool):
+    """向指定工具工作区导入 YOLO 标签（zip 或多个 .txt），不自动覆盖 raw。"""
+    from services.annotate_tools import ALL_TOOLS, TOOL_WEB, import_yolo_label_files, import_yolo_labels_zip
+
+    if tool not in ALL_TOOLS or tool == TOOL_WEB:
+        return jsonify(code=400, message="请指定 xanylabeling / cvat / roboflow"), 400
+    ds = TrainingDataset.query.get_or_404(did)
+    dataset_dir = _dataset_dir(did)
+    try:
+        if "file" in request.files:
+            f = request.files["file"]
+            raw = f.read()
+            name = (f.filename or "").lower()
+            if name.endswith(".zip"):
+                result = import_yolo_labels_zip(dataset_dir, tool, raw)
+            elif name.endswith(".txt"):
+                result = import_yolo_label_files(dataset_dir, tool, [(f.filename, raw)])
+            else:
+                return jsonify(code=400, message="请上传 .zip 或 .txt"), 400
+        elif request.files:
+            pairs = []
+            for key in request.files:
+                for f in request.files.getlist(key):
+                    pairs.append((f.filename or "label.txt", f.read()))
+            result = import_yolo_label_files(dataset_dir, tool, pairs)
+        else:
+            return jsonify(code=400, message="未接收到文件"), 400
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    except zipfile.BadZipFile:
+        return jsonify(code=400, message="无效的 zip 文件"), 400
+    return jsonify(code=0, message="已导入到工具独立工作区", data=result)
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/<tool>/apply")
+@permission_required("ai:training:edit")
+def annotate_tool_apply(did, tool):
+    """将工具工作区标签回灌到 raw/labels（供构建训练）。"""
+    from services.annotate_tools import ALL_TOOLS, apply_tool_labels
+
+    if tool not in ALL_TOOLS:
+        return jsonify(code=400, message="未知工具"), 400
+    ds = TrainingDataset.query.get_or_404(did)
+    mode = (request.json or {}).get("mode") if request.is_json else request.form.get("mode")
+    mode = (mode or "merge").strip().lower()
+    if mode not in ("merge", "replace"):
+        return jsonify(code=400, message="mode 须为 merge 或 replace"), 400
+    try:
+        result = apply_tool_labels(_dataset_dir(did), tool, mode=mode)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    ds.status = "draft"
+    db.session.commit()
+    return jsonify(code=0, message="已回灌到 raw/labels", data=result)
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/cvat/push")
+@permission_required("ai:training:add")
+def annotate_cvat_push(did):
+    from services.annotate_tools import cvat_push, _mask_secrets
+
+    ds = TrainingDataset.query.get_or_404(did)
+    try:
+        result = cvat_push(_dataset_dir(did), ds.name, ds.class_list(), dataset_id=did)
+    except ValueError as e:
+        return jsonify(code=400, message=_mask_secrets(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"CVAT 推送失败：{_mask_secrets(e)}"), 500
+    return jsonify(code=0, message="已推送到 CVAT", data=result)
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/cvat/pull")
+@permission_required("ai:training:edit")
+def annotate_cvat_pull(did):
+    from services.annotate_tools import cvat_pull, _mask_secrets
+
+    ds = TrainingDataset.query.get_or_404(did)
+    try:
+        result = cvat_pull(_dataset_dir(did))
+    except ValueError as e:
+        return jsonify(code=400, message=_mask_secrets(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"CVAT 拉取失败：{_mask_secrets(e)}"), 500
+    return jsonify(code=0, message="已拉取到 CVAT 独立工作区", data=result)
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/roboflow/push")
+@permission_required("ai:training:add")
+def annotate_roboflow_push(did):
+    from services.annotate_tools import roboflow_push, _mask_secrets
+
+    ds = TrainingDataset.query.get_or_404(did)
+    try:
+        result = roboflow_push(_dataset_dir(did), ds.name, ds.class_list(), dataset_id=did)
+    except ValueError as e:
+        return jsonify(code=400, message=_mask_secrets(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"Roboflow 推送失败：{_mask_secrets(e)}"), 500
+    return jsonify(code=0, message="已推送到 Roboflow", data=result)
+
+
+@training_bp.post("/datasets/<int:did>/annotate/tools/roboflow/pull")
+@permission_required("ai:training:edit")
+def annotate_roboflow_pull(did):
+    from services.annotate_tools import roboflow_pull, _mask_secrets
+
+    ds = TrainingDataset.query.get_or_404(did)
+    data = request.get_json(silent=True) or {}
+    version = data.get("version")
+    try:
+        ver = int(version) if version is not None and str(version).strip() != "" else None
+    except (TypeError, ValueError):
+        return jsonify(code=400, message="version 须为整数"), 400
+    try:
+        result = roboflow_pull(_dataset_dir(did), version=ver)
+    except ValueError as e:
+        return jsonify(code=400, message=_mask_secrets(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"Roboflow 拉取失败：{_mask_secrets(e)}"), 500
+    return jsonify(code=0, message="已拉取到 Roboflow 独立工作区", data=result)
+
+
 # ── 标注质量检测 & 格式转换 ───────────────────────────
 
 @training_bp.post("/datasets/<int:did>/quality/analyze")

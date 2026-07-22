@@ -910,16 +910,188 @@ def detect_video_roboflow(
     return _attach_rocket_telemetry_stats(result, speed_samples, is_rocket)
 
 
+def _disable_ultralytics_autoinstall():
+    """禁止 Ultralytics 在加载旧权重时 pip 自动安装依赖（Windows 上易卡死/权限失败）。"""
+    os.environ.setdefault("YOLO_OFFLINE", "1")
+    try:
+        from ultralytics.utils import checks
+        if hasattr(checks, "AUTOINSTALL"):
+            checks.AUTOINSTALL = False
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ultralytics.utils import SETTINGS
+        if hasattr(SETTINGS, "update"):
+            SETTINGS.update({"sync": False})
+        elif isinstance(SETTINGS, dict):
+            SETTINGS["sync"] = False
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _is_legacy_yolov5_weight(abs_path: str) -> bool:
+    """粗判是否为旧版 YOLOv5 权重（需 torch.hub 的 ultralytics/yolov5 运行时）。"""
+    p = (abs_path or "").replace("\\", "/").lower()
+    return "yolov5" in p and "yolov8" not in p and "yolo11" not in p and "yolo26" not in p
+
+
+def _yolov5_hub_root() -> str:
+    """返回本地 torch.hub 缓存中的 ultralytics/yolov5 源码目录（必要时下载）。"""
+    import torch
+
+    root = os.path.join(torch.hub.get_dir(), "ultralytics_yolov5_master")
+    if os.path.isdir(root) and os.path.isfile(os.path.join(root, "hubconf.py")):
+        return root
+    try:
+        # 仅确保仓库落到 hub 缓存；pretrained=False 避免再下权重
+        torch.hub.load(
+            "ultralytics/yolov5",
+            "yolov5n",
+            pretrained=False,
+            trust_repo=True,
+            force_reload=False,
+            verbose=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        if not (os.path.isdir(root) and os.path.isfile(os.path.join(root, "hubconf.py"))):
+            raise ValueError(
+                "无法准备 YOLOv5 运行时（torch.hub ultralytics/yolov5）。"
+                f"请检查网络后重试，或改用 yolov8/yolov11 车牌权重。详情：{e}"
+            ) from e
+    if not (os.path.isdir(root) and os.path.isfile(os.path.join(root, "hubconf.py"))):
+        raise ValueError(
+            "无法准备 YOLOv5 运行时（torch.hub ultralytics/yolov5）。"
+            "请检查网络后重试，或改用 yolov8/yolov11 车牌权重。"
+        )
+    return root
+
+
+def _load_legacy_yolov5_model(abs_path: str):
+    """加载旧版 YOLOv5 .pt（keremberke 等），通过 hub 源码 + 命名空间重映射，无需 pip install yolov5。"""
+    import pickle
+    import sys
+    import types
+
+    import torch
+
+    mtime = os.path.getmtime(abs_path)
+    cache_key = f"yolov5::{abs_path}"
+    with _lock:
+        cached = _cache.get(cache_key)
+        if cached and cached[0] == mtime:
+            return cached[1]
+
+    hub_root = _yolov5_hub_root()
+    if hub_root not in sys.path:
+        sys.path.insert(0, hub_root)
+
+    class _RemapUnpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if module.startswith("yolov5."):
+                module = module[len("yolov5.") :]
+            return super().find_class(module, name)
+
+    remap_pickle = types.ModuleType("yolov5_remap_pickle")
+    remap_pickle.Unpickler = _RemapUnpickler
+    remap_pickle.load = pickle.load
+    remap_pickle.dump = pickle.dump
+    remap_pickle.dumps = pickle.dumps
+    remap_pickle.loads = pickle.loads
+
+    ckpt = torch.load(abs_path, map_location="cpu", pickle_module=remap_pickle, weights_only=False)
+    raw = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    if hasattr(raw, "float"):
+        raw = raw.float()
+    if hasattr(raw, "fuse"):
+        try:
+            raw = raw.fuse()
+        except Exception:  # noqa: BLE001
+            pass
+    raw.eval()
+
+    from models.common import AutoShape  # noqa: WPS433  hub 路径注入后可用
+
+    model = AutoShape(raw)
+    with _lock:
+        _cache[cache_key] = (mtime, model)
+    return model
+
+
 def _get_model(abs_path):
+    if _is_legacy_yolov5_weight(abs_path):
+        return _load_legacy_yolov5_model(abs_path)
     mtime = os.path.getmtime(abs_path)
     with _lock:
         cached = _cache.get(abs_path)
         if cached and cached[0] == mtime:
             return cached[1]
+        _disable_ultralytics_autoinstall()
         from ultralytics import YOLO  # 惰性导入
         model = YOLO(abs_path)
         _cache[abs_path] = (mtime, model)
         return model
+
+
+def detect_image_yolov5(abs_path, image_bytes, conf=0.25, draw=True):
+    """旧版 YOLOv5 权重单图检测（返回格式与 detect_image 对齐）。"""
+    import base64
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    h, w = img.shape[:2]
+    model = _load_legacy_yolov5_model(abs_path)
+    # AutoShape 接受 BGR/RGB ndarray；conf 通过 model.conf 设置
+    try:
+        model.conf = float(conf)
+    except Exception:  # noqa: BLE001
+        pass
+    results = model(img, size=640)
+    detections = []
+    try:
+        # results.xyxy[0]: (N, 6) -> x1,y1,x2,y2,conf,cls
+        xyxy = results.xyxy[0]
+        if hasattr(xyxy, "cpu"):
+            xyxy = xyxy.cpu().numpy()
+        names = getattr(results, "names", None) or getattr(model, "names", None) or {}
+        for row in xyxy:
+            if len(row) < 6:
+                continue
+            x1, y1, x2, y2, score, cls_id = row[:6]
+            if float(score) < float(conf or 0):
+                continue
+            cid = int(cls_id)
+            detections.append({
+                "className": _safe_class_name(names, cid),
+                "classId": cid,
+                "confidence": round(float(score), 4),
+                "bbox": [round(float(x1), 1), round(float(y1), 1), round(float(x2), 1), round(float(y2), 1)],
+            })
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"YOLOv5 推理失败：{e}") from e
+
+    image_b64 = None
+    if draw and detections:
+        vis = img.copy()
+        for d in detections:
+            x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
+            cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            cv2.putText(vis, f"{d['className']} {d['confidence']:.2f}", (x1, max(16, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        ok, buf = cv2.imencode(".jpg", vis)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    elif draw:
+        ok, buf = cv2.imencode(".jpg", img)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+    }
 
 
 def _safe_class_name(names, cls_id: int) -> str:
@@ -961,6 +1133,8 @@ def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
     draw=True  返回带框 jpg(base64)；False 仅返回检测框坐标(实时场景省编码)。
     返回 dict：detections / imageBase64 / width / height。
     """
+    if _is_legacy_yolov5_weight(abs_path):
+        return detect_image_yolov5(abs_path, image_bytes, conf=conf, draw=draw)
     meta = load_roboflow_meta(abs_path)
     if meta:
         return detect_image_roboflow(abs_path, image_bytes, conf=conf, draw=draw, meta=meta)
@@ -1667,7 +1841,7 @@ def pose_video_rtmlib(model_key, abs_weight_path, src_path, dst_path, conf=0.25,
 
 
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
-                progress_cb=None, alert_rules=None, alert_source_key=None):
+                progress_cb=None, alert_rules=None, alert_source_key=None, classes=None):
     """YOLO + ByteTrack 逐帧追踪，输出带框+ID 视频。
 
     line: 归一化 [x1,y1,x2,y2]（0–1）或 None。非 None 时统计越线进/出。
@@ -1706,8 +1880,11 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
             ok, frame = cap.read()
             if not ok:
                 break
-            r = model.track(frame, persist=True, tracker="bytetrack.yaml",
-                            conf=conf, imgsz=imgsz, verbose=False)[0]
+            track_kw = dict(persist=True, tracker="bytetrack.yaml",
+                            conf=conf, imgsz=imgsz, verbose=False)
+            if classes:
+                track_kw["classes"] = classes
+            r = model.track(frame, **track_kw)[0]
             detections = []
             if r.boxes is not None and r.boxes.id is not None:
                 names = r.names
@@ -1787,18 +1964,22 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
     return result
 
 
-def track_frame(abs_path, image_bytes, conf=0.25, reset=False):
+def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classes=None):
     """单帧追踪（摄像头实时）：返回 检测框 + 轨迹ID（不画图，前端叠画）。
 
     reset=True（会话首帧）用 persist=False 重置跟踪器/ID；之后 persist=True 续追。
+    classes: 可选 YOLO 类别 ID 列表，仅追踪指定类别。
     """
     arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("无法解析图片")
     model = _get_model(abs_path)
-    r = model.track(img, persist=not reset, tracker="bytetrack.yaml",
-                    conf=conf, verbose=False)[0]
+    track_kw = dict(persist=not reset, tracker="bytetrack.yaml",
+                    conf=conf, imgsz=imgsz, verbose=False)
+    if classes:
+        track_kw["classes"] = classes
+    r = model.track(img, **track_kw)[0]
     names = r.names
     detections = []
     if r.boxes is not None:
@@ -3379,23 +3560,94 @@ def _extract_rec_keys(rec_dir):
     return keys_path
 
 
-def _get_paddle(det_onnx, rec_onnx, keys_path):
-    """加载/缓存 RapidOCR 引擎（按 det+rec onnx 路径键）。"""
+def _rapidocr_major_version() -> tuple[int, int]:
+    try:
+        import importlib.metadata as im
+
+        ver = im.version("rapidocr_onnxruntime")
+        parts = [int(x) for x in ver.split(".")[:2] if x.isdigit()]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    except Exception:  # noqa: BLE001
+        pass
+    return (1, 2)
+
+
+def _get_paddle(det_onnx, rec_onnx, keys_path, *, plate_mode: bool = False):
+    """加载/缓存 RapidOCR 引擎（按 det+rec onnx + 模式键）。"""
     with _lock:
-        key = (det_onnx, rec_onnx)
+        key = (det_onnx, rec_onnx, keys_path, plate_mode)
         if key in _paddle_cache:
             return _paddle_cache[key]
         try:
             from rapidocr_onnxruntime import RapidOCR
         except ImportError as e:
-            raise RuntimeError("PaddleOCR 引擎需安装 rapidocr_onnxruntime：pip install rapidocr_onnxruntime") from e
-        engine = RapidOCR(det_model_path=det_onnx, rec_model_path=rec_onnx,
-                          rec_keys_path=keys_path)
-        _paddle_cache[key] = engine
-        return engine
+            raise RuntimeError(
+                "PaddleOCR 引擎需安装 rapidocr_onnxruntime（建议 Python 3.12 + 1.4.4）"
+            ) from e
+
+        major, minor = _rapidocr_major_version()
+        common_kw = {
+            "det_model_path": det_onnx,
+            "rec_model_path": rec_onnx,
+            "rec_keys_path": keys_path,
+            "text_score": 0.15,
+        }
+
+        if (major, minor) >= (1, 4):
+            kw = dict(common_kw, use_cls=False, use_det=True)
+            if plate_mode:
+                # 车牌 ROI 已局部化：开启 det 切分字符，关闭方向分类，放宽长宽比限制
+                kw.update(width_height_ratio=-1, min_height=16)
+            engine = RapidOCR(**kw)
+            _paddle_cache[key] = engine
+            return engine
+
+        # rapidocr_onnxruntime 1.2.x（旧 API，如 Python 3.13 回退环境）
+        try:
+            from rapidocr_onnxruntime.utils import UpdateParameters
+
+            def _patched_update_rec_params(self, config, rec_dict):
+                if rec_dict:
+                    need_remove_prefix = ["rec_model_path", "rec_keys_path"]
+                    new_rec_dict = {}
+                    for k, v in rec_dict.items():
+                        if k in need_remove_prefix:
+                            k = k.split("rec_")[1]
+                        new_rec_dict[k] = v
+                    config.update(new_rec_dict)
+                return config
+
+            UpdateParameters.update_rec_params = _patched_update_rec_params  # type: ignore[assignment]
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            engine = RapidOCR(
+                **common_kw,
+                use_text_det=not plate_mode,
+                use_angle_cls=False,
+            )
+            _paddle_cache[key] = engine
+            return engine
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"RapidOCR 初始化失败：{e}") from e
 
 
-def paddle_ocr(det_dir, rec_dir, image_bytes):
+def _rapidocr_run(engine, img_bgr, *, plate_mode: bool = False):
+    """统一 RapidOCR 调用（兼容 1.2.x / 1.4.x 返回结构）。"""
+    call_kw = {}
+    if _rapidocr_major_version() >= (1, 4):
+        call_kw = {"use_det": True, "use_cls": False}
+        if plate_mode:
+            call_kw.update(box_thresh=0.25, unclip_ratio=1.8, text_score=0.12)
+    out = engine(img_bgr, **call_kw) if call_kw else engine(img_bgr)
+    if isinstance(out, tuple):
+        return out[0]
+    return out
+
+
+def paddle_ocr(det_dir, rec_dir, image_bytes, *, plate_mode: bool = False):
     """PaddleOCR（RapidOCR）det+rec 流水线：图片字节 -> 文本 + 框。"""
     det_onnx = _find_onnx(det_dir)
     rec_onnx = _find_onnx(rec_dir)
@@ -3406,8 +3658,8 @@ def paddle_ocr(det_dir, rec_dir, image_bytes):
     if img is None:
         raise ValueError("无法解析图片")
 
-    engine = _get_paddle(det_onnx, rec_onnx, keys_path)
-    result, _elapse = engine(img)
+    engine = _get_paddle(det_onnx, rec_onnx, keys_path, plate_mode=plate_mode)
+    result = _rapidocr_run(engine, img, plate_mode=plate_mode)
 
     lines = []
     for item in (result or []):

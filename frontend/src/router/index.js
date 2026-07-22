@@ -26,6 +26,7 @@ const routes = [
       { path: 'ai/ocr', name: 'aiOcr', component: () => import('../views/ai/ocr/index.vue'), meta: { title: '文字识别' } },
       { path: 'ai/paddleocr', name: 'aiPaddleOcr', component: () => import('../views/ai/paddleocr/index.vue'), meta: { title: 'PaddleOCR 识别' } },
       { path: 'ai/table', name: 'aiTable', component: () => import('../views/ai/table/index.vue'), meta: { title: '表格识别' } },
+      { path: 'ai/vehicle', name: 'aiVehicle', component: () => import('../views/ai/vehicle/index.vue'), meta: { title: '车辆追踪' } },
       { path: 'ai/generate', name: 'aiGenerate', component: () => import('../views/ai/generate/index.vue'), meta: { title: '文本生成' } },
       { path: 'ai/ner', name: 'aiNer', component: () => import('../views/ai/ner/index.vue'), meta: { title: '实体识别' } },
       { path: 'ai/qa', name: 'aiQa', component: () => import('../views/ai/qa/index.vue'), meta: { title: '智能问答' } },

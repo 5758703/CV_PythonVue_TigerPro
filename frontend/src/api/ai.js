@@ -161,6 +161,31 @@ export const tableApi = {
     }),
 }
 
+// ---------------- 车辆追踪（YOLO + ByteTrack + 车牌 OCR + 测速 + 越线）
+export const vehicleApi = {
+  detectImage: (formData) =>
+    request.post('/ai/vehicle/detect-image', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  trackFrame: (formData) =>
+    request.post('/ai/vehicle/track-frame', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  trackVideo: (formData) =>
+    request.post('/ai/vehicle/track-video', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  videoProgress: (jobId) =>
+    request.get(`/ai/vehicle/video-progress/${jobId}`, { timeout: 0 }),
+  resetSession: (sessionId) =>
+    request.post('/ai/vehicle/reset-session', { sessionId }),
+  exportRecords: (sessionId) =>
+    request.post('/ai/vehicle/export-records', { sessionId }),
+}
+
 // ---------------- 羽毛球视频分析
 export const badmintonApi = {
   extractFrame: (formData) =>
@@ -218,6 +243,28 @@ export const trainingApi = {
     request.put(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`, data),
   clearAnnotateLabels: (id, stem) =>
     request.delete(`/ai/training/datasets/${id}/annotate/labels/${encodeURIComponent(stem)}`),
+  // 四套独立标注工具
+  annotateTools: (id) => request.get(`/ai/training/datasets/${id}/annotate/tools`),
+  annotateToolExport: (id, tool) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/${tool}/export`, null, {
+      responseType: 'blob',
+      timeout: 0,
+    }),
+  annotateToolImport: (id, tool, formData) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/${tool}/import`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  annotateToolApply: (id, tool, data) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/${tool}/apply`, data || {}),
+  annotateCvatPush: (id) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/cvat/push`, null, { timeout: 0 }),
+  annotateCvatPull: (id) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/cvat/pull`, null, { timeout: 0 }),
+  annotateRoboflowPush: (id) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/roboflow/push`, null, { timeout: 0 }),
+  annotateRoboflowPull: (id, data) =>
+    request.post(`/ai/training/datasets/${id}/annotate/tools/roboflow/pull`, data || {}, { timeout: 0 }),
   analyzeQuality: (id, data) =>
     request.post(`/ai/training/datasets/${id}/quality/analyze`, data, { timeout: 0 }),
   convertTypes: () => request.get('/ai/training/datasets/convert/types'),
