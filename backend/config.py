@@ -57,6 +57,14 @@ class Config:
     CVAT_PASSWORD = os.getenv("CVAT_PASSWORD")
     XANYLABELING_CMD = os.getenv("XANYLABELING_CMD")
 
+    # Ultralytics YOLO CPU 推理后端：auto|torch|openvino（热路径：跟踪/车辆/告警视频）
+    YOLO_INFER_BACKEND = (os.getenv("YOLO_INFER_BACKEND") or "auto").strip().lower()
+    YOLO_OPENVINO_PRECISION = (os.getenv("YOLO_OPENVINO_PRECISION") or "fp16").strip().lower()
+    try:
+        YOLO_OPENVINO_IMGSZ = int(os.getenv("YOLO_OPENVINO_IMGSZ") or "640")
+    except ValueError:
+        YOLO_OPENVINO_IMGSZ = 640
+
     # DeepSeek（检测结果 AI 分析报告）：OpenAI 兼容接口
     DEEPSEEK_API_KEY = os.getenv(
         "DEEPSEEK_API_KEY", ""

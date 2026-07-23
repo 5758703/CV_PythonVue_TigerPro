@@ -1971,11 +1971,21 @@ def export_model(weight_abs: Path, out_dir: Path, fmt="onnx"):
 
     out_dir.mkdir(parents=True, exist_ok=True)
     model = YOLO(str(weight_abs))
-    path = model.export(format=fmt)
+    export_kw = {"format": fmt}
+    if str(fmt).lower() == "openvino":
+        export_kw.update(half=True, imgsz=640, device="cpu")
+    path = model.export(**export_kw)
     if path and Path(path).exists():
-        dest = out_dir / Path(path).name
-        if Path(path).resolve() != dest.resolve():
-            shutil.copy2(path, dest)
+        src = Path(path)
+        if src.is_dir():
+            dest = out_dir / src.name
+            if dest.exists():
+                shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(src, dest)
+            return dest
+        dest = out_dir / src.name
+        if src.resolve() != dest.resolve():
+            shutil.copy2(src, dest)
         return dest
     raise FileNotFoundError(f"导出失败: {fmt}")
 

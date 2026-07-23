@@ -16,6 +16,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -485,15 +486,54 @@ def cvat_push(
     return {"projectId": project_id, "taskId": task_id, "taskUrl": ui, "images": len(images)}
 
 
-def cvat_pull(dataset_dir: Path) -> dict[str, Any]:
-    """从 CVAT 任务导出 YOLO 1.1 并写入 tools/cvat/labels。"""
-    base, headers, auth = _cvat_auth_headers()
-    sess = load_session(dataset_dir, TOOL_CVAT)
+def _cvat_resolve_task_id(base: str, headers: dict[str, str], auth: tuple | None, sess: dict[str, Any]) -> int:
+    """解析可用的 CVAT taskId；会话任务失效时回退到同项目最新任务。"""
     task_id = sess.get("taskId")
-    if not task_id:
-        raise ValueError("尚未推送到 CVAT，请先执行推送")
+    project_id = sess.get("projectId")
 
-    fmt = "YOLO 1.1"
+    def _task_exists(tid: int | str) -> bool:
+        rr = requests.get(f"{base}/api/tasks/{tid}", headers=headers, auth=auth, timeout=60)
+        return rr.status_code == 200
+
+    if task_id is not None and _task_exists(task_id):
+        return int(task_id)
+
+    if project_id is not None:
+        rr = requests.get(
+            f"{base}/api/tasks",
+            headers=headers,
+            auth=auth,
+            params={"project_id": project_id, "page_size": 20, "sort": "-id"},
+            timeout=60,
+        )
+        if rr.ok:
+            results = (rr.json() or {}).get("results") or []
+            if results:
+                tid = int(results[0]["id"])
+                sess["taskId"] = tid
+                sess["taskUrl"] = f"{base}/tasks/{tid}"
+                return tid
+
+    if task_id is None:
+        raise ValueError("尚未推送到 CVAT，请先执行推送")
+    raise ValueError(
+        f"CVAT 任务 #{task_id} 不存在或无权访问（可能已删除）。请重新「推送到 CVAT」后再拉取。"
+    )
+
+
+def _cvat_export_yolo_zip(
+    base: str,
+    headers: dict[str, str],
+    auth: tuple | None,
+    task_id: int,
+    *,
+    fmt: str = "YOLO 1.1",
+) -> bytes:
+    """CVAT 新版异步导出：POST export → 轮询 requests → 下载 result_url。
+
+    旧版 ``GET /api/tasks/id/dataset?action=download`` 已返回 410 Gone，不可再用。
+    """
+    dl_headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     r = requests.post(
         f"{base}/api/tasks/{task_id}/dataset/export",
         headers=headers,
@@ -501,55 +541,50 @@ def cvat_pull(dataset_dir: Path) -> dict[str, Any]:
         params={"format": fmt, "save_images": False},
         timeout=120,
     )
-    if r.status_code >= 400:
-        r = requests.get(
-            f"{base}/api/tasks/{task_id}/dataset",
-            headers={k: v for k, v in headers.items() if k.lower() != "content-type"},
-            auth=auth,
-            params={"format": fmt, "action": "download"},
-            timeout=300,
+    _http_raise(r, what="CVAT 发起导出")
+    payload = r.json() if r.content else {}
+    rq_id = payload.get("rq_id") or payload.get("id")
+    if not rq_id:
+        raise ValueError(f"CVAT 导出未返回 rq_id：{_mask_secrets(payload)}")
+
+    # rq_id 形如 action=export&target=task&...，必须整体编码进路径
+    req_url = f"{base}/api/requests/{quote(str(rq_id), safe='')}"
+    result_url = None
+    last_body: dict[str, Any] = {}
+    for _ in range(90):
+        time.sleep(1)
+        cr = requests.get(req_url, headers=headers, auth=auth, timeout=60)
+        if cr.status_code >= 400:
+            continue
+        last_body = cr.json() or {}
+        status = str(last_body.get("status") or last_body.get("state") or "").lower()
+        if status in ("finished", "completed"):
+            result_url = last_body.get("result_url") or last_body.get("url")
+            break
+        if status in ("failed", "error"):
+            raise ValueError(f"CVAT 导出失败：{_mask_secrets(last_body)}")
+
+    if not result_url:
+        # 兼容：部分版本提供 /dataset/download?rq_id=
+        result_url = f"{base}/api/tasks/{task_id}/dataset/download?rq_id={quote(str(rq_id), safe='')}"
+
+    dr = requests.get(result_url, headers=dl_headers, auth=auth, timeout=300)
+    if not dr.ok:
+        raise ValueError(
+            f"CVAT 下载导出包失败 HTTP {dr.status_code}：{_mask_secrets((dr.text or '')[:300])}"
         )
-        r.raise_for_status()
-        zip_bytes = r.content
-    else:
-        payload = r.json() if r.content else {}
-        rq_id = payload.get("rq_id") or payload.get("id")
-        zip_bytes = None
-        if rq_id:
-            for _ in range(60):
-                time.sleep(2)
-                cr = requests.get(f"{base}/api/requests/{rq_id}", headers=headers, auth=auth, timeout=60)
-                if cr.status_code >= 400:
-                    continue
-                body = cr.json() or {}
-                status = (body.get("status") or body.get("state") or "").lower()
-                if status in ("finished", "completed"):
-                    result_url = (
-                        body.get("result_url")
-                        or body.get("url")
-                        or f"{base}/api/tasks/{task_id}/dataset?format={fmt}&action=download"
-                    )
-                    dr = requests.get(
-                        result_url,
-                        headers={k: v for k, v in headers.items() if k.lower() != "content-type"},
-                        auth=auth,
-                        timeout=300,
-                    )
-                    dr.raise_for_status()
-                    zip_bytes = dr.content
-                    break
-                if status in ("failed", "error"):
-                    raise ValueError(f"CVAT 导出失败：{body}")
-        if zip_bytes is None:
-            dr = requests.get(
-                f"{base}/api/tasks/{task_id}/dataset",
-                headers={k: v for k, v in headers.items() if k.lower() != "content-type"},
-                auth=auth,
-                params={"format": fmt, "action": "download"},
-                timeout=300,
-            )
-            dr.raise_for_status()
-            zip_bytes = dr.content
+    if not dr.content or len(dr.content) < 32:
+        raise ValueError("CVAT 导出包为空，请确认任务中已有标注")
+    return dr.content
+
+
+def cvat_pull(dataset_dir: Path) -> dict[str, Any]:
+    """从 CVAT 任务导出 YOLO 1.1 并写入 tools/cvat/labels。"""
+    base, headers, auth = _cvat_auth_headers()
+    sess = load_session(dataset_dir, TOOL_CVAT)
+    task_id = _cvat_resolve_task_id(base, headers, auth, sess)
+
+    zip_bytes = _cvat_export_yolo_zip(base, headers, auth, task_id, fmt="YOLO 1.1")
 
     lbl_dir = tool_label_dir(dataset_dir, TOOL_CVAT)
     for old in lbl_dir.glob("*.txt"):
@@ -565,12 +600,23 @@ def cvat_pull(dataset_dir: Path) -> dict[str, Any]:
             name = Path(info.filename).name
             if not name.lower().endswith(".txt"):
                 continue
-            if name.lower() in ("classes.txt", "obj.names", "notes.json"):
+            if name.lower() in ("classes.txt", "obj.names", "notes.json", "train.txt", "val.txt", "test.txt"):
                 continue
-            (lbl_dir / name).write_bytes(zf.read(info))
+            # 跳过 YOLO 清单文件（内容为图片路径而非框）
+            data = zf.read(info)
+            if b"/" in data[:200] or b"\\" in data[:200] or data.lstrip().startswith(b"data/"):
+                head = data[:200].decode("utf-8", errors="ignore").lower()
+                if ".jpg" in head or ".png" in head or ".jpeg" in head:
+                    continue
+            (lbl_dir / name).write_bytes(data)
             imported += 1
 
-    sess.update({"state": "pulled", "lastPull": {"files": imported, "at": _utc_now()}})
+    sess.update({
+        "state": "pulled",
+        "taskId": task_id,
+        "taskUrl": f"{base}/tasks/{task_id}",
+        "lastPull": {"files": imported, "at": _utc_now()},
+    })
     save_session(dataset_dir, TOOL_CVAT, sess)
     return {"imported": imported, "stats": tool_stats(dataset_dir, TOOL_CVAT), "taskId": task_id}
 

@@ -7,6 +7,7 @@ import base64
 import json
 import math
 import os
+import shutil
 import sys
 import threading
 import time
@@ -1017,17 +1018,113 @@ def _load_legacy_yolov5_model(abs_path: str):
     return model
 
 
+def _yolo_infer_settings():
+    backend = (os.getenv("YOLO_INFER_BACKEND") or "auto").strip().lower()
+    precision = (os.getenv("YOLO_OPENVINO_PRECISION") or "fp16").strip().lower()
+    if precision not in ("fp16", "int8"):
+        precision = "fp16"
+    try:
+        imgsz = int(os.getenv("YOLO_OPENVINO_IMGSZ") or "640")
+    except ValueError:
+        imgsz = 640
+    return backend, precision, imgsz
+
+
+def _openvino_target_dir(abs_path: str, *, precision: str, imgsz: int) -> str:
+    stem = os.path.splitext(os.path.basename(abs_path))[0]
+    parent = os.path.dirname(abs_path)
+    return os.path.join(parent, f"{stem}_openvino_{precision}_i{imgsz}")
+
+
+def _find_openvino_load_path(export_dir: str) -> str | None:
+    if not export_dir or not os.path.isdir(export_dir):
+        return None
+    xmls = []
+    for root, _dirs, files in os.walk(export_dir):
+        for f in files:
+            if f.lower().endswith(".xml"):
+                xmls.append(os.path.join(root, f))
+    if not xmls:
+        return None
+    # Ultralytics 通常把整个目录交给 YOLO()
+    return export_dir
+
+
+def _ensure_openvino_artifact(abs_path: str, *, precision: str = "fp16", imgsz: int = 640) -> str:
+    """惰性导出并缓存 OpenVINO 模型目录；已存在则直接复用。"""
+    target = _openvino_target_dir(abs_path, precision=precision, imgsz=imgsz)
+    found = _find_openvino_load_path(target)
+    if found:
+        return found
+
+    # Ultralytics 默认导出旁路目录：{stem}_openvino_model
+    default_dir = os.path.splitext(abs_path)[0] + "_openvino_model"
+    found_default = _find_openvino_load_path(default_dir)
+    if found_default and precision == "fp16":
+        # 复用默认目录，避免重复导出
+        return found_default
+
+    from ultralytics import YOLO
+
+    model = YOLO(abs_path)
+    export_kw = {"format": "openvino", "imgsz": imgsz, "device": "cpu", "verbose": False}
+    if precision == "int8":
+        export_kw["int8"] = True
+    else:
+        export_kw["half"] = True
+    out = model.export(**export_kw)
+    out_path = str(out) if out else default_dir
+    if os.path.isfile(out_path) and out_path.lower().endswith(".xml"):
+        src_dir = os.path.dirname(out_path)
+    elif os.path.isdir(out_path):
+        src_dir = out_path
+    else:
+        src_dir = default_dir
+    if not _find_openvino_load_path(src_dir):
+        raise FileNotFoundError(f"OpenVINO 导出未生成可用 xml：{src_dir}")
+    if os.path.abspath(src_dir) != os.path.abspath(target):
+        if os.path.isdir(target):
+            shutil.rmtree(target, ignore_errors=True)
+        shutil.copytree(src_dir, target)
+        return target
+    return src_dir
+
+
+def _yolo_predict_kwargs(conf=0.25, imgsz=None, **extra):
+    """统一 CPU 推理参数。"""
+    kw = dict(conf=conf, verbose=False, device="cpu")
+    if imgsz is not None:
+        kw["imgsz"] = imgsz
+    kw.update(extra)
+    return kw
+
+
 def _get_model(abs_path):
     if _is_legacy_yolov5_weight(abs_path):
         return _load_legacy_yolov5_model(abs_path)
     mtime = os.path.getmtime(abs_path)
+    backend, precision, imgsz = _yolo_infer_settings()
+    cache_key = (abs_path, backend, precision, imgsz, mtime)
     with _lock:
-        cached = _cache.get(abs_path)
+        cached = _cache.get(cache_key)
         if cached and cached[0] == mtime:
             return cached[1]
         _disable_ultralytics_autoinstall()
         from ultralytics import YOLO  # 惰性导入
-        model = YOLO(abs_path)
+
+        model = None
+        use_ov = backend in ("auto", "openvino") and str(abs_path).lower().endswith((".pt", ".pth"))
+        if use_ov:
+            try:
+                ov_src = _ensure_openvino_artifact(abs_path, precision=precision, imgsz=imgsz)
+                model = YOLO(ov_src)
+            except Exception as e:  # noqa: BLE001
+                if backend == "openvino":
+                    raise RuntimeError(f"OpenVINO 加载失败：{e}") from e
+                model = None
+        if model is None:
+            model = YOLO(abs_path)
+        _cache[cache_key] = (mtime, model)
         _cache[abs_path] = (mtime, model)
         return model
 
@@ -1146,7 +1243,7 @@ def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
     model = _get_model(abs_path)
     h, w = img.shape[:2]
 
-    results = model.predict(img, conf=conf, verbose=False)
+    results = model.predict(img, **_yolo_predict_kwargs(conf=conf))
     r = results[0]
 
     names = getattr(r, "names", None) or getattr(model, "names", None) or {}
@@ -1268,7 +1365,7 @@ def detect_video(
             ok, frame = cap.read()
             if not ok:
                 break
-            r = model.predict(frame, conf=conf, verbose=False)[0]
+            r = model.predict(frame, **_yolo_predict_kwargs(conf=conf))[0]
             if is_rocket:
                 detections = _yolo_result_to_detections(r)
                 detections = _refine_rocket_detect_detections(detections, w, h)
@@ -1333,7 +1430,7 @@ def estimate_pose(abs_path, image_bytes, conf=0.25, draw=True):
         raise ValueError("无法解析图片")
 
     model = _get_model(abs_path)
-    r = model.predict(img, conf=conf, verbose=False)[0]
+    r = model.predict(img, **_yolo_predict_kwargs(conf=conf))[0]
 
     persons = []
     if r.keypoints is not None and r.keypoints.data is not None:
@@ -1385,7 +1482,7 @@ def pose_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
             ok, frame = cap.read()
             if not ok:
                 break
-            r = model.predict(frame, conf=conf, verbose=False)[0]
+            r = model.predict(frame, **_yolo_predict_kwargs(conf=conf))[0]
             if r.keypoints is not None and r.keypoints.data is not None:
                 total_persons += len(r.keypoints.data)
             _write_bgr(writer, r.plot(), ew, eh)
@@ -1881,7 +1978,7 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
             if not ok:
                 break
             track_kw = dict(persist=True, tracker="bytetrack.yaml",
-                            conf=conf, imgsz=imgsz, verbose=False)
+                            conf=conf, imgsz=imgsz, verbose=False, device="cpu")
             if classes:
                 track_kw["classes"] = classes
             r = model.track(frame, **track_kw)[0]
@@ -1976,7 +2073,7 @@ def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classe
         raise ValueError("无法解析图片")
     model = _get_model(abs_path)
     track_kw = dict(persist=not reset, tracker="bytetrack.yaml",
-                    conf=conf, imgsz=imgsz, verbose=False)
+                    conf=conf, imgsz=imgsz, verbose=False, device="cpu")
     if classes:
         track_kw["classes"] = classes
     r = model.track(img, **track_kw)[0]
@@ -2588,7 +2685,7 @@ def segment_image_ultralytics(abs_path, image_bytes, conf=0.25, draw=True, class
     if prompt and hasattr(model, "set_classes"):
         _ensure_yoloe_classes(model, prompt)
 
-    results = model.predict(img, conf=conf, verbose=False)
+    results = model.predict(img, **_yolo_predict_kwargs(conf=conf))
     r = results[0]
     detections = _ultralytics_boxes_to_detections(r, model)
     _ultralytics_masks_to_items(r, detections, h, w, include_mask=True)
@@ -2636,7 +2733,7 @@ def segment_video_ultralytics(abs_path, src_path, dst_path, conf=0.25, classes=N
             ok, frame = cap.read()
             if not ok:
                 break
-            r = model.predict(frame, conf=conf, verbose=False)[0]
+            r = model.predict(frame, **_yolo_predict_kwargs(conf=conf))[0]
             dets = _ultralytics_boxes_to_detections(r, model)
             for d in dets:
                 class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
@@ -3199,6 +3296,102 @@ def _whisper_generate_direct(model_dir, waveform):
         texts.append(processor.batch_decode(pred_ids, skip_special_tokens=True)[0].strip())
     return {"text": " ".join(t for t in texts if t).strip(), "chunks": []}
 
+
+# ------------------------------------------------------------ Moonshine ASR（UsefulSensors，transformers）
+_moonshine_cache = {}  # model_dir -> (processor, model)
+
+
+def _is_moonshine_model(model_dir):
+    """根据 config.json / 目录名判断是否为 Moonshine ASR。"""
+    cfg_path = os.path.join(model_dir, "config.json")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            mt = str(cfg.get("model_type") or "").lower()
+            arch = " ".join(cfg.get("architectures") or []).lower()
+            if "moonshine" in mt or "moonshine" in arch:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return "moonshine" in os.path.basename(os.path.normpath(model_dir)).lower()
+
+
+def _get_moonshine(model_dir):
+    """加载/缓存 Moonshine processor + MoonshineForConditionalGeneration（CPU）。"""
+    import torch
+    with _lock:
+        if model_dir in _moonshine_cache:
+            return _moonshine_cache[model_dir]
+        from transformers import AutoProcessor, MoonshineForConditionalGeneration
+        processor = AutoProcessor.from_pretrained(model_dir)
+        model = MoonshineForConditionalGeneration.from_pretrained(model_dir)
+        model.eval()
+        model.to("cpu")
+        model.to(torch.float32)
+        _moonshine_cache[model_dir] = (processor, model)
+        return processor, model
+
+
+def _decode_audio_for_sr(audio_path, sampling_rate):
+    """解码音频为指定采样率单声道 float32（复用 imageio-ffmpeg）。"""
+    import subprocess
+    import imageio_ffmpeg
+    sr = int(sampling_rate or 16000)
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [exe, "-nostdin", "-threads", "1", "-i", audio_path,
+           "-ac", "1", "-ar", str(sr), "-f", "f32le", "-hide_banner",
+           "-loglevel", "error", "pipe:1"]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        raise RuntimeError(f"音频解码失败：{proc.stderr.decode('utf-8', 'ignore')[:200]}")
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
+
+
+def transcribe_audio_moonshine(model_dir, audio_path):
+    """Moonshine Tiny/Base 英文 ASR（transformers）。
+
+    参考：https://huggingface.co/UsefulSensors/moonshine-tiny
+    返回与 SenseVoice/Whisper 统一结构：{text, language, emotion, events}。
+    """
+    import torch
+    processor, model = _get_moonshine(model_dir)
+    fe = getattr(processor, "feature_extractor", None) or processor
+    sr = int(getattr(fe, "sampling_rate", None) or 16000)
+    waveform = _decode_audio_for_sr(audio_path, sr)
+    if waveform.size == 0:
+        return {"text": "", "language": "英文", "emotion": None, "events": []}
+
+    # 按官方建议限制生成长度，避免幻觉循环；长音频按 ~30s 分块
+    token_limit_factor = 6.5 / float(sr)
+    chunk = sr * 30
+    texts = []
+    for start in range(0, len(waveform), chunk):
+        piece = waveform[start: start + chunk]
+        if piece.size == 0:
+            continue
+        inputs = processor(piece, return_tensors="pt", sampling_rate=sr)
+        inputs = {k: (v.to("cpu") if hasattr(v, "to") else v) for k, v in inputs.items()}
+        if "attention_mask" in inputs:
+            seq_lens = inputs["attention_mask"].sum(dim=-1)
+            max_length = max(8, int((seq_lens * token_limit_factor).max().item()))
+        else:
+            max_length = max(8, int(len(piece) * token_limit_factor))
+        with torch.no_grad():
+            generated_ids = model.generate(**inputs, max_length=max_length)
+        texts.append(processor.decode(generated_ids[0], skip_special_tokens=True).strip())
+
+    text = " ".join(t for t in texts if t).strip()
+    return {"text": text, "language": "英文", "emotion": None, "events": []}
+
+
+def transcribe_audio_transformers(model_dir, audio_path):
+    """transformers ASR 统一入口：Moonshine / Whisper 按架构分流。"""
+    if _is_moonshine_model(model_dir):
+        return transcribe_audio_moonshine(model_dir, audio_path)
+    return transcribe_audio_whisper(model_dir, audio_path)
+
+
 # ------------------------------------------------------------ Linly-Talker 数字人（SadTalker）
 def synthesize_talking_head(model_dir, image_path, audio_path, out_path, progress_cb=None):
     """数字人合成：人像图 + 驱动音频 -> 说话头像视频(H.264 mp4)。
@@ -3573,10 +3766,10 @@ def _rapidocr_major_version() -> tuple[int, int]:
     return (1, 2)
 
 
-def _get_paddle(det_onnx, rec_onnx, keys_path, *, plate_mode: bool = False):
+def _get_paddle(det_onnx, rec_onnx, keys_path, *, plate_mode: bool = False, rec_only: bool = False):
     """加载/缓存 RapidOCR 引擎（按 det+rec onnx + 模式键）。"""
     with _lock:
-        key = (det_onnx, rec_onnx, keys_path, plate_mode)
+        key = (det_onnx, rec_onnx, keys_path, plate_mode, rec_only)
         if key in _paddle_cache:
             return _paddle_cache[key]
         try:
@@ -3595,9 +3788,9 @@ def _get_paddle(det_onnx, rec_onnx, keys_path, *, plate_mode: bool = False):
         }
 
         if (major, minor) >= (1, 4):
-            kw = dict(common_kw, use_cls=False, use_det=True)
-            if plate_mode:
-                # 车牌 ROI 已局部化：开启 det 切分字符，关闭方向分类，放宽长宽比限制
+            use_det = not rec_only
+            kw = dict(common_kw, use_cls=False, use_det=use_det)
+            if plate_mode and use_det:
                 kw.update(width_height_ratio=-1, min_height=16)
             engine = RapidOCR(**kw)
             _paddle_cache[key] = engine
@@ -3625,7 +3818,7 @@ def _get_paddle(det_onnx, rec_onnx, keys_path, *, plate_mode: bool = False):
         try:
             engine = RapidOCR(
                 **common_kw,
-                use_text_det=not plate_mode,
+                use_text_det=(not rec_only) and (not plate_mode),
                 use_angle_cls=False,
             )
             _paddle_cache[key] = engine
@@ -3634,21 +3827,28 @@ def _get_paddle(det_onnx, rec_onnx, keys_path, *, plate_mode: bool = False):
             raise RuntimeError(f"RapidOCR 初始化失败：{e}") from e
 
 
-def _rapidocr_run(engine, img_bgr, *, plate_mode: bool = False):
+def _rapidocr_run(engine, img_bgr, *, plate_mode: bool = False, rec_only: bool = False):
     """统一 RapidOCR 调用（兼容 1.2.x / 1.4.x 返回结构）。"""
     call_kw = {}
     if _rapidocr_major_version() >= (1, 4):
-        call_kw = {"use_det": True, "use_cls": False}
-        if plate_mode:
+        call_kw = {"use_det": not rec_only, "use_cls": False}
+        if plate_mode and not rec_only:
             call_kw.update(box_thresh=0.25, unclip_ratio=1.8, text_score=0.12)
-    out = engine(img_bgr, **call_kw) if call_kw else engine(img_bgr)
-    if isinstance(out, tuple):
-        return out[0]
-    return out
+    try:
+        result = engine(img_bgr, **call_kw) if call_kw else engine(img_bgr)
+    except TypeError:
+        result = engine(img_bgr)
+    # 1.4.x 可能返回 (result, elapse)
+    if isinstance(result, tuple) and len(result) >= 1:
+        result = result[0]
+    return result
 
 
-def paddle_ocr(det_dir, rec_dir, image_bytes, *, plate_mode: bool = False):
-    """PaddleOCR（RapidOCR）det+rec 流水线：图片字节 -> 文本 + 框。"""
+def paddle_ocr(det_dir, rec_dir, image_bytes, *, plate_mode: bool = False, rec_only: bool = False):
+    """PaddleOCR（RapidOCR）det+rec 流水线：图片字节 -> 文本 + 框。
+
+    rec_only=True：车牌已透视/裁剪时仅识别，不做文本检测。
+    """
     det_onnx = _find_onnx(det_dir)
     rec_onnx = _find_onnx(rec_dir)
     keys_path = _extract_rec_keys(rec_dir)
@@ -3658,16 +3858,26 @@ def paddle_ocr(det_dir, rec_dir, image_bytes, *, plate_mode: bool = False):
     if img is None:
         raise ValueError("无法解析图片")
 
-    engine = _get_paddle(det_onnx, rec_onnx, keys_path, plate_mode=plate_mode)
-    result = _rapidocr_run(engine, img, plate_mode=plate_mode)
+    engine = _get_paddle(det_onnx, rec_onnx, keys_path, plate_mode=plate_mode, rec_only=rec_only)
+    result = _rapidocr_run(engine, img, plate_mode=plate_mode, rec_only=rec_only)
 
     lines = []
     for item in (result or []):
-        box, txt, score = item[0], item[1], item[2]
+        # rec-only 时可能是 [text, score] 或 [box, text, score]
+        if not item:
+            continue
+        if len(item) >= 3:
+            box, txt, score = item[0], item[1], item[2]
+            box_pts = [[round(float(x), 1), round(float(y), 1)] for x, y in box] if box is not None else []
+        elif len(item) == 2:
+            txt, score = item[0], item[1]
+            box_pts = []
+        else:
+            continue
         lines.append({
             "text": txt,
             "score": round(float(score), 4),
-            "box": [[round(float(x), 1), round(float(y), 1)] for x, y in box],
+            "box": box_pts,
         })
     h, w = img.shape[:2]
     return {

@@ -853,8 +853,8 @@ def transcribe_route(mid):
             lang = (request.form.get("language") or "auto").strip()
             result = transcribe_audio_nano(path, audio_path, language=lang)
         elif (m.library or "") == "transformers":
-            from inference import transcribe_audio_whisper
-            result = transcribe_audio_whisper(path, audio_path)
+            from inference import transcribe_audio_transformers
+            result = transcribe_audio_transformers(path, audio_path)
         else:
             from inference import transcribe_audio
             result = transcribe_audio(path, audio_path)

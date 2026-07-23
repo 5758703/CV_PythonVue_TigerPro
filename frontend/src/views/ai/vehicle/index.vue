@@ -1,257 +1,309 @@
 <template>
-  <div>
-    <el-card shadow="never" class="cfg-card">
-      <el-form :inline="true" class="cfg-form">
-        <el-form-item label="模式">
-          <el-select
-            v-model="mode"
-            placeholder="选择输入源"
-            style="width: 160px"
-            :disabled="busy"
-            @change="onModeChange"
-          >
-            <el-option label="图片识别" value="image" />
-            <el-option label="视频文件" value="file" />
-            <el-option label="本地摄像头" value="local" />
-            <el-option label="网络摄像头" value="network" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="车辆检测">
-          <el-select v-model="detectId" placeholder="YOLO 车辆检测" style="width: 220px" filterable :disabled="busy">
-            <el-option
-              v-for="m in detectModels"
-              :key="m.id"
-              :label="modelOptionLabel(m, 'detect')"
-              :value="m.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="车牌检测">
-          <el-select v-model="plateId" placeholder="可选（推荐 YOLOv11）" clearable style="width: 200px" filterable :disabled="busy">
-            <el-option
-              v-for="m in plateModels"
-              :key="m.id"
-              :label="modelOptionLabel(m, 'plate')"
-              :value="m.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="OCR 检测">
-          <el-select v-model="detId" placeholder="RapidOCR det" clearable style="width: 180px" filterable :disabled="busy">
-            <el-option
-              v-for="m in detModels"
-              :key="m.id"
-              :label="modelOptionLabel(m, 'ocrDet')"
-              :value="m.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="OCR 识别">
-          <el-select v-model="recId" placeholder="RapidOCR rec" clearable style="width: 180px" filterable :disabled="busy">
-            <el-option
-              v-for="m in recModels"
-              :key="m.id"
-              :label="modelOptionLabel(m, 'ocrRec')"
-              :value="m.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="置信度">
-          <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" style="width: 120px" :disabled="busy" />
-        </el-form-item>
-        <el-form-item label="分辨率">
-          <el-select v-model="imgsz" style="width: 100px" :disabled="busy">
-            <el-option :value="640" label="640" />
-            <el-option :value="480" label="480" />
-            <el-option :value="320" label="320" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-checkbox v-model="enableOcr" :disabled="busy">号牌 OCR</el-checkbox>
-          <el-checkbox v-if="mode !== 'image'" v-model="enableSpeed" :disabled="busy" style="margin-left: 8px">测速</el-checkbox>
-          <el-checkbox v-model="vehicleOnly" :disabled="busy" style="margin-left: 8px">仅车辆类</el-checkbox>
-        </el-form-item>
-        <el-form-item v-if="enableSpeed && mode !== 'image'" label="米/像素">
-          <el-input-number v-model="metersPerPixel" :min="0" :step="0.001" :precision="4" style="width: 130px" :disabled="busy" />
-        </el-form-item>
-        <el-form-item v-if="mode === 'image'">
-          <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPickImage" accept="image/*">
-            <el-button :icon="UploadFilled">选择图片</el-button>
-          </el-upload>
-        </el-form-item>
-        <el-form-item v-if="mode === 'file'">
-          <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick" accept="video/*">
-            <el-button :icon="UploadFilled">选择视频</el-button>
-          </el-upload>
-        </el-form-item>
-        <el-form-item v-if="mode === 'local'" label="摄像头">
-          <el-select v-model="deviceId" placeholder="默认" style="width: 180px" :disabled="liveRunning">
-            <el-option v-for="d in devices" :key="d.deviceId" :label="d.label || `摄像头 ${d.idx}`" :value="d.deviceId" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="mode === 'network'" label="网络摄像头">
-          <el-select v-model="cameraId" placeholder="选择" filterable style="width: 200px" :disabled="liveRunning" :loading="camerasLoading">
-            <el-option v-for="c in managedCameras" :key="c.id" :label="cameraLabel(c)" :value="c.id" />
-          </el-select>
-          <el-button link type="primary" :disabled="liveRunning" @click="loadManagedCameras">刷新</el-button>
-        </el-form-item>
-        <el-form-item v-if="mode === 'image'" class="alert-action-item">
-          <div class="alert-action-row">
-            <el-button type="primary" :icon="VideoPlay" :loading="imageRunning" :disabled="!canRunImage" @click="runImage">开始识别</el-button>
-            <el-button :icon="Refresh" @click="clearImage" style="margin-left: 8px">清空</el-button>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="mode === 'file'" class="alert-action-item">
-          <div class="alert-action-row">
-            <el-button type="primary" :icon="VideoPlay" :loading="fileRunning" :disabled="!canRunFile" @click="runVideo">开始追踪</el-button>
-            <el-checkbox v-model="alertEnabled" :disabled="fileRunning" style="margin-left: 12px">启用告警</el-checkbox>
-            <el-button :icon="Refresh" @click="clearFile" style="margin-left: 8px">清空</el-button>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="mode === 'local' || mode === 'network'" class="alert-action-item">
-          <div class="alert-action-row">
-            <el-button v-if="!liveRunning" type="primary" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
-            <el-button v-else type="danger" :icon="SwitchButton" @click="liveStop">停止</el-button>
-            <el-checkbox v-model="alertEnabled" :disabled="liveRunning" style="margin-left: 12px">启用告警</el-checkbox>
-            <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
-            <el-button v-if="recordCount" link type="primary" :icon="Download" @click="exportCsv">导出 CSV</el-button>
-          </div>
-        </el-form-item>
-      </el-form>
-      <el-alert
-        v-if="!detectModels.length"
-        type="warning"
-        :closable="false"
-        title="请先到「模型管理」拉取 YOLO 车辆检测模型（如 YOLO26）。"
-      />
-      <el-alert
-        v-else-if="enableOcr && (!detModels.length || !recModels.length)"
-        type="warning"
-        :closable="false"
-        title="号牌 OCR 需 RapidOCR 检测 + 识别模型；未配置时将跳过 OCR。"
-      />
-      <el-alert
-        v-else
-        type="info"
-        :closable="false"
-        class="flow-tip"
-        title="车牌检测可选：YOLOv11n/s（推荐）、YOLOv8（Koushim）、YOLOv5n/m（keremberke 兼容）。OCR 推荐 PP-OCRv6 small det+rec。"
-      />
-    </el-card>
+  <div class="vehicle-root">
+    <el-tabs v-model="activeTab" type="border-card" class="vehicle-tabs">
+      <!-- ── 任务配置 ── -->
+      <el-tab-pane label="任务配置" name="config">
+        <el-card shadow="never" class="cfg-card">
+          <el-form :inline="true" class="cfg-form">
+            <el-form-item label="模式">
+              <el-select
+                v-model="mode"
+                placeholder="选择输入源"
+                style="width: 160px"
+                :disabled="busy"
+                @change="onModeChange"
+              >
+                <el-option label="图片识别" value="image" />
+                <el-option label="视频文件" value="file" />
+                <el-option label="本地摄像头" value="local" />
+                <el-option label="网络摄像头" value="network" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="车辆检测">
+              <el-select v-model="detectId" placeholder="YOLO 车辆检测" style="width: 220px" filterable :disabled="busy">
+                <el-option
+                  v-for="m in detectModels"
+                  :key="m.id"
+                  :label="modelOptionLabel(m, 'detect')"
+                  :value="m.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="车牌检测">
+              <el-select v-model="plateId" placeholder="可选（推荐 YOLO26 四点/bbox）" clearable style="width: 240px" filterable :disabled="busy">
+                <el-option
+                  v-for="m in plateModels"
+                  :key="m.id"
+                  :label="modelOptionLabel(m, 'plate')"
+                  :value="m.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="OCR 检测">
+              <el-select v-model="detId" placeholder="RapidOCR det" clearable style="width: 180px" filterable :disabled="busy">
+                <el-option
+                  v-for="m in detModels"
+                  :key="m.id"
+                  :label="modelOptionLabel(m, 'ocrDet')"
+                  :value="m.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="OCR 识别">
+              <el-select v-model="recId" placeholder="RapidOCR rec" clearable style="width: 180px" filterable :disabled="busy">
+                <el-option
+                  v-for="m in recModels"
+                  :key="m.id"
+                  :label="modelOptionLabel(m, 'ocrRec')"
+                  :value="m.id"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="置信度">
+              <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" style="width: 120px" :disabled="busy" />
+            </el-form-item>
+            <el-form-item label="分辨率">
+              <el-select v-model="imgsz" style="width: 100px" :disabled="busy">
+                <el-option :value="640" label="640" />
+                <el-option :value="480" label="480" />
+                <el-option :value="320" label="320" />
+              </el-select>
+            </el-form-item>
+            <el-form-item>
+              <el-checkbox v-model="enableOcr" :disabled="busy">号牌 OCR</el-checkbox>
+              <el-checkbox v-if="mode !== 'image'" v-model="enableSpeed" :disabled="busy" style="margin-left: 8px">测速</el-checkbox>
+              <el-checkbox v-model="vehicleOnly" :disabled="busy" style="margin-left: 8px">仅车辆类</el-checkbox>
+            </el-form-item>
+            <el-form-item v-if="enableSpeed && mode !== 'image'" label="米/像素">
+              <el-input-number v-model="metersPerPixel" :min="0" :step="0.001" :precision="4" style="width: 130px" :disabled="busy" />
+            </el-form-item>
+            <el-form-item v-if="mode === 'image'">
+              <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPickImage" accept="image/*">
+                <el-button :icon="UploadFilled">选择图片</el-button>
+              </el-upload>
+            </el-form-item>
+            <el-form-item v-if="mode === 'file'">
+              <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick" accept="video/*">
+                <el-button :icon="UploadFilled">选择视频</el-button>
+              </el-upload>
+            </el-form-item>
+            <el-form-item v-if="mode === 'local'" label="摄像头">
+              <el-select v-model="deviceId" placeholder="默认" style="width: 180px" :disabled="liveRunning">
+                <el-option v-for="d in devices" :key="d.deviceId" :label="d.label || `摄像头 ${d.idx}`" :value="d.deviceId" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="mode === 'network'" label="网络摄像头">
+              <el-select v-model="cameraId" placeholder="选择" filterable style="width: 200px" :disabled="liveRunning" :loading="camerasLoading">
+                <el-option v-for="c in managedCameras" :key="c.id" :label="cameraLabel(c)" :value="c.id" />
+              </el-select>
+              <el-button link type="primary" :disabled="liveRunning" @click="loadManagedCameras">刷新</el-button>
+            </el-form-item>
+            <el-form-item v-if="mode === 'image'" class="alert-action-item">
+              <div class="alert-action-row">
+                <el-button type="primary" :icon="VideoPlay" :loading="imageRunning" :disabled="!canRunImage" @click="runImage">开始识别</el-button>
+                <el-button :icon="Refresh" style="margin-left: 8px" @click="clearImage">清空</el-button>
+                <el-button v-if="hasResults" link type="primary" @click="activeTab = 'results'">查看结果</el-button>
+              </div>
+            </el-form-item>
+            <el-form-item v-if="mode === 'file'" class="alert-action-item">
+              <div class="alert-action-row">
+                <el-button type="primary" :icon="VideoPlay" :loading="fileRunning" :disabled="!canRunFile" @click="runVideo">开始追踪</el-button>
+                <el-checkbox v-model="alertEnabled" :disabled="fileRunning" style="margin-left: 12px">启用告警</el-checkbox>
+                <el-button :icon="Refresh" style="margin-left: 8px" @click="clearFile">清空</el-button>
+                <el-button v-if="hasResults" link type="primary" @click="activeTab = 'results'">查看结果</el-button>
+              </div>
+            </el-form-item>
+            <el-form-item v-if="mode === 'local' || mode === 'network'" class="alert-action-item">
+              <div class="alert-action-row">
+                <el-button v-if="!liveRunning" type="primary" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
+                <el-button v-else type="danger" :icon="SwitchButton" @click="liveStop">停止</el-button>
+                <el-checkbox v-model="alertEnabled" :disabled="liveRunning" style="margin-left: 12px">启用告警</el-checkbox>
+                <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
+                <el-button v-if="recordCount" link type="primary" :icon="Download" @click="exportCsv">导出 CSV</el-button>
+                <el-button link type="primary" @click="activeTab = 'results'">实时画面</el-button>
+              </div>
+            </el-form-item>
+          </el-form>
+          <el-alert
+            v-if="!detectModels.length"
+            type="warning"
+            :closable="false"
+            title="请先到「模型管理」拉取 YOLO 车辆检测模型（如 YOLO26）。"
+          />
+          <el-alert
+            v-else-if="enableOcr && (!detModels.length || !recModels.length)"
+            type="warning"
+            :closable="false"
+            title="号牌 OCR 需 RapidOCR 检测 + 识别模型；未配置时将跳过 OCR。"
+          />
+          <el-alert
+            v-else
+            type="info"
+            :closable="false"
+            class="flow-tip"
+            title="车牌推荐：YOLO26s 四点 pose（透视）→ YOLO26n bbox → OBB；OCR 推荐 PP-OCRv6 small det+rec。"
+          />
+        </el-card>
 
-    <!-- 图片识别模式 -->
-    <template v-if="mode === 'image'">
-      <el-card v-if="imagePreviewUrl" shadow="never" class="cfg-card">
-        <div class="section-title">原图预览</div>
-        <img :src="imagePreviewUrl" class="preview-img" alt="车辆原图" />
-      </el-card>
-      <el-card shadow="never">
-        <el-empty v-if="!imageRunning && !imageResultSrc" description="选择车辆图片后开始识别（车辆框 + 车牌 OCR）" />
-        <div v-else-if="imageRunning" class="progress-box">
-          <div class="progress-title">识别中…</div>
-          <el-progress :percentage="100" :indeterminate="true" :stroke-width="18" />
-        </div>
-        <div v-else>
-          <div class="section-title">
-            识别结果
-            <el-button link type="primary" :icon="Download" @click="downloadImageResult">下载标注图</el-button>
-          </div>
-          <img :src="imageResultSrc" class="preview-img result-img" alt="识别结果" />
-          <div class="stats">
-            <el-tag type="success" effect="dark">车辆 {{ imageDets.length }}</el-tag>
-            <el-tag type="warning" effect="dark">号牌 {{ imagePlateCount }}</el-tag>
-          </div>
-          <el-table v-if="imageDets.length" :data="imageDets" size="small" border max-height="280" class="rec-table">
-            <el-table-column prop="trackId" label="ID" width="70" />
-            <el-table-column prop="className" label="车型" width="100" />
-            <el-table-column prop="confidence" label="置信度" width="90">
-              <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
-            </el-table-column>
-            <el-table-column prop="plate" label="号牌" min-width="120" />
-            <el-table-column prop="plateScore" label="OCR 分" width="90">
-              <template #default="{ row }">{{ row.plateScore != null ? Number(row.plateScore).toFixed(2) : '—' }}</template>
-            </el-table-column>
-            <el-table-column prop="plateSource" label="车牌来源" width="100" />
-          </el-table>
-        </div>
-      </el-card>
-    </template>
+        <!-- 配置页：输入源预览 / 画线 -->
+        <template v-if="mode === 'image'">
+          <el-card v-if="imagePreviewUrl" shadow="never" class="cfg-card">
+            <div class="section-title">原图预览</div>
+            <img :src="imagePreviewUrl" class="preview-img" alt="车辆原图" />
+          </el-card>
+          <el-empty v-else description="选择图片后可在此预览，识别结果在「追踪结果」页查看" :image-size="80" />
+        </template>
 
-    <!-- 视频文件模式 -->
-    <template v-else-if="mode === 'file'">
-      <el-card v-if="previewUrl" shadow="never" class="cfg-card">
-        <div class="section-title">原视频预览</div>
-        <video :src="previewUrl" controls class="player" />
-      </el-card>
-      <el-card v-if="file" shadow="never" class="cfg-card">
-        <div class="line-tip">
-          首帧画计数线（可选）：点两点。
-          <el-button link type="primary" @click="clearFileLine">清除线</el-button>
-        </div>
-        <canvas ref="frameCanvas" class="frame-canvas" @click="onFileCanvasClick" />
-      </el-card>
-      <el-card shadow="never">
-        <div v-if="fileRunning" class="progress-box">
-          <div class="progress-title">追踪中… {{ processed }}/{{ total || '?' }} 帧</div>
-          <el-progress :percentage="percent" :stroke-width="18" :text-inside="true" />
-        </div>
-        <el-empty v-else-if="!resultUrl" description="选择模型与视频后开始追踪" />
-        <div v-else>
-          <div class="section-title">
+        <template v-else-if="mode === 'file'">
+          <el-row :gutter="16">
+            <el-col v-if="previewUrl" :xs="24" :lg="12">
+              <el-card shadow="never" class="cfg-card">
+                <div class="section-title">原视频预览</div>
+                <video :src="previewUrl" controls class="player" />
+              </el-card>
+            </el-col>
+            <el-col v-if="file" :xs="24" :lg="previewUrl ? 12 : 24">
+              <el-card shadow="never" class="cfg-card">
+                <div class="line-tip">
+                  首帧画计数线（可选）：点两点。
+                  <el-button link type="primary" @click="clearFileLine">清除线</el-button>
+                </div>
+                <canvas ref="frameCanvas" class="frame-canvas" @click="onFileCanvasClick" />
+              </el-card>
+            </el-col>
+          </el-row>
+          <el-empty v-if="!file" description="选择视频后可预览并画越线，追踪结果在「追踪结果」页查看" :image-size="80" />
+        </template>
+
+        <template v-else>
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            title="实时模式：在本页完成模型与摄像头配置后点「开始」，画面与过车记录在「追踪结果」页查看。"
+          />
+        </template>
+      </el-tab-pane>
+
+      <!-- ── 追踪结果 ── -->
+      <el-tab-pane name="results">
+        <template #label>
+          <span class="tab-label">
             追踪结果
-            <el-button link type="primary" :icon="Download" @click="downloadVideo">下载视频</el-button>
-            <el-button v-if="fileRecords.length" link type="primary" @click="downloadFileCsv">下载过车 CSV</el-button>
-          </div>
-          <video :src="resultUrl" controls class="player" />
-          <div class="stats">
-            <el-tag type="success" effect="dark">唯一车辆 {{ stats.uniqueObjects ?? '-' }}</el-tag>
-            <el-tag v-if="stats.crossing" type="warning" effect="dark">
-              越线 进{{ stats.crossing.in }} 出{{ stats.crossing.out }}
-            </el-tag>
-            <el-tag v-if="stats.recordCount" type="info" effect="dark">过车记录 {{ stats.recordCount }}</el-tag>
-            <el-tag v-if="stats.congestionSummary" type="danger" effect="dark">
-              拥堵帧占比 {{ Math.round((stats.congestionSummary.busyRatio || 0) * 100) }}%
-            </el-tag>
-          </div>
-          <el-table v-if="fileRecords.length" :data="fileRecords" size="small" border max-height="240" class="rec-table">
-            <el-table-column prop="trackId" label="ID" width="70" />
-            <el-table-column prop="className" label="车型" width="90" />
-            <el-table-column prop="plate" label="号牌" min-width="100" />
-            <el-table-column prop="speedKmh" label="速度 km/h" width="100" />
-            <el-table-column prop="plateScore" label="OCR 分" width="80" />
-          </el-table>
-        </div>
-      </el-card>
-    </template>
+            <el-badge v-if="resultBadge" :value="resultBadge" :max="99" class="tab-badge" />
+          </span>
+        </template>
 
-    <!-- 实时模式（本地 / 网络） -->
-    <template v-else>
-      <el-card shadow="never">
-        <div class="cam-wrap">
-          <div class="cam-stage">
-            <video v-show="mode === 'local'" ref="camVideo" class="cam-video" autoplay playsinline muted />
-            <img v-show="mode === 'network'" ref="streamImg" class="cam-video" alt="网络摄像头" />
-            <canvas ref="camCanvas" class="cam-canvas" @click="onLiveClick" />
-            <div v-if="!liveRunning" class="cam-hint">
-              {{ mode === 'network' ? '选择网络摄像头后点「开始」' : '点「开始」启用摄像头；可在画面点两点画计数线' }}
+        <!-- 图片结果 -->
+        <template v-if="mode === 'image'">
+          <el-card shadow="never">
+            <el-empty v-if="!imageRunning && !imageResultSrc" description="选择车辆图片并开始识别后，标注图与明细将显示在此" />
+            <div v-else-if="imageRunning" class="progress-box">
+              <div class="progress-title">识别中…</div>
+              <el-progress :percentage="100" :indeterminate="true" :stroke-width="18" />
             </div>
-            <div v-if="liveRunning" class="cam-hud">
-              <el-tag type="success" effect="dark">{{ camFps }} FPS</el-tag>
-              <el-tag type="warning" effect="dark">车辆 {{ liveDets.length }}</el-tag>
-              <el-tag :type="congestionTagType" effect="dark">{{ congestion.label || '—' }}</el-tag>
-              <el-tag v-if="liveLine" type="danger" effect="dark">进{{ crossing.in }} 出{{ crossing.out }}</el-tag>
-              <el-tag v-if="recordCount" type="info" effect="dark">记录 {{ recordCount }}</el-tag>
+            <div v-else>
+              <div class="section-title">
+                识别结果
+                <el-button link type="primary" :icon="Download" @click="downloadImageResult">下载标注图</el-button>
+                <el-button link type="primary" @click="activeTab = 'config'">返回配置</el-button>
+              </div>
+              <img :src="imageResultSrc" class="preview-img result-img" alt="识别结果" />
+              <div class="stats">
+                <el-tag type="success" effect="dark">车辆 {{ imageDets.length }}</el-tag>
+                <el-tag type="warning" effect="dark">号牌 {{ imagePlateCount }}</el-tag>
+              </div>
+              <el-table v-if="imageDets.length" :data="imageDets" size="small" border max-height="280" class="rec-table">
+                <el-table-column prop="trackId" label="ID" width="70" />
+                <el-table-column prop="className" label="车型" width="100" />
+                <el-table-column prop="confidence" label="置信度" width="90">
+                  <template #default="{ row }">{{ Number(row.confidence || 0).toFixed(2) }}</template>
+                </el-table-column>
+                <el-table-column prop="plate" label="号牌" min-width="120" />
+                <el-table-column prop="plateScore" label="OCR 分" width="90">
+                  <template #default="{ row }">{{ row.plateScore != null ? Number(row.plateScore).toFixed(2) : '—' }}</template>
+                </el-table-column>
+                <el-table-column prop="plateSource" label="车牌来源" width="100" />
+              </el-table>
             </div>
-          </div>
-        </div>
-        <el-table v-if="recentRecords.length" :data="recentRecords" size="small" border max-height="200" class="rec-table">
-          <el-table-column prop="trackId" label="ID" width="70" />
-          <el-table-column prop="className" label="车型" width="90" />
-          <el-table-column prop="plate" label="号牌" min-width="100" />
-          <el-table-column prop="speedKmh" label="速度" width="80" />
-        </el-table>
-      </el-card>
-    </template>
+          </el-card>
+        </template>
+
+        <!-- 视频文件结果 -->
+        <template v-else-if="mode === 'file'">
+          <el-card shadow="never">
+            <div v-if="fileRunning" class="progress-box">
+              <div class="progress-title">追踪中… {{ processed }}/{{ total || '?' }} 帧</div>
+              <el-progress :percentage="percent" :stroke-width="18" :text-inside="true" striped striped-flow />
+            </div>
+            <el-empty v-else-if="!resultUrl" description="在「任务配置」选择模型与视频并开始追踪后，结果视频将显示在此" />
+            <div v-else>
+              <div class="section-title">
+                追踪结果
+                <el-button link type="primary" :icon="Download" @click="downloadVideo">下载视频</el-button>
+                <el-button v-if="fileRecords.length" link type="primary" @click="downloadFileCsv">下载过车 CSV</el-button>
+                <el-button link type="primary" @click="activeTab = 'config'">返回配置</el-button>
+              </div>
+              <video :key="resultUrl" :src="resultUrl" controls preload="metadata" class="player" />
+              <div class="stats">
+                <el-tag type="success" effect="dark">唯一车辆 {{ stats.uniqueObjects ?? '-' }}</el-tag>
+                <el-tag v-if="stats.crossing" type="warning" effect="dark">
+                  越线 进{{ stats.crossing.in }} 出{{ stats.crossing.out }}
+                </el-tag>
+                <el-tag v-if="stats.recordCount" type="info" effect="dark">过车记录 {{ stats.recordCount }}</el-tag>
+                <el-tag v-if="stats.congestionSummary" type="danger" effect="dark">
+                  拥堵帧占比 {{ Math.round((stats.congestionSummary.busyRatio || 0) * 100) }}%
+                </el-tag>
+              </div>
+              <el-table v-if="fileRecords.length" :data="fileRecords" size="small" border max-height="240" class="rec-table">
+                <el-table-column prop="trackId" label="ID" width="70" />
+                <el-table-column prop="className" label="车型" width="90" />
+                <el-table-column prop="plate" label="号牌" min-width="100" />
+                <el-table-column prop="speedKmh" label="速度 km/h" width="100" />
+                <el-table-column prop="plateScore" label="OCR 分" width="80" />
+              </el-table>
+            </div>
+          </el-card>
+        </template>
+
+        <!-- 实时画面 -->
+        <template v-else>
+          <el-card shadow="never">
+            <div class="section-title">
+              实时画面
+              <el-button v-if="!liveRunning" type="primary" size="small" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
+              <el-button v-else type="danger" size="small" :icon="SwitchButton" @click="liveStop">停止</el-button>
+              <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
+              <el-button v-if="recordCount" link type="primary" :icon="Download" @click="exportCsv">导出 CSV</el-button>
+              <el-button link type="primary" @click="activeTab = 'config'">返回配置</el-button>
+            </div>
+            <div class="cam-wrap">
+              <div class="cam-stage">
+                <video v-show="mode === 'local'" ref="camVideo" class="cam-video" autoplay playsinline muted />
+                <img v-show="mode === 'network'" ref="streamImg" class="cam-video" alt="网络摄像头" />
+                <canvas ref="camCanvas" class="cam-canvas" @click="onLiveClick" />
+                <div v-if="!liveRunning" class="cam-hint">
+                  {{ mode === 'network' ? '选择网络摄像头后点「开始」' : '点「开始」启用摄像头；可在画面点两点画计数线' }}
+                </div>
+                <div v-if="liveRunning" class="cam-hud">
+                  <el-tag type="success" effect="dark">{{ camFps }} FPS</el-tag>
+                  <el-tag type="warning" effect="dark">车辆 {{ liveDets.length }}</el-tag>
+                  <el-tag :type="congestionTagType" effect="dark">{{ congestion.label || '—' }}</el-tag>
+                  <el-tag v-if="liveLine" type="danger" effect="dark">进{{ crossing.in }} 出{{ crossing.out }}</el-tag>
+                  <el-tag v-if="recordCount" type="info" effect="dark">记录 {{ recordCount }}</el-tag>
+                </div>
+              </div>
+            </div>
+            <el-table v-if="recentRecords.length" :data="recentRecords" size="small" border max-height="200" class="rec-table">
+              <el-table-column prop="trackId" label="ID" width="70" />
+              <el-table-column prop="className" label="车型" width="90" />
+              <el-table-column prop="plate" label="号牌" min-width="100" />
+              <el-table-column prop="speedKmh" label="速度" width="80" />
+            </el-table>
+          </el-card>
+        </template>
+      </el-tab-pane>
+    </el-tabs>
   </div>
 </template>
 
@@ -266,6 +318,7 @@ import { cameraApi } from '../../../api/camera'
 
 const ALERT_SOURCE_KEY = 'vehicle-camera'
 
+const activeTab = ref('config')
 const allModels = ref([])
 const detectId = ref(null)
 const plateId = ref(null)
@@ -289,6 +342,10 @@ const DETECT_PREF = [
   /yolov8n/i,
 ]
 const PLATE_PREF = [
+  /yolo26s-plate-pose/i,
+  /yolo26n-plate/i,
+  /yolo26n-obb/i,
+  /yolo26n-p2-plate/i,
   /yolov11-license-plate-n/i,
   /yolov11-license-plate-s/i,
   /yolov11-license-plate|license-plate-finetune-v1/i,
@@ -318,8 +375,12 @@ const pickPreferred = (list, prefs) => {
 const modelOptionLabel = (m, kind) => {
   const text = `${m.modelKey || ''} ${m.modelName || ''}`
   let tag = ''
-  if (kind === 'plate' && /yolov11-license-plate-s/i.test(text)) tag = ' · 推荐·精度'
-  else if (kind === 'plate' && /yolov11-license-plate-n/i.test(text)) tag = ' · 推荐·CPU'
+  if (kind === 'plate' && /yolo26s-plate-pose/i.test(text)) tag = ' · 推荐·透视四点'
+  else if (kind === 'plate' && /yolo26n-plate/i.test(text)) tag = ' · 推荐·bbox'
+  else if (kind === 'plate' && /yolo26n-obb/i.test(text)) tag = ' · OBB 旋转框'
+  else if (kind === 'plate' && /yolo26n-p2-plate/i.test(text)) tag = ' · P2 自训脚手架'
+  else if (kind === 'plate' && /yolov11-license-plate-s/i.test(text)) tag = ' · 兼容·精度'
+  else if (kind === 'plate' && /yolov11-license-plate-n/i.test(text)) tag = ' · 兼容·CPU'
   else if (kind === 'plate' && /yolov8-license-plate|Koushim/i.test(text)) tag = ' · YOLOv8'
   else if (kind === 'plate' && /yolov5m-license-plate/i.test(text)) tag = ' · 兼容·YOLOv5m'
   else if (kind === 'plate' && /yolov5n-license-plate|keremberke-yolov5n/i.test(text)) tag = ' · 兼容·YOLOv5n'
@@ -346,10 +407,10 @@ const plateModels = computed(() => {
   const list = allModels.value.filter(
     (m) =>
       m.library === 'ultralytics' &&
-      m.task === 'object-detection' &&
+      ['object-detection', 'obb', 'pose-estimation'].includes(m.task) &&
       m.filePath &&
       m.status === '0' &&
-      /车牌|plate|license/i.test(`${m.modelName} ${m.modelKey}`),
+      (/车牌|plate|license/i.test(`${m.modelName} ${m.modelKey}`) || /yolo26n-obb/i.test(`${m.modelKey}`)),
   )
   return sortByPref(list, PLATE_PREF)
 })
@@ -418,6 +479,16 @@ let loopTimer = null
 let streamReady = false
 
 const busy = computed(() => liveRunning.value || fileRunning.value || imageRunning.value)
+const hasResults = computed(() => {
+  if (mode.value === 'image') return !!(imageResultSrc.value || imageRunning.value)
+  if (mode.value === 'file') return !!(resultUrl.value || fileRunning.value)
+  return !!(liveRunning.value || recentRecords.value.length)
+})
+const resultBadge = computed(() => {
+  if (mode.value === 'image') return imageDets.value.length || (imageRunning.value ? '…' : 0)
+  if (mode.value === 'file') return fileRecords.value.length || (fileRunning.value ? '…' : 0)
+  return recordCount.value || (liveRunning.value ? '…' : 0)
+})
 const canRunFile = computed(() => detectId.value && file.value && !fileRunning.value)
 const canRunImage = computed(() => detectId.value && imageFile.value && !imageRunning.value)
 const canStartLive = computed(() => {
@@ -509,6 +580,7 @@ const enumCams = async () => {
 
 const onModeChange = () => {
   if (liveRunning.value) liveStop()
+  activeTab.value = 'config'
 }
 
 const onPickImage = (uploadFile) => {
@@ -540,6 +612,7 @@ const clearImage = () => {
 const runImage = async () => {
   if (!canRunImage.value) return
   imageRunning.value = true
+  activeTab.value = 'results'
   imageResultSrc.value = ''
   imageDets.value = []
   imagePlateCount.value = 0
@@ -665,6 +738,7 @@ const clearFile = () => {
 
 const runVideo = async () => {
   fileRunning.value = true
+  activeTab.value = 'results'
   processed.value = 0
   total.value = 0
   clearFileOutput()
@@ -693,8 +767,30 @@ const pollVideo = (jobId) => new Promise((resolve) => {
         pollTimer = null
         stats.value = d.stats || {}
         fileRecords.value = d.stats?.records || []
-        const blob = await modelApi.outputVideo(d.stats.output)
-        blobUrl = URL.createObjectURL(blob)
+        const outName = d.stats?.output
+        if (!outName) {
+          ElMessage.warning('追踪完成，但未返回输出视频名')
+          fileRunning.value = false
+          resolve()
+          return
+        }
+        const raw = await vehicleApi.outputVideo(outName)
+        const blob = raw instanceof Blob ? raw : raw?.data
+        if (!(blob instanceof Blob) || blob.size < 64) {
+          throw new Error('输出视频为空或无效')
+        }
+        // 后端错误可能以 JSON blob 返回
+        if ((blob.type || '').includes('json')) {
+          const errText = await blob.text()
+          let msg = '拉取输出视频失败'
+          try { msg = JSON.parse(errText).message || msg } catch (_) { /* ignore */ }
+          throw new Error(msg)
+        }
+        const playable = (blob.type || '').startsWith('video/')
+          ? blob
+          : new Blob([blob], { type: 'video/mp4' })
+        if (blobUrl) URL.revokeObjectURL(blobUrl)
+        blobUrl = URL.createObjectURL(playable)
         resultUrl.value = blobUrl
         fileRunning.value = false
         ElMessage.success(`追踪完成，过车记录 ${fileRecords.value.length} 条`)
@@ -796,6 +892,7 @@ const liveStart = async () => {
   recordCount.value = 0
   congestion.value = { label: '—', level: 'smooth' }
   camFirst = true
+  activeTab.value = 'results'
 
   if (mode.value === 'network') {
     if (!cameraId.value) {
@@ -835,6 +932,13 @@ const liveStart = async () => {
     camStream = await navigator.mediaDevices.getUserMedia(constraints)
   } catch (_) {
     ElMessage.error('无法访问摄像头')
+    return
+  }
+  await nextTick()
+  if (!camVideo.value) {
+    camStream.getTracks().forEach((t) => t.stop())
+    camStream = null
+    ElMessage.error('实时画面未就绪，请重试')
     return
   }
   camVideo.value.srcObject = camStream
@@ -1085,11 +1189,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.vehicle-root { min-height: 360px; }
+.vehicle-tabs :deep(.el-tabs__content) { padding: 16px; }
+.tab-label { display: inline-flex; align-items: center; gap: 6px; }
+.tab-badge { margin-left: 2px; }
+.tab-badge :deep(.el-badge__content) { transform: translateY(-2px); }
 .cfg-card { margin-bottom: 12px; }
 .cfg-form { row-gap: 4px; }
 .flow-tip { margin-top: 8px; }
 .alert-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
-.section-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; }
+.section-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .line-tip { font-size: 13px; color: #5a6b87; margin-bottom: 8px; }
 .frame-canvas { max-width: 100%; border: 1px solid #e4e7ed; border-radius: 6px; cursor: crosshair; }
 .progress-box { padding: 22px 4px; }

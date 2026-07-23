@@ -118,23 +118,16 @@ def _detect_plate_boxes(plate_model_path: str, img_bgr, conf: float = 0.25) -> l
 
 
 def _expand_bbox(bbox, w: int, h: int, *, pad_ratio: float = 0.25, pad_px: int = 6, min_size: tuple[int, int] = (50, 18)):
-    """
-    将 bbox 做“足够大的 OCR 裁剪”：
-    - 车牌检测出来的框有时会很小（比如 10~20px 高），直接送 OCR 容易为空；
-    - 这里用相对+绝对 padding 扩张，并确保最小宽高。
-    """
+    """扩张 bbox，保证 OCR 最小像素。"""
     x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
     bw = max(1.0, x2 - x1)
     bh = max(1.0, y2 - y1)
-
     extra_w = bw * pad_ratio
     extra_h = bh * pad_ratio
     x1 -= extra_w
     x2 += extra_w
     y1 -= extra_h
     y2 += extra_h
-
-    # 最小尺寸保障（OCR 至少要有足够像素）
     min_w, min_h = min_size
     if (x2 - x1) < min_w:
         grow = (min_w - (x2 - x1)) / 2.0
@@ -144,7 +137,6 @@ def _expand_bbox(bbox, w: int, h: int, *, pad_ratio: float = 0.25, pad_px: int =
         grow = (min_h - (y2 - y1)) / 2.0
         y1 -= grow
         y2 += grow
-
     x1 = max(0, int(round(x1 - pad_px)))
     y1 = max(0, int(round(y1 - pad_px)))
     x2 = min(w, int(round(x2 + pad_px)))
@@ -154,40 +146,148 @@ def _expand_bbox(bbox, w: int, h: int, *, pad_ratio: float = 0.25, pad_px: int =
     return [x1, y1, x2, y2]
 
 
+def _order_quad_points(pts: np.ndarray) -> np.ndarray:
+    """四点排序为 TL, TR, BR, BL。"""
+    pts = np.asarray(pts, dtype=np.float32).reshape(4, 2)
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).reshape(-1)
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
+    return np.float32([tl, tr, br, bl])
+
+
+def _bbox_to_quad(bbox) -> np.ndarray:
+    x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+    return np.float32([[x1, y1], [x2, y1], [x2, y2], [x1, y2]])
+
+
+def _warp_plate(img_bgr, quad, out_w: int = 240, out_h: int = 80) -> np.ndarray | None:
+    try:
+        src = _order_quad_points(quad)
+        dst = np.float32([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]])
+        m = cv2.getPerspectiveTransform(src, dst)
+        return cv2.warpPerspective(img_bgr, m, (out_w, out_h))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _locate_plates_in_roi(plate_model_path: str, roi_bgr, conf: float = 0.25) -> list[dict]:
+    """在车辆 ROI 内定位车牌，返回 [{bbox, quad, confidence, source}]。
+
+    优先 pose 4 角点 → OBB → detect bbox。
+    """
+    from inference import _get_model, _yolo_predict_kwargs
+
+    out: list[dict] = []
+    try:
+        model = _get_model(plate_model_path)
+        r = model.predict(roi_bgr, **_yolo_predict_kwargs(conf=conf))[0]
+    except Exception:  # noqa: BLE001
+        return out
+
+    # Pose：keypoints 4 点
+    if getattr(r, "keypoints", None) is not None and r.keypoints is not None and r.keypoints.xy is not None:
+        try:
+            kps = r.keypoints.xy.cpu().numpy()
+            confs = r.keypoints.conf.cpu().numpy() if r.keypoints.conf is not None else None
+            boxes = r.boxes.xyxy.cpu().numpy() if r.boxes is not None else None
+            box_confs = r.boxes.conf.cpu().numpy() if r.boxes is not None else None
+            for i, kp in enumerate(kps):
+                if kp is None or len(kp) < 4:
+                    continue
+                quad = np.asarray(kp[:4], dtype=np.float32)
+                if confs is not None and float(np.mean(confs[i][:4])) < 0.15:
+                    continue
+                xs, ys = quad[:, 0], quad[:, 1]
+                bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+                score = float(box_confs[i]) if box_confs is not None and i < len(box_confs) else 0.5
+                if boxes is not None and i < len(boxes):
+                    bbox = [float(v) for v in boxes[i][:4]]
+                out.append({"bbox": bbox, "quad": quad, "confidence": score, "source": "pose"})
+        except Exception:  # noqa: BLE001
+            pass
+
+    # OBB
+    if not out and getattr(r, "obb", None) is not None and r.obb is not None:
+        try:
+            xyxyxyxy = r.obb.xyxyxyxy.cpu().numpy()
+            confs = r.obb.conf.cpu().numpy() if r.obb.conf is not None else None
+            for i, poly in enumerate(xyxyxyxy):
+                quad = np.asarray(poly, dtype=np.float32).reshape(4, 2)
+                xs, ys = quad[:, 0], quad[:, 1]
+                bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+                score = float(confs[i]) if confs is not None else 0.5
+                out.append({"bbox": bbox, "quad": quad, "confidence": score, "source": "obb"})
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Detect boxes
+    if not out and r.boxes is not None:
+        try:
+            for b in r.boxes:
+                xyxy = [float(v) for v in b.xyxy[0].tolist()]
+                score = float(b.conf[0])
+                out.append({
+                    "bbox": xyxy,
+                    "quad": _bbox_to_quad(xyxy),
+                    "confidence": score,
+                    "source": "detect",
+                })
+        except Exception:  # noqa: BLE001
+            pass
+
+    out.sort(key=lambda d: float(d.get("confidence") or 0), reverse=True)
+    return out[:3]
+
+
 def _plate_candidates(vehicle_bbox, img_bgr, plate_model_path: str | None, plate_conf: float):
+    """生成车牌候选：yield (bbox_abs, source, quad_abs|None, warped_bgr|None)。"""
     h, w = img_bgr.shape[:2]
     if plate_model_path:
-        # 车身 bbox 可能偏小/偏紧：这里把车身 ROI 稍微放大一点，避免把车牌裁掉
         crop = _clip_bbox(vehicle_bbox, w, h, pad=16)
         if crop:
             x1, y1, x2, y2 = crop
             roi = img_bgr[y1:y2, x1:x2]
-            plates = _detect_plate_boxes(plate_model_path, roi, conf=plate_conf)
-            # 取前几个候选，交给 OCR 再做“最终选择”
-            plates = sorted(plates, key=lambda d: float(d.get("confidence") or 0), reverse=True)[:3]
+            plates = _locate_plates_in_roi(plate_model_path, roi, conf=plate_conf)
             for p in plates:
                 pb = p.get("bbox") or []
-                if len(pb) >= 4:
-                    bbox = [pb[0] + x1, pb[1] + y1, pb[2] + x1, pb[3] + y1]
-                    if not _plate_in_vehicle_zone(bbox, vehicle_bbox):
-                        continue
-                    exp = _expand_bbox(bbox, w, h, pad_ratio=0.12, pad_px=4, min_size=(72, 24))
-                    if exp:
-                        yield exp, "model"
+                if len(pb) < 4:
+                    continue
+                bbox = [pb[0] + x1, pb[1] + y1, pb[2] + x1, pb[3] + y1]
+                if not _plate_in_vehicle_zone(bbox, vehicle_bbox):
+                    continue
+                quad = p.get("quad")
+                quad_abs = None
+                warped = None
+                if quad is not None:
+                    q = np.asarray(quad, dtype=np.float32).reshape(4, 2)
+                    q[:, 0] += x1
+                    q[:, 1] += y1
+                    quad_abs = q
+                    warped = _warp_plate(img_bgr, q)
+                exp = _expand_bbox(bbox, w, h, pad_ratio=0.08, pad_px=3, min_size=(72, 24))
+                if exp:
+                    if warped is None:
+                        warped = _warp_plate(img_bgr, _bbox_to_quad(exp))
+                        if quad_abs is None:
+                            quad_abs = _bbox_to_quad(exp)
+                    yield exp, p.get("source") or "model", quad_abs, warped
 
-    # 模型未检出时再用启发式候选
     if plate_model_path:
         return
     roi_box = _plate_roi_heuristic(vehicle_bbox, h, w)
     if roi_box:
         exp = _expand_bbox(list(roi_box), w, h, pad_ratio=0.35, pad_px=5, min_size=(60, 20))
         if exp:
-            yield exp, "heuristic"
+            quad = _bbox_to_quad(exp)
+            yield exp, "heuristic", quad, _warp_plate(img_bgr, quad)
 
 
 def _pick_plate_bbox(vehicle_bbox, img_bgr, plate_model_path: str | None, plate_conf: float):
     """兼容旧接口：返回“首个候选框”。主流程会改用多候选 OCR。"""
-    for pb, src in _plate_candidates(vehicle_bbox, img_bgr, plate_model_path, plate_conf):
+    for pb, src, _quad, _warp in _plate_candidates(vehicle_bbox, img_bgr, plate_model_path, plate_conf):
         return pb, src
     return None, None
 
@@ -282,90 +382,51 @@ def _merge_ocr_lines(lines: list[dict]) -> tuple[str, float]:
     return text, score
 
 
-def _ocr_plate(ocr_fn: Callable[[bytes], dict] | None, img_bgr, bbox) -> dict:
-    if ocr_fn is None or bbox is None:
-        return {"text": "", "score": 0.0, "lines": []}
-    h, w = img_bgr.shape[:2]
-    clipped = _clip_bbox(bbox, w, h, pad=4)
-    if not clipped:
-        return {"text": "", "score": 0.0, "lines": []}
-    x1, y1, x2, y2 = clipped
-    crop = img_bgr[y1:y2, x1:x2]
-    if crop.size == 0:
+def _ocr_plate(ocr_fn: Callable[[bytes], dict] | None, img_bgr, bbox, warped: np.ndarray | None = None) -> dict:
+    """对透视矫正牌面或 bbox 裁剪做 OCR（优先 warped + rec-only）。"""
+    if ocr_fn is None:
         return {"text": "", "score": 0.0, "lines": []}
 
-    # 车牌往往很小：强制放大后再喂 OCR，提高命中率
-    ch = crop.shape[0]
-    cw = crop.shape[1]
-    min_h = 95
-    min_w = 210
-    scale_h = max(1.0, min_h / max(1, ch))
-    scale_w = max(1.0, min_w / max(1, cw))
-    scale = max(scale_h, scale_w)
-    if scale > 1.01:
-        crop = cv2.resize(crop, (int(round(cw * scale)), int(round(ch * scale))), interpolation=cv2.INTER_CUBIC)
+    crops = []
+    if warped is not None and getattr(warped, "size", 0):
+        crops.append(warped)
+    if bbox is not None:
+        h, w = img_bgr.shape[:2]
+        clipped = _clip_bbox(bbox, w, h, pad=4)
+        if clipped:
+            x1, y1, x2, y2 = clipped
+            crop = img_bgr[y1:y2, x1:x2]
+            if crop.size:
+                ch, cw = crop.shape[:2]
+                scale = max(1.0, 95 / max(1, ch), 210 / max(1, cw))
+                if scale > 1.01:
+                    crop = cv2.resize(crop, (int(round(cw * scale)), int(round(ch * scale))), interpolation=cv2.INTER_CUBIC)
+                crops.append(cv2.convertScaleAbs(crop, alpha=1.25, beta=0))
 
-    # 去掉上下边框的一小部分区域，减少蓝底/反光边缘对 OCR 的干扰
-    hc, wc = crop.shape[:2]
-    m = int(max(6, hc * 0.08))
-    if hc > 80 and m < hc // 3:
-        crop = crop[m:hc - m, :, :]
-        hc, wc = crop.shape[:2]
-
-    # v1：对比度增强；v2：自适应阈值；v3：HSV 亮字符掩膜；v4：去蓝底白底黑字
-    v1 = cv2.convertScaleAbs(crop, alpha=1.35, beta=0)
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
-    th = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,
-        31, 5,
-    )
-    if th.mean() < 120:
-        th = 255 - th
-    v2 = cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
-
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-    lower = (0, 0, 90)
-    upper = (180, 90, 255)
-    mask = cv2.inRange(hsv, lower, upper)
-    kernel = np.ones((3, 3), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    masked = cv2.bitwise_and(crop, crop, mask=mask)
-    g = cv2.cvtColor(masked, cv2.COLOR_BGR2GRAY)
-    g = cv2.convertScaleAbs(g, alpha=1.6, beta=0)
-    v3 = cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
-
-    blue_mask = cv2.inRange(hsv, (95, 70, 40), (135, 255, 255))
-    fg = cv2.bitwise_and(crop, crop, mask=cv2.bitwise_not(blue_mask))
-    fg_gray = cv2.cvtColor(fg, cv2.COLOR_BGR2GRAY)
-    fg_gray = cv2.convertScaleAbs(fg_gray, alpha=2.0, beta=10)
-    _, fg_bin = cv2.threshold(fg_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    if fg_bin.mean() < 127:
-        fg_bin = 255 - fg_bin
-    v4 = cv2.cvtColor(fg_bin, cv2.COLOR_GRAY2BGR)
-
-    variants = [v1, v2, v3, v4]
     best_out = {"text": "", "score": 0.0, "lines": [], "rank": -1.0}
-
-    for img_variant in variants:
-        ok, buf = cv2.imencode(".jpg", img_variant)
+    for crop in crops:
+        ok, buf = cv2.imencode(".jpg", crop)
         if not ok:
             continue
         try:
-            res = ocr_fn(buf.tobytes()) or {}
+            try:
+                res = ocr_fn(buf.tobytes(), rec_only=True) or {}
+            except TypeError:
+                res = ocr_fn(buf.tobytes()) or {}
             lines = res.get("lines") or []
-            if not lines:
-                continue
-            text, score = _merge_ocr_lines(lines)
-            text = _fix_plate_ocr_chars(_normalize_plate_text(text))
+            text = _fix_plate_ocr_chars(_normalize_plate_text(res.get("text") or ""))
+            score = 0.0
+            if lines:
+                text2, score = _merge_ocr_lines(lines)
+                text = _fix_plate_ocr_chars(_normalize_plate_text(text2 or text))
+            elif text:
+                score = float(res.get("score") or 0.4)
             fmt = _plate_format_score(text)
             rank = fmt * 0.65 + min(1.0, score) * 0.35
             if text and rank >= float(best_out.get("rank") or -1):
                 best_out = {"text": text, "score": score, "lines": lines, "rank": rank}
         except Exception:  # noqa: BLE001
             continue
-
     return {k: best_out[k] for k in ("text", "score", "lines")}
 
 
@@ -460,8 +521,8 @@ def enrich_vehicle_frame(
             best_score = 0.0
             best_pb = None
             best_src = None
-            for pb, psrc in _plate_candidates(bbox, img_bgr, plate_model_path, plate_conf):
-                ocr_res = _ocr_plate(ocr_fn, img_bgr, pb)
+            for pb, psrc, _quad, warped in _plate_candidates(bbox, img_bgr, plate_model_path, plate_conf):
+                ocr_res = _ocr_plate(ocr_fn, img_bgr, pb, warped=warped)
                 text = (ocr_res.get("text") or "").strip()
                 score = float(ocr_res.get("score") or 0.0)
                 rank = _plate_format_score(text) * 0.65 + min(1.0, score) * 0.35

@@ -45,7 +45,7 @@
         v-if="!modelOptions.length"
         type="warning"
         :closable="false"
-        title="暂无可用语音模型：请到「模型管理」拉取 SenseVoice / Paraformer / Fun-ASR-Nano 等语音识别模型。"
+        title="暂无可用语音模型：请到「模型管理」拉取 SenseVoice / Paraformer / Fun-ASR-Nano / Moonshine Tiny 等语音识别模型。"
       />
     </el-card>
 

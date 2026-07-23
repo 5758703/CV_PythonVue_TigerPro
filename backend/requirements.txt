@@ -6,6 +6,8 @@ PyMySQL==1.1.1
 cryptography>=44.0.0,<50.0.0
 python-dotenv==1.0.1
 ultralytics==8.4.69
+# OpenVINO：YOLO CPU 热路径 FP16/INT8 可选加速（YOLO_INFER_BACKEND=auto|openvino）
+openvino>=2024.0.0
 # transformers 5.x 要求 huggingface-hub>=1.5,<2.0（与旧版 0.36 不兼容）
 huggingface_hub>=1.5.0,<2.0.0
 # transformers 5.x：RF-DETR(rfdetr) 需要 BackboneConfigMixin；NLP/TTS/Whisper 等经回归仍可用。

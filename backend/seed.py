@@ -770,6 +770,47 @@ def seed_ai_models():
         source_url="https://modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512",
         description="通义 Fun-ASR-Nano 端到端大模型(800M)，中/英/日及多方言口音，支持热词/歌词场景，纯 CPU 推理(funasr+model.py)。语音识别页使用。", status="0",
     ))
+    # 语音识别（Moonshine Tiny，HF transformers，英文 ASR，27M，边缘/低资源友好）
+    created |= _ensure_ai_model("moonshine-tiny", dict(
+        model_name="Moonshine Tiny 语音识别", category="语音识别",
+        task="automatic-speech-recognition", library="transformers", version="v1",
+        source_url="https://huggingface.co/UsefulSensors/moonshine-tiny",
+        description="Useful Sensors Moonshine Tiny（27M，英文 ASR，transformers）。面向实时转写与低资源设备，CPU 友好。语音识别页使用。", status="0",
+    ))
+    # 车牌检测（YOLO26n 社区微调 bbox，车辆追踪可用）
+    created |= _ensure_ai_model("yolo26n-plate", dict(
+        model_name="车牌检测 YOLO26n（CodexParas）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v26",
+        source_url="https://huggingface.co/CodexParas/car-plate-detection-yolov26#best.pt",
+        description="YOLO26n 车牌 bbox（CodexParas/car-plate-detection-yolov26）。适合车辆 ROI 内定位；可与透视近似联用。", status="0",
+    ))
+    # 车牌四点 pose（中文车牌场景，透视矫正优先）
+    created |= _ensure_ai_model("yolo26s-plate-pose", dict(
+        model_name="车牌四点 YOLO26s-pose（推荐·透视）", category="交通车辆",
+        task="pose-estimation", library="ultralytics", version="v26",
+        source_url="https://raw.githubusercontent.com/we0091234/yolo26-plate/main/weights/yolo26s-plate-detect.pt",
+        description="YOLO26 pose 车牌框+4角点（we0091234/yolo26-plate）。车辆追踪透视矫正优先路径。", status="0",
+    ))
+    # YOLO26n-P2：官方仅架构 YAML，无预训练；作小目标车牌自训脚手架
+    created |= _ensure_ai_model("yolo26n-p2-plate", dict(
+        model_name="车牌检测 YOLO26n-P2（自训脚手架）", category="交通车辆",
+        task="object-detection", library="ultralytics", version="v26-p2",
+        source_url="https://docs.ultralytics.com/models/yolo26/",
+        description="官方无 yolo26n-p2.pt。请用 YOLO('yolo26n-p2.yaml') 自训后把 best.pt 放到 models/yolo26n-p2-plate/。面向远距小车牌。", status="0",
+    ))
+    # YOLO26n-pose / OBB 基座（HF openvision）
+    created |= _ensure_ai_model("yolo26n-pose", dict(
+        model_name="YOLO26n 姿态估计", category="姿态估计",
+        task="pose-estimation", library="ultralytics", version="v26",
+        source_url="https://huggingface.co/openvision/yolo26-n-pose#model.pt",
+        description="openvision/yolo26-n-pose 人体关键点。可作为自定义车牌 4-kpt 微调基座。", status="0",
+    ))
+    created |= _ensure_ai_model("yolo26n-obb", dict(
+        model_name="YOLO26n 旋转框 OBB", category="交通车辆",
+        task="obb", library="ultralytics", version="v26",
+        source_url="https://huggingface.co/openvision/yolo26-n-obb#model.pt",
+        description="openvision/yolo26-n-obb 旋转目标检测。车辆 ROI 内可用于车牌定向四点透视（通用权重，需 ROI 约束）。", status="0",
+    ))
     # 数字人合成（Linly-Talker/SadTalker，脚手架：生成需 GPU + SadTalker 运行环境）
     created |= _ensure_ai_model("linly-talker", dict(
         model_name="Linly-Talker 数字人", category="数字人",
@@ -912,6 +953,24 @@ def _bind_vehicle_track_models():
             "category": "交通车辆",
             "description": "YOLOv11 small 车牌定位（morsetechlab）。精度更高，CPU 仍可用。",
             "source_url": "https://huggingface.co/morsetechlab/yolov11-license-plate-detection#license-plate-finetune-v1s.pt",
+        },
+        "yolo26n-plate": {
+            "model_name": "车牌检测 YOLO26n（CodexParas）",
+            "category": "交通车辆",
+            "description": "YOLO26n 车牌 bbox（CodexParas）。车辆 ROI 内定位推荐。",
+            "source_url": "https://huggingface.co/CodexParas/car-plate-detection-yolov26#best.pt",
+        },
+        "yolo26s-plate-pose": {
+            "model_name": "车牌四点 YOLO26s-pose（推荐·透视）",
+            "category": "交通车辆",
+            "description": "YOLO26 pose 车牌框+4角点，透视矫正优先。",
+            "source_url": "https://raw.githubusercontent.com/we0091234/yolo26-plate/main/weights/yolo26s-plate-detect.pt",
+        },
+        "yolo26n-obb": {
+            "model_name": "YOLO26n 旋转框 OBB",
+            "category": "交通车辆",
+            "description": "旋转框 → 四点透视（通用 OBB，建议在车辆 ROI 内使用）。",
+            "source_url": "https://huggingface.co/openvision/yolo26-n-obb#model.pt",
         },
     }
     for key, fields in meta.items():

@@ -43,7 +43,7 @@ MySQL（元数据） + uploads/（模型权重 / 上传媒体 / 输出）
 |---|---|
 | Web 框架 | Flask 3 + Flask-Cors + Flask-JWT-Extended |
 | ORM / DB | Flask-SQLAlchemy + PyMySQL → **MySQL 8** |
-| 运行时 | Python **3.12**（推荐 `backend/.venv312`；RapidOCR 1.4.4 不支持 3.13） |
+| 运行时 | Python **3.12**（推荐 `backend/.venv`；RapidOCR 1.4.4 不支持 3.13） |
 | 深度学习 | torch / torchvision / torchaudio **2.11（CPU）** |
 | 推理引擎 | ultralytics(YOLO)、transformers 4.51、funasr、funasr_onnx、sherpa-onnx、onnxruntime |
 | 模型来源 | huggingface_hub、modelscope |
@@ -85,8 +85,16 @@ CREATE DATABASE cv_python_tigerpro DEFAULT CHARACTER SET utf8mb4;
 
 ```powershell
 cd backend
-py -3.12 -m venv .venv312
-.\.venv312\Scripts\pip install -r requirements.txt
+.\scripts\setup_venv.ps1          # 创建 .venv（Python 3.12）并安装依赖
+.\scripts\run_backend.ps1         # 启动
+```
+
+手动等价步骤：
+
+```powershell
+cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt
 .\scripts\run_backend.ps1
 ```
 
@@ -136,7 +144,7 @@ cd backend
 
 ```bash
 # 或手动激活环境
-conda activate cv_python_tigerpro   # 或 backend/.venv312
+conda activate cv_python_tigerpro   # 或 backend\.venv\Scripts\Activate.ps1
 cd backend
 python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 ```

@@ -180,6 +180,8 @@ export const vehicleApi = {
     }),
   videoProgress: (jobId) =>
     request.get(`/ai/vehicle/video-progress/${jobId}`, { timeout: 0 }),
+  outputVideo: (name) =>
+    request.get(`/ai/vehicle/output/${name}`, { responseType: 'blob', timeout: 0 }),
   resetSession: (sessionId) =>
     request.post('/ai/vehicle/reset-session', { sessionId }),
   exportRecords: (sessionId) =>

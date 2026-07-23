@@ -96,12 +96,15 @@ def _resolve_models():
 
     plate_path = None
     plate_m = None
+    _plate_tasks = {"object-detection", "obb", "pose-estimation"}
     if plate_id:
         plate_m = AiModel.query.get(plate_id)
         if plate_m is None:
             return None, "车牌检测模型不存在"
         if (plate_m.library or "").lower() != "ultralytics":
-            return None, "车牌检测模型需为 ultralytics 目标检测"
+            return None, "车牌检测模型需为 ultralytics"
+        if (plate_m.task or "") not in _plate_tasks:
+            return None, "车牌模型 task 需为 object-detection / obb / pose-estimation"
         plate_path = _abs_weight_file(plate_m)
         if plate_path is None:
             return None, "车牌检测模型暂无本地权重，请先拉取"
@@ -120,8 +123,9 @@ def _resolve_models():
             return None, "RapidOCR 模型权重未就绪，请先拉取"
         from inference import paddle_ocr
 
-        def ocr_fn(img_bytes):
-            return paddle_ocr(det_dir, rec_dir, img_bytes, plate_mode=True)
+        def ocr_fn(img_bytes, *, rec_only=True):
+            # 车牌已透视/裁剪：默认仅识别，关闭 det 切分
+            return paddle_ocr(det_dir, rec_dir, img_bytes, plate_mode=True, rec_only=rec_only)
 
     return {
         "detect_m": detect_m,
@@ -188,7 +192,7 @@ def _vehicle_worker(job_id, cfg_bundle):
             ok, frame = cap.read()
             if not ok:
                 break
-            track_kw = dict(persist=True, tracker="bytetrack.yaml", conf=conf, imgsz=imgsz, verbose=False)
+            track_kw = dict(persist=True, tracker="bytetrack.yaml", conf=conf, imgsz=imgsz, verbose=False, device="cpu")
             if classes:
                 track_kw["classes"] = classes
             r = model.track(frame, **track_kw)[0]
@@ -253,6 +257,11 @@ def _vehicle_worker(job_id, cfg_bundle):
             "output": cfg_bundle["out_name"],
         }
         result.update(_video_alert_stats(alert_ctx))
+        # 必须先关闭 writer（ffmpeg faststart 在 close 时写完 moov），再标记 done；
+        # 否则前端会立刻拉取到半截 MP4，浏览器表现为黑屏 0:00 无法回放。
+        if writer is not None:
+            writer.close()
+            writer = None
         with _video_jobs_lock:
             _video_jobs[job_id].update(status="done", stats=result, processed=frames, total=frames or total)
     except Exception as e:  # noqa: BLE001
@@ -262,7 +271,11 @@ def _vehicle_worker(job_id, cfg_bundle):
         if cap is not None:
             cap.release()
         if writer is not None:
-            writer.close()
+            try:
+                writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+            writer = None
         if os.path.isfile(cfg_bundle.get("src_path", "")):
             try:
                 os.remove(cfg_bundle["src_path"])
@@ -521,6 +534,24 @@ def video_progress(job_id):
     if j is None:
         return jsonify(code=404, message="任务不存在"), 404
     return jsonify(code=0, data=j)
+
+
+@vehicle_bp.get("/output/<path:name>")
+@permission_required("ai:vehicle:list")
+def vehicle_output(name):
+    """返回车辆追踪输出视频（与模型页 output 同源目录，权限走车辆菜单）。"""
+    from flask import send_file
+
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    abs_path = os.path.abspath(os.path.join(out_folder, name))
+    if not abs_path.startswith(os.path.abspath(out_folder) + os.sep):
+        return jsonify(code=400, message="非法路径"), 400
+    if not os.path.isfile(abs_path):
+        return jsonify(code=404, message="输出文件不存在"), 404
+    # 文件仍在写入时拒绝，避免浏览器拉到半截 MP4
+    if not str(name).endswith("_vehicle.mp4"):
+        return jsonify(code=400, message="非车辆追踪输出"), 400
+    return send_file(abs_path, mimetype="video/mp4", conditional=True)
 
 
 @vehicle_bp.post("/reset-session")
