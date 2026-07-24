@@ -11,3 +11,5 @@
 | [CHANGELOG.md](../../CHANGELOG.md) | 版本变更 |
 | [good-first-issues.md](./good-first-issues.md) | 8 条新手任务文案 |
 | [LABELS.md](../../.github/LABELS.md) | Issue 标签定义 |
+| [annotation-tools-feasibility.md](./annotation-tools-feasibility.md) | 外接标注工具对比与整合可行性（Canvas 导出） |
+| [face-service-cost-estimate.md](./face-service-cost-estimate.md) | 人脸识别独立服务部署费用测算（Canvas 导出） |
