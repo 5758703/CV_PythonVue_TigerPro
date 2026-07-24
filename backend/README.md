@@ -188,7 +188,29 @@ waitress-serve --listen=0.0.0.0:5001 app:app
 | 模块 | 前缀 | 说明 |
 |---|---|---|
 | 认证 | `/api/auth` | 登录 / 注册 / 用户信息（JWT） |
-| 系统管理 | `/api/system/*` | user / role / dept / job / menu（RBAC） |
+| 系统管理 | `/api/system/*` | user / role / dept / job / menu / **open-app**（开放应用） |
 | AI 模型 | `/api/ai/model` | CRUD、拉权重(`/fetch`)、各任务在线测试（detect / classify / transcribe / tts / ...） |
+| **Open API v1** | `/openapi/v1` | 对外能力网关（AppKey + Scope，与控制台 JWT 分离） |
 
-所有受保护接口需请求头 `Authorization: Bearer <token>`，并校验对应权限点（`perms`）。
+所有受保护控制台接口需请求头 `Authorization: Bearer <token>`，并校验对应权限点（`perms`）。
+
+### Open API（对外）
+
+- 鉴权头：`X-App-Id` + `X-Api-Key`（或 `Authorization: Bearer <api_key>`）
+- 能力 Scope：`vision:detect` · `vision:ocr` · `face:recognize` · `water:read` · `jobs:read`
+- 文档站：`/openapi/v1/docs` · 规范：`/openapi/v1/openapi.json` · 示例：[`docs/openapi_examples.md`](docs/openapi_examples.md)
+- **全量桥接**：`/openapi/v1/x/<原 /api/ 路径>`（约 148 个可桥接接口，按 `domain:*` 或细粒度 Scope 授权）
+- 分域目录：`GET /openapi/v1/catalog` · `GET /api/system/open-app/scopes`
+- 异步：`vision/detect` 传 `async=1` → `jobId`，由 `python scripts/open_job_worker.py` 消费
+- 独立网关：`python gateway_app.py`（默认 :5002，仅 Open API）
+- 指标：`GET /openapi/v1/metrics`（Prometheus）
+- 对象存储：`OBJECT_STORE_BACKEND=local|s3`（见 `.env`）
+
+```bash
+curl -s http://127.0.0.1:5001/openapi/v1/health
+curl -s http://127.0.0.1:5001/openapi/v1/capabilities \
+  -H "X-App-Id: app_demo" \
+  -H "X-Api-Key: tp_live_demo_change_me_in_production_01"
+```
+
+控制台「开放平台」：`/system/open-app`（RBAC：`system:openapp:*`），支持密钥、Webhook、用量图表。

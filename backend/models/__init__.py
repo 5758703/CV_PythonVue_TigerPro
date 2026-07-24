@@ -243,6 +243,8 @@ from .camera import Camera  # noqa: E402  摄像头
 from .training import TrainingDataset, TrainingJob  # noqa: E402  模型训练
 from .face import FacePerson, FaceEmbedding  # noqa: E402  人脸底库
 from .alert import AlertRule, AlertEvent  # noqa: E402  检测告警
+from .open_app import OpenApp, OpenApiKey, OpenApiCallLog  # noqa: E402  开放平台
+from .open_job import OpenJob  # noqa: E402  开放异步任务
 
 __all__ = [
     "db",
@@ -250,5 +252,6 @@ __all__ = [
     "TrainingDataset", "TrainingJob",
     "FacePerson", "FaceEmbedding",
     "AlertRule", "AlertEvent",
+    "OpenApp", "OpenApiKey", "OpenApiCallLog", "OpenJob",
     "user_role", "user_dept", "user_post", "role_menu", "user_menu",
 ]

@@ -44,3 +44,19 @@ export const menuApi = {
   update: (data) => request.put(`/system/menu/${data.id}`, data),
   remove: (id) => request.delete(`/system/menu/${id}`)
 }
+
+// ---------------- 开放平台
+export const openAppApi = {
+  scopes: () => request.get('/system/open-app/scopes'),
+  list: (params) => request.get('/system/open-app', { params }),
+  get: (id) => request.get(`/system/open-app/${id}`),
+  add: (data) => request.post('/system/open-app', data),
+  update: (data) => request.put(`/system/open-app/${data.id}`, data),
+  remove: (id) => request.delete(`/system/open-app/${id}`),
+  createKey: (id, data) => request.post(`/system/open-app/${id}/keys`, data || {}),
+  updateKey: (id, kid, data) => request.put(`/system/open-app/${id}/keys/${kid}`, data),
+  removeKey: (id, kid) => request.delete(`/system/open-app/${id}/keys/${kid}`),
+  logs: (id, params) => request.get(`/system/open-app/${id}/logs`, { params }),
+  usage: (id, params) => request.get(`/system/open-app/${id}/usage`, { params }),
+  testWebhook: (id) => request.post(`/system/open-app/${id}/webhook/test`)
+}

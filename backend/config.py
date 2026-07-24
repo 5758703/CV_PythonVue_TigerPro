@@ -73,3 +73,10 @@ class Config:
         "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
     )
     DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+    # 开放平台 / 对象存储（P1–P3）
+    OBJECT_STORE_BACKEND = (os.getenv("OBJECT_STORE_BACKEND") or "local").strip().lower()
+    S3_BUCKET = os.getenv("S3_BUCKET", "")
+    S3_ENDPOINT = os.getenv("S3_ENDPOINT", "")  # MinIO 等兼容 endpoint
+    S3_PREFIX = os.getenv("S3_PREFIX", "tigerpro/")
+    OPEN_JOB_RETENTION_DAYS = int(os.getenv("OPEN_JOB_RETENTION_DAYS", "7"))

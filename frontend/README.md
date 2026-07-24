@@ -121,15 +121,25 @@ server {
         proxy_set_header   X-Real-IP $remote_addr;
         client_max_body_size 500m;   # 模型权重 / 视频上传较大
     }
+
+    # 开放 API 文档与对外网关（AppKey）
+    location /openapi/ {
+        proxy_pass         http://127.0.0.1:5001/openapi/;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        client_max_body_size 500m;
+    }
 }
 ```
 
 - 前端使用 **history 路由**，务必配置 `try_files ... /index.html` 回退，否则刷新子路由 404。
 - 上传权重 / 视频文件较大，`client_max_body_size` 需放大（后端单文件上限 500MB）。
 - 静态资源可加缓存头；`index.html` 建议不缓存以便发版生效。
+- 控制台「开放平台」路由：`/system/open-app`；对外文档：`/openapi/v1/docs`。
 
 ## 说明
 
-- 所有后端接口走 `/api` 前缀；`src/api/request.js` 统一注入 JWT、处理 401。
+- 所有后端控制台接口走 `/api` 前缀；`src/api/request.js` 统一注入 JWT、处理 401。
+- 对外 Open API 走 `/openapi/v1`（AppKey，与 JWT 分离）。
 - 在线测试为长耗时请求（拉模型 / CPU 推理），相关 axios 调用已设 `timeout: 0`。
 - 图表、进度条等为前端实时计算，无需额外服务。

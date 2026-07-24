@@ -8,6 +8,11 @@ import shutil
 
 from extensions import db
 from models import User, Role, Dept, Job, Menu, AiModel
+from models.open_app import OpenApp, OpenApiKey
+from security_open import hash_api_key, key_prefix
+from services.openapi_catalog import list_domains
+from services.openapi_bridge import BRIDGE_USER
+import secrets
 
 
 def _dept(id, parent_id, ancestors, name, order, leader=None):
@@ -1381,11 +1386,86 @@ def seed_alert_rules():
     return created or updated
 
 
+def seed_open_platform():
+    """开放平台菜单 + 演示应用 + 桥接服务账号（幂等）。
+
+    演示 Key（仅开发）：tp_live_demo_change_me_in_production_01
+    """
+    # 系统管理下挂「开放平台」
+    _ensure_ai_menu(190, 1, "开放平台", "C", "system:openapp:list",
+                    path="/system/open-app", component="system/openApp/index",
+                    icon="Key", order=90, grant_common=True)
+    _ensure_ai_menu(1901, 190, "开放应用查询", "F", "system:openapp:query", grant_common=True)
+    _ensure_ai_menu(1902, 190, "开放应用新增", "F", "system:openapp:add")
+    _ensure_ai_menu(1903, 190, "开放应用修改", "F", "system:openapp:edit")
+    _ensure_ai_menu(1904, 190, "开放应用删除", "F", "system:openapp:remove")
+
+    # 桥接服务账号（admin 权限，仅内调，不可登录业务）
+    bridge = User.query.filter_by(username=BRIDGE_USER).first()
+    if bridge is None:
+        bridge = User(
+            username=BRIDGE_USER,
+            nickname="OpenAPI Bridge",
+            status="0",
+            del_flag="0",
+            email="openapi-bridge@localhost",
+        )
+        bridge.set_password(secrets.token_urlsafe(32))
+        admin_role = Role.query.filter_by(role_key="admin").first()
+        if admin_role:
+            bridge.roles = [admin_role]
+        db.session.add(bridge)
+        db.session.commit()
+
+    # 演示应用：默认授予全部可桥接域（不含 open_app 管理面）
+    domain_scopes = [
+        d["domainScope"] for d in list_domains()
+        if d["id"] not in ("open_app", "openapi")
+    ]
+    # 兼容旧精简 Scope
+    domain_scopes += [
+        "vision:detect", "vision:ocr", "face:recognize", "water:read", "jobs:read",
+    ]
+
+    demo = OpenApp.query.filter_by(app_id="app_demo").first()
+    if demo:
+        # 幂等扩展：若仍是旧 5 个 Scope，升级为域级全量
+        cur = set(demo.scope_list())
+        legacy = {"vision:detect", "vision:ocr", "face:recognize", "water:read", "jobs:read"}
+        if cur <= legacy or not any(s.startswith("domain:") for s in cur):
+            demo.set_scopes(domain_scopes)
+            db.session.commit()
+        return
+
+    app = OpenApp(
+        app_id="app_demo",
+        name="演示开放应用",
+        status="0",
+        qps_limit=20,
+        daily_limit=10000,
+        remark="本地开发演示（含全量域 Scope），生产务必轮换密钥并收敛授权",
+    )
+    app.set_scopes(domain_scopes)
+    db.session.add(app)
+    db.session.flush()
+
+    demo_key = "tp_live_demo_change_me_in_production_01"
+    db.session.add(OpenApiKey(
+        app_pk=app.id,
+        name="demo",
+        key_prefix=key_prefix(demo_key),
+        key_hash=hash_api_key(demo_key),
+        status="0",
+    ))
+    db.session.commit()
+
+
 def init_seed():
     if User.query.first():
         seed_ai_menus()   # 用户已存在也补齐 AI 菜单种子
         seed_ai_models()  # 用户已存在也补齐 AI 模型种子
         seed_alert_rules()
+        seed_open_platform()
         return False  # 已初始化
 
     _seed_depts()
@@ -1435,6 +1515,7 @@ def init_seed():
     seed_ai_menus()
     seed_ai_models()
     seed_alert_rules()
+    seed_open_platform()
     return True
 
 

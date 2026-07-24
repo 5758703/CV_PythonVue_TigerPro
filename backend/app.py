@@ -10,7 +10,10 @@ def create_app():
     app.config.from_object(Config)
 
     db.init_app(app)
-    cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
+    cors.init_app(app, resources={
+        r"/api/*": {"origins": "*"},
+        r"/openapi/*": {"origins": "*"},
+    })
     jwt.init_app(app)
 
     for bp in all_blueprints:
@@ -50,27 +53,31 @@ def _migrate(db):
     from sqlalchemy import inspect, text
 
     insp = inspect(db.engine)
-    if "ai_model" not in insp.get_table_names():
-        return
-    cols = {c["name"] for c in insp.get_columns("ai_model")}
-    adds = []
-    if "task" not in cols:
-        adds.append("ADD COLUMN task VARCHAR(64) DEFAULT 'object-detection'")
-    if "library" not in cols:
-        adds.append("ADD COLUMN library VARCHAR(32) DEFAULT 'ultralytics'")
-    if adds:
-        with db.engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE ai_model {', '.join(adds)}"))
+    tables = set(insp.get_table_names())
 
-    if "training_dataset" not in insp.get_table_names():
-        return
-    ds_cols = {c["name"] for c in insp.get_columns("training_dataset")}
-    ds_adds = []
-    if "source_path" not in ds_cols:
-        ds_adds.append("ADD COLUMN source_path VARCHAR(500) NULL")
-    if ds_adds:
+    def add_columns(table, specs):
+        """specs: [(col_name, ddl_fragment), ...]"""
+        if table not in tables:
+            return
+        cols = {c["name"] for c in insp.get_columns(table)}
+        adds = [ddl for name, ddl in specs if name not in cols]
+        if not adds:
+            return
         with db.engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE training_dataset {', '.join(ds_adds)}"))
+            conn.execute(text(f"ALTER TABLE {table} {', '.join(adds)}"))
+
+    add_columns("ai_model", [
+        ("task", "ADD COLUMN task VARCHAR(64) DEFAULT 'object-detection'"),
+        ("library", "ADD COLUMN library VARCHAR(32) DEFAULT 'ultralytics'"),
+    ])
+    add_columns("training_dataset", [
+        ("source_path", "ADD COLUMN source_path VARCHAR(500) NULL"),
+    ])
+    add_columns("open_app", [
+        ("webhook_url", "ADD COLUMN webhook_url VARCHAR(500) NULL"),
+        ("webhook_secret", "ADD COLUMN webhook_secret VARCHAR(128) NULL"),
+        ("webhook_events", "ADD COLUMN webhook_events TEXT NULL"),
+    ])
 
 
 app = create_app()

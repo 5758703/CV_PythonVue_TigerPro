@@ -38,6 +38,7 @@ const routes = [
       { path: 'system/dept', name: 'sysDept', component: () => import('../views/system/dept/index.vue'), meta: { title: '部门管理' } },
       { path: 'system/job', name: 'sysJob', component: () => import('../views/system/job/index.vue'), meta: { title: '岗位管理' } },
       { path: 'system/menu', name: 'sysMenu', component: () => import('../views/system/menu/index.vue'), meta: { title: '菜单管理' } },
+      { path: 'system/open-app', name: 'sysOpenApp', component: () => import('../views/system/openApp/index.vue'), meta: { title: '开放平台' } },
       { path: 'camera', name: 'camera', component: () => import('../views/camera/index.vue'), meta: { title: '摄像头管理' } },
       { path: 'camera/wall', name: 'cameraWall', component: () => import('../views/camera/wall/index.vue'), meta: { title: '实时监控大屏' } },
       { path: 'ai/water', name: 'aiWater', component: () => import('../views/ai/water/index.vue'), meta: { title: '水位检测' } },
