@@ -10,7 +10,11 @@ from extensions import db
 from models import User, Role, Dept, Job, Menu, AiModel
 from models.open_app import OpenApp, OpenApiKey
 from security_open import hash_api_key, key_prefix
-from services.openapi_catalog import list_domains
+from services.openapi_catalog import (
+    list_domains,
+    scopes_for_all_bridgeable_domains,
+    scopes_for_domain,
+)
 from services.openapi_bridge import BRIDGE_USER
 import secrets
 
@@ -1417,46 +1421,77 @@ def seed_open_platform():
         db.session.add(bridge)
         db.session.commit()
 
-    # 演示应用：默认授予全部可桥接域（不含 open_app 管理面）
-    domain_scopes = [
-        d["domainScope"] for d in list_domains()
-        if d["id"] not in ("open_app", "openapi")
-    ]
-    # 兼容旧精简 Scope
-    domain_scopes += [
-        "vision:detect", "vision:ocr", "face:recognize", "water:read", "jobs:read",
-    ]
+    # 演示应用：全量域
+    domain_scopes = scopes_for_all_bridgeable_domains()
 
     demo = OpenApp.query.filter_by(app_id="app_demo").first()
-    if demo:
-        # 幂等扩展：若仍是旧 5 个 Scope，升级为域级全量
+    if demo is None:
+        app = OpenApp(
+            app_id="app_demo",
+            name="演示开放应用",
+            status="0",
+            qps_limit=20,
+            daily_limit=10000,
+            domain_id="full",
+            category="platform",
+            remark="本地开发演示（含全量域 Scope），生产务必轮换密钥并收敛授权",
+        )
+        app.set_scopes(domain_scopes)
+        db.session.add(app)
+        db.session.flush()
+        demo_key = "tp_live_demo_change_me_in_production_01"
+        db.session.add(OpenApiKey(
+            app_pk=app.id,
+            name="demo",
+            key_prefix=key_prefix(demo_key),
+            key_hash=hash_api_key(demo_key),
+            status="0",
+        ))
+        db.session.commit()
+    else:
         cur = set(demo.scope_list())
         legacy = {"vision:detect", "vision:ocr", "face:recognize", "water:read", "jobs:read"}
         if cur <= legacy or not any(s.startswith("domain:") for s in cur):
             demo.set_scopes(domain_scopes)
+            demo.domain_id = demo.domain_id or "full"
+            demo.category = demo.category or "platform"
             db.session.commit()
-        return
 
-    app = OpenApp(
-        app_id="app_demo",
-        name="演示开放应用",
-        status="0",
-        qps_limit=20,
-        daily_limit=10000,
-        remark="本地开发演示（含全量域 Scope），生产务必轮换密钥并收敛授权",
-    )
-    app.set_scopes(domain_scopes)
-    db.session.add(app)
-    db.session.flush()
-
-    demo_key = "tp_live_demo_change_me_in_production_01"
-    db.session.add(OpenApiKey(
-        app_pk=app.id,
-        name="demo",
-        key_prefix=key_prefix(demo_key),
-        key_hash=hash_api_key(demo_key),
-        status="0",
-    ))
+    # 按 Blueprint 域各建一个应用（幂等，覆盖全部接口分类）
+    for d in list_domains():
+        if d["id"] == "other":
+            continue
+        app_id = d["suggestedAppId"]
+        scopes = scopes_for_domain(d["id"], include_fine=True)
+        existing = OpenApp.query.filter_by(app_id=app_id).first()
+        if existing:
+            existing.domain_id = d["id"]
+            existing.category = d["group"]
+            existing.set_scopes(scopes)
+            existing.name = d["suggestedName"]
+            continue
+        row = OpenApp(
+            app_id=app_id,
+            name=d["suggestedName"],
+            status="0",
+            qps_limit=20,
+            daily_limit=10000,
+            domain_id=d["id"],
+            category=d["group"],
+            remark=f"域全覆盖 · Blueprint={d.get('blueprint') or '-'} · 接口 {d['endpointCount']}",
+        )
+        row.set_scopes(scopes)
+        db.session.add(row)
+        db.session.flush()
+        # 每域一把开发 Key（明文不入库；正式环境请在控制台重新签发）
+        raw = f"tp_live_domain_{d['id']}_dev_only_change_me"
+        db.session.add(OpenApiKey(
+            app_pk=row.id,
+            name="domain-default",
+            key_prefix=key_prefix(raw),
+            key_hash=hash_api_key(raw),
+            status="0",
+        ))
     db.session.commit()
 
 

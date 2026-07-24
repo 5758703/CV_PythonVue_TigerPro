@@ -16,21 +16,30 @@ open_app_bp = Blueprint("sys_open_app", __name__, url_prefix="/api/system/open-a
 @open_app_bp.get("/scopes")
 @permission_required("system:openapp:list")
 def list_scopes():
-    from services.openapi_catalog import all_scopes, catalog_stats, list_domains
+    from services.openapi_catalog import (
+        all_scopes, catalog_stats, list_domain_groups, list_domains,
+    )
     return jsonify(code=0, data={
         "scopes": all_scopes(),
         "webhookEvents": ["job.succeeded", "job.failed", "api.call", "*"],
         "stats": catalog_stats(),
+        "groups": list_domain_groups(),
         "domains": [
             {
                 "id": d["id"],
                 "label": d["label"],
                 "order": d["order"],
                 "risk": d["risk"],
+                "group": d["group"],
+                "groupLabel": d["groupLabel"],
+                "blueprint": d["blueprint"],
                 "domainScope": d["domainScope"],
+                "fullScopes": d["fullScopes"],
                 "endpointCount": d["endpointCount"],
                 "bridgeableCount": d["bridgeableCount"],
                 "scopes": d["scopes"],
+                "suggestedAppId": d["suggestedAppId"],
+                "suggestedName": d["suggestedName"],
                 "endpoints": [
                     {
                         "method": e["method"],
@@ -39,6 +48,7 @@ def list_scopes():
                         "scope": e["scope"],
                         "summary": e["summary"],
                         "bridgeable": e["bridgeable"],
+                        "blueprint": e.get("blueprint"),
                     }
                     for e in d["endpoints"]
                 ],
@@ -52,14 +62,91 @@ def list_scopes():
 @permission_required("system:openapp:list")
 def list_apps():
     page = int(request.args.get("pageNum", 1))
-    size = int(request.args.get("pageSize", 10))
+    size = int(request.args.get("pageSize", 50))
     name = (request.args.get("name") or "").strip()
+    domain_id = (request.args.get("domainId") or "").strip()
+    category = (request.args.get("category") or "").strip()
     query = OpenApp.query
     if name:
         query = query.filter(OpenApp.name.contains(name))
+    if domain_id:
+        query = query.filter(OpenApp.domain_id == domain_id)
+    if category:
+        query = query.filter(OpenApp.category == category)
     total = query.count()
-    rows = query.order_by(OpenApp.id.desc()).offset((page - 1) * size).limit(size).all()
+    rows = query.order_by(OpenApp.category.asc(), OpenApp.domain_id.asc(), OpenApp.id.asc())\
+        .offset((page - 1) * size).limit(size).all()
     return jsonify(code=0, data={"rows": [a.to_dict() for a in rows], "total": total})
+
+
+def _meta_for_domain(domain_id: str):
+    from services.openapi_catalog import DOMAIN_META, list_domains
+    for d in list_domains():
+        if d["id"] == domain_id:
+            return d
+    meta = DOMAIN_META.get(domain_id)
+    if meta:
+        return {
+            "id": domain_id,
+            "label": meta["label"],
+            "group": meta.get("group"),
+            "fullScopes": [f"domain:{domain_id}"],
+            "suggestedAppId": f"app_{domain_id}",
+            "suggestedName": f"{meta['label']}开放应用",
+        }
+    return None
+
+
+def _create_app_record(data: dict, *, default_scopes=None):
+    """内部创建逻辑，返回 (app, plaintext_key|None, error_response|None)。"""
+    name = (data.get("name") or "").strip()
+    app_id = (data.get("appId") or "").strip()
+    if not name:
+        return None, None, (jsonify(code=400, message="应用名称必填"), 400)
+    if not app_id:
+        import secrets
+        app_id = "app_" + secrets.token_hex(8)
+    if OpenApp.query.filter_by(app_id=app_id).first():
+        return None, None, (jsonify(code=409, message="appId 已存在"), 409)
+
+    domain_id = (data.get("domainId") or "").strip() or None
+    category = (data.get("category") or "").strip() or None
+    if domain_id and not category:
+        meta = _meta_for_domain(domain_id)
+        if meta:
+            category = meta.get("group")
+
+    scopes = data.get("scopes")
+    if scopes is None:
+        scopes = default_scopes or []
+
+    app = OpenApp(
+        app_id=app_id,
+        name=name,
+        status=data.get("status") or "0",
+        qps_limit=int(data.get("qpsLimit") or 10),
+        daily_limit=int(data.get("dailyLimit") or 10000),
+        remark=(data.get("remark") or "").strip() or None,
+        domain_id=domain_id,
+        category=category,
+    )
+    app.set_scopes(scopes)
+    _apply_webhook_fields(app, data)
+    db.session.add(app)
+    db.session.flush()
+
+    plaintext = None
+    if data.get("createKey", True):
+        plaintext = generate_api_key()
+        db.session.add(OpenApiKey(
+            app_pk=app.id,
+            name=(data.get("keyName") or "default").strip() or "default",
+            key_prefix=key_prefix(plaintext),
+            key_hash=hash_api_key(plaintext),
+            status="0",
+        ))
+    db.session.commit()
+    return app, plaintext, None
 
 
 @open_app_bp.get("/<int:aid>")
@@ -82,46 +169,134 @@ def _apply_webhook_fields(app: OpenApp, data: dict):
         app.set_webhook_events(data.get("webhookEvents") or [])
 
 
+@open_app_bp.post("/from-domain")
+@permission_required("system:openapp:add")
+def create_from_domain():
+    """按业务域一键新建应用，Scope 覆盖该域全部接口。"""
+    from services.openapi_catalog import scopes_for_domain
+    data = request.get_json(silent=True) or {}
+    domain_id = (data.get("domainId") or "").strip()
+    if not domain_id:
+        return jsonify(code=400, message="domainId 必填"), 400
+    meta = _meta_for_domain(domain_id)
+    if not meta:
+        return jsonify(code=404, message=f"未知域：{domain_id}"), 404
+
+    payload = {
+        "name": (data.get("name") or meta["suggestedName"]).strip(),
+        "appId": (data.get("appId") or meta["suggestedAppId"]).strip(),
+        "domainId": domain_id,
+        "category": meta.get("group"),
+        "scopes": data.get("scopes") or scopes_for_domain(domain_id, include_fine=True),
+        "qpsLimit": data.get("qpsLimit", 20),
+        "dailyLimit": data.get("dailyLimit", 10000),
+        "remark": data.get("remark") or f"按域自动覆盖：{meta['label']} 全部接口",
+        "createKey": data.get("createKey", True),
+        "status": data.get("status") or "0",
+    }
+    # 已存在则更新 Scope 为全覆盖（幂等）
+    existing = OpenApp.query.filter_by(app_id=payload["appId"]).first()
+    if existing:
+        existing.name = payload["name"]
+        existing.domain_id = domain_id
+        existing.category = payload["category"]
+        existing.set_scopes(payload["scopes"])
+        existing.remark = payload["remark"]
+        db.session.commit()
+        return jsonify(code=0, message="域应用已存在，已刷新全量 Scope", data=existing.to_dict(with_keys=True))
+
+    app, plaintext, err = _create_app_record(payload)
+    if err:
+        return err
+    body = app.to_dict(with_keys=True)
+    if plaintext:
+        body["apiKey"] = plaintext
+        body["apiKeyHint"] = "请立即保存，服务端只存哈希"
+    return jsonify(code=0, message="按域创建成功", data=body), 201
+
+
+@open_app_bp.post("/ensure-domains")
+@permission_required("system:openapp:add")
+def ensure_all_domain_apps():
+    """为每个 Blueprint 域各建/刷新一个应用，覆盖项目全部可分类接口。"""
+    from services.openapi_catalog import list_domains, scopes_for_all_bridgeable_domains, scopes_for_domain
+
+    created, updated = [], []
+    for d in list_domains():
+        if d["id"] in ("other",):
+            continue
+        app_id = d["suggestedAppId"]
+        scopes = scopes_for_domain(d["id"], include_fine=True)
+        # open_app / openapi 仍建目录型应用（便于管理面看到覆盖），即便不可桥接
+        existing = OpenApp.query.filter_by(app_id=app_id).first()
+        if existing:
+            existing.name = d["suggestedName"]
+            existing.domain_id = d["id"]
+            existing.category = d["group"]
+            existing.set_scopes(scopes)
+            existing.remark = f"域全覆盖 · Blueprint={d.get('blueprint') or '-'} · 接口 {d['endpointCount']}"
+            updated.append(app_id)
+        else:
+            app, _pt, err = _create_app_record({
+                "name": d["suggestedName"],
+                "appId": app_id,
+                "domainId": d["id"],
+                "category": d["group"],
+                "scopes": scopes,
+                "remark": f"域全覆盖 · Blueprint={d.get('blueprint') or '-'} · 接口 {d['endpointCount']}",
+                "createKey": True,
+                "qpsLimit": 20,
+                "dailyLimit": 10000,
+            })
+            if err:
+                continue
+            created.append(app_id)
+
+    # 全量汇总应用
+    full_id = "app_full_all"
+    full_scopes = scopes_for_all_bridgeable_domains()
+    full = OpenApp.query.filter_by(app_id=full_id).first()
+    if full:
+        full.set_scopes(full_scopes)
+        full.domain_id = "full"
+        full.category = "platform"
+        full.name = "全量开放应用（所有域）"
+        full.remark = "覆盖全部可桥接业务域"
+        updated.append(full_id)
+    else:
+        app, _pt, err = _create_app_record({
+            "name": "全量开放应用（所有域）",
+            "appId": full_id,
+            "domainId": "full",
+            "category": "platform",
+            "scopes": full_scopes,
+            "remark": "覆盖全部可桥接业务域",
+            "createKey": True,
+            "qpsLimit": 50,
+            "dailyLimit": 100000,
+        })
+        if not err:
+            created.append(full_id)
+
+    db.session.commit()
+    return jsonify(code=0, message="域应用已对齐", data={
+        "created": created,
+        "updated": updated,
+        "domainCount": len(list_domains()),
+    })
+
+
 @open_app_bp.post("")
 @permission_required("system:openapp:add")
 def create_app():
     data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    app_id = (data.get("appId") or "").strip()
-    if not name:
-        return jsonify(code=400, message="应用名称必填"), 400
-    if not app_id:
-        import secrets
-        app_id = "app_" + secrets.token_hex(8)
-    if OpenApp.query.filter_by(app_id=app_id).first():
-        return jsonify(code=409, message="appId 已存在"), 409
-
-    app = OpenApp(
-        app_id=app_id,
-        name=name,
-        status=data.get("status") or "0",
-        qps_limit=int(data.get("qpsLimit") or 10),
-        daily_limit=int(data.get("dailyLimit") or 10000),
-        remark=(data.get("remark") or "").strip() or None,
-    )
-    app.set_scopes(data.get("scopes") or [])
-    _apply_webhook_fields(app, data)
-    db.session.add(app)
-    db.session.flush()
-
-    plaintext = None
-    if data.get("createKey", True):
-        plaintext = generate_api_key()
-        row = OpenApiKey(
-            app_pk=app.id,
-            name=(data.get("keyName") or "default").strip() or "default",
-            key_prefix=key_prefix(plaintext),
-            key_hash=hash_api_key(plaintext),
-            status="0",
-        )
-        db.session.add(row)
-
-    db.session.commit()
+    # 若带 domainId 且未显式 scopes，自动域全覆盖
+    if data.get("domainId") and not data.get("scopes"):
+        from services.openapi_catalog import scopes_for_domain
+        data = {**data, "scopes": scopes_for_domain(data["domainId"], include_fine=True)}
+    app, plaintext, err = _create_app_record(data)
+    if err:
+        return err
     payload = app.to_dict(with_keys=True)
     if plaintext:
         payload["apiKey"] = plaintext
@@ -149,6 +324,10 @@ def update_app(aid):
         app.daily_limit = int(data.get("dailyLimit") or 0)
     if "remark" in data:
         app.remark = (data.get("remark") or "").strip() or None
+    if "domainId" in data:
+        app.domain_id = (data.get("domainId") or "").strip() or None
+    if "category" in data:
+        app.category = (data.get("category") or "").strip() or None
     _apply_webhook_fields(app, data)
     db.session.commit()
     return jsonify(code=0, message="已更新", data=app.to_dict(with_keys=True))

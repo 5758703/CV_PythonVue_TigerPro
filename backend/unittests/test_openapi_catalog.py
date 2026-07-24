@@ -13,7 +13,7 @@ def test_catalog_covers_major_domains():
     assert stats["endpointCount"] >= 140
     assert stats["bridgeableCount"] >= 130
     ids = {d["id"] for d in list_domains()}
-    for need in ("auth", "system", "camera", "ai_model", "training", "face", "vehicle"):
+    for need in ("auth", "sys_user", "camera", "ai_model", "training", "face", "vehicle"):
         assert need in ids
 
 

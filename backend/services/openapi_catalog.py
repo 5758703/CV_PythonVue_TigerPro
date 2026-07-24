@@ -10,33 +10,38 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-# 域定义：id → 展示名 / 说明 / 默认是否建议对外开放
+# 域定义：与 Blueprint 一一对应（便于按蓝图分类建应用）
+# group: 前端分组
 DOMAIN_META = {
-    "health": {"label": "健康检查", "order": 0, "risk": "low"},
-    "auth": {"label": "认证", "order": 1, "risk": "medium"},
-    "system": {"label": "系统管理", "order": 2, "risk": "high"},
-    "camera": {"label": "摄像头 / 监控", "order": 3, "risk": "high"},
-    "ai_model": {"label": "AI 模型与推理", "order": 4, "risk": "medium"},
-    "training": {"label": "训练 / 标注", "order": 5, "risk": "high"},
-    "face": {"label": "人脸", "order": 6, "risk": "high"},
-    "vehicle": {"label": "车辆", "order": 7, "risk": "medium"},
-    "water": {"label": "水位", "order": 8, "risk": "low"},
-    "table": {"label": "表格识别", "order": 9, "risk": "low"},
-    "badminton": {"label": "羽毛球", "order": 10, "risk": "low"},
-    "alert": {"label": "告警", "order": 11, "risk": "medium"},
-    "open_app": {"label": "开放平台管理", "order": 12, "risk": "critical"},
-    "openapi": {"label": "Open API 元接口", "order": 13, "risk": "low"},
-    "other": {"label": "其他", "order": 99, "risk": "medium"},
+    "health": {"label": "健康检查", "order": 0, "risk": "low", "group": "core", "groupLabel": "基础", "blueprint": "app"},
+    "auth": {"label": "认证 Auth", "order": 1, "risk": "medium", "group": "core", "groupLabel": "基础", "blueprint": "auth"},
+    "sys_user": {"label": "系统·用户", "order": 10, "risk": "high", "group": "system", "groupLabel": "系统管理", "blueprint": "sys_user"},
+    "sys_role": {"label": "系统·角色", "order": 11, "risk": "high", "group": "system", "groupLabel": "系统管理", "blueprint": "sys_role"},
+    "sys_dept": {"label": "系统·部门", "order": 12, "risk": "high", "group": "system", "groupLabel": "系统管理", "blueprint": "sys_dept"},
+    "sys_job": {"label": "系统·岗位", "order": 13, "risk": "high", "group": "system", "groupLabel": "系统管理", "blueprint": "sys_job"},
+    "sys_menu": {"label": "系统·菜单", "order": 14, "risk": "high", "group": "system", "groupLabel": "系统管理", "blueprint": "sys_menu"},
+    "camera": {"label": "摄像头 / 监控", "order": 20, "risk": "high", "group": "media", "groupLabel": "视频监控", "blueprint": "camera"},
+    "ai_model": {"label": "AI 模型与推理", "order": 30, "risk": "medium", "group": "ai", "groupLabel": "AI 能力", "blueprint": "ai_model"},
+    "training": {"label": "训练 / 标注", "order": 31, "risk": "high", "group": "ai", "groupLabel": "AI 能力", "blueprint": "training"},
+    "face": {"label": "人脸识别", "order": 32, "risk": "high", "group": "ai", "groupLabel": "AI 能力", "blueprint": "face"},
+    "vehicle": {"label": "车辆追踪", "order": 33, "risk": "medium", "group": "ai", "groupLabel": "AI 能力", "blueprint": "vehicle"},
+    "water": {"label": "水位检测", "order": 34, "risk": "low", "group": "ai", "groupLabel": "AI 能力", "blueprint": "water_level"},
+    "table": {"label": "表格识别", "order": 35, "risk": "low", "group": "ai", "groupLabel": "AI 能力", "blueprint": "table_recog"},
+    "badminton": {"label": "羽毛球分析", "order": 36, "risk": "low", "group": "ai", "groupLabel": "AI 能力", "blueprint": "badminton"},
+    "alert": {"label": "检测告警", "order": 37, "risk": "medium", "group": "ai", "groupLabel": "AI 能力", "blueprint": "alert"},
+    "open_app": {"label": "开放平台管理", "order": 90, "risk": "critical", "group": "platform", "groupLabel": "开放平台", "blueprint": "sys_open_app"},
+    "openapi": {"label": "Open API 元接口", "order": 91, "risk": "low", "group": "platform", "groupLabel": "开放平台", "blueprint": "openapi_v1"},
+    "other": {"label": "其他", "order": 99, "risk": "medium", "group": "other", "groupLabel": "其他", "blueprint": ""},
 }
 
-# url_prefix → domain
+# 长前缀优先
 PREFIX_DOMAIN = [
     ("/api/system/open-app", "open_app"),
-    ("/api/system/user", "system"),
-    ("/api/system/role", "system"),
-    ("/api/system/dept", "system"),
-    ("/api/system/job", "system"),
-    ("/api/system/menu", "system"),
+    ("/api/system/user", "sys_user"),
+    ("/api/system/role", "sys_role"),
+    ("/api/system/dept", "sys_dept"),
+    ("/api/system/job", "sys_job"),
+    ("/api/system/menu", "sys_menu"),
     ("/api/auth", "auth"),
     ("/api/camera", "camera"),
     ("/api/ai/model", "ai_model"),
@@ -226,24 +231,86 @@ def list_domains() -> list[dict]:
     by = {}
     for e in catalog:
         by.setdefault(e["domain"], []).append(e)
+    # 确保元数据中声明的域都出现（即使暂无路由）
+    for domain_id in DOMAIN_META:
+        by.setdefault(domain_id, [])
     domains = []
     for domain_id, items in by.items():
+        if domain_id == "other" and not items:
+            continue
         meta = DOMAIN_META.get(domain_id, DOMAIN_META["other"])
         bridgeable_n = sum(1 for x in items if x["bridgeable"])
         scopes = sorted({x["scope"] for x in items if x.get("scope")})
+        # 域全量覆盖 = 域 Scope + 该域全部细粒度 Scope
+        full_scopes = sorted({f"domain:{domain_id}", *scopes})
         domains.append({
             "id": domain_id,
             "label": meta["label"],
             "order": meta["order"],
             "risk": meta["risk"],
+            "group": meta.get("group") or "other",
+            "groupLabel": meta.get("groupLabel") or "其他",
+            "blueprint": meta.get("blueprint") or "",
             "domainScope": f"domain:{domain_id}",
+            "fullScopes": full_scopes,
             "endpointCount": len(items),
             "bridgeableCount": bridgeable_n,
             "scopes": scopes,
             "endpoints": sorted(items, key=lambda x: (x["path"], x["method"])),
+            "suggestedAppId": f"app_{domain_id}",
+            "suggestedName": f"{meta['label']}开放应用",
         })
     domains.sort(key=lambda d: d["order"])
     return domains
+
+
+def list_domain_groups() -> list[dict]:
+    """按 group 聚合域，供前端分类新建。"""
+    domains = list_domains()
+    groups: dict[str, dict] = {}
+    for d in domains:
+        gid = d["group"]
+        if gid not in groups:
+            groups[gid] = {
+                "id": gid,
+                "label": d["groupLabel"],
+                "domains": [],
+                "endpointCount": 0,
+                "bridgeableCount": 0,
+            }
+        groups[gid]["domains"].append(d)
+        groups[gid]["endpointCount"] += d["endpointCount"]
+        groups[gid]["bridgeableCount"] += d["bridgeableCount"]
+    # 稳定顺序
+    order = ["core", "system", "media", "ai", "platform", "other"]
+    out = []
+    for gid in order:
+        if gid in groups:
+            out.append(groups.pop(gid))
+    out.extend(groups.values())
+    return out
+
+
+def scopes_for_domain(domain_id: str, *, include_fine: bool = True) -> list[str]:
+    """某域「全覆盖」Scope 列表。"""
+    for d in list_domains():
+        if d["id"] == domain_id:
+            if include_fine:
+                return list(d["fullScopes"])
+            return [d["domainScope"]]
+    return [f"domain:{domain_id}"]
+
+
+def scopes_for_all_bridgeable_domains() -> list[str]:
+    scopes = []
+    for d in list_domains():
+        if d["id"] in ("open_app", "openapi"):
+            continue
+        scopes.extend(d["fullScopes"])
+    scopes += [
+        "vision:detect", "vision:ocr", "face:recognize", "water:read", "jobs:read",
+    ]
+    return sorted(set(scopes))
 
 
 def all_scopes() -> list[str]:

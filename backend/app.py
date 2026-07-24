@@ -77,6 +77,8 @@ def _migrate(db):
         ("webhook_url", "ADD COLUMN webhook_url VARCHAR(500) NULL"),
         ("webhook_secret", "ADD COLUMN webhook_secret VARCHAR(128) NULL"),
         ("webhook_events", "ADD COLUMN webhook_events TEXT NULL"),
+        ("domain_id", "ADD COLUMN domain_id VARCHAR(64) NULL"),
+        ("category", "ADD COLUMN category VARCHAR(32) NULL"),
     ])
 
 

@@ -17,6 +17,10 @@ class OpenApp(db.Model):
     qps_limit = db.Column(db.Integer, default=10)  # 每秒请求上限；0=不限
     daily_limit = db.Column(db.Integer, default=10000)  # 日调用上限；0=不限
     remark = db.Column(db.String(255))
+    # 归属业务域（与 openapi_catalog 域 id 对齐，便于分类管理）
+    domain_id = db.Column(db.String(64), index=True)
+    # 大类：core / system / media / ai / platform
+    category = db.Column(db.String(32), index=True)
     # P2 Webhook
     webhook_url = db.Column(db.String(500))
     webhook_secret = db.Column(db.String(128))
@@ -63,6 +67,8 @@ class OpenApp(db.Model):
             "qpsLimit": self.qps_limit,
             "dailyLimit": self.daily_limit,
             "remark": self.remark,
+            "domainId": self.domain_id,
+            "category": self.category,
             "webhookUrl": self.webhook_url,
             "webhookSecretSet": bool(self.webhook_secret),
             "webhookEvents": self.webhook_event_list(),
