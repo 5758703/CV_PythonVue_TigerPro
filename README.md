@@ -1,6 +1,41 @@
 # CV Python Tigerpro
 
-Flask + Vue 前后端分离 web 项目，实现 **RBAC 用户角色权限管理系统**。
+Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RBAC + 模型管理 + 检测 / 姿态 / 人脸 / 车辆 / OCR 等）。
+
+**许可证：** [Apache-2.0](./LICENSE) · **仓库：** https://github.com/5758703/CV_PythonVue_TigerPro
+
+## 快速开始
+
+```text
+backend/    Flask + SQLAlchemy + JWT + Ultralytics / InsightFace / OCR …
+frontend/   Vue3 + Vite + Element Plus + Pinia + ECharts
+```
+
+1. 后端：见 [`backend/README.md`](./backend/README.md)（推荐 Python 3.12 + `scripts/setup_venv.ps1` / `run_backend.ps1`）
+2. 前端：`cd frontend && npm install && npm run dev`
+3. 默认账号：`admin` / `admin123`（详见下文种子说明）
+
+## 参与贡献
+
+GitHub 是任务与决策的最终记录场所。统一流程：
+
+**Discussion → Issue（含验收标准）→ 认领 → PR → 评审 → Squash 合并 → CHANGELOG / 发版**
+
+| 文档 | 说明 |
+|------|------|
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
+| [GOVERNANCE.md](./GOVERNANCE.md) | 角色、权限、晋升与决策 |
+| [ROADMAP.md](./ROADMAP.md) | 版本规划 |
+| [SECURITY.md](./SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 行为准则 |
+| [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 依赖与模型许可证 |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
+| [新手任务（8 条）](./docs/community/good-first-issues.md) | good-first-issue 文案 |
+| [社区索引](./docs/community/README.md) | 文档导航 |
+
+---
+
+## 演示与截图
 
 ```
 backend/    Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended

@@ -44,4 +44,6 @@ backend/debug_*.jpg
 third_party/
 
 # ===== 设计/计划文档（本地保留，不推送远程）=====
-docs/
+docs/*
+!docs/community/
+!docs/community/**

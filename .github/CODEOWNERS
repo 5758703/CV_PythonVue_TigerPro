@@ -1,0 +1,34 @@
+# 默认：所有文件由 Maintainer 评审
+* @5758703
+
+# 后端核心
+/backend/routes/ @5758703
+/backend/models/ @5758703
+/backend/services/ @5758703
+/backend/inference.py @5758703
+/backend/seed.py @5758703
+/backend/config.py @5758703
+/backend/requirements.txt @5758703
+
+# 前端
+/frontend/ @5758703
+
+# 运维与脚本
+/backend/scripts/ @5758703
+/.github/ @5758703
+
+# 社区与文档（可随 Module Owner 任命追加评审人）
+/docs/ @5758703
+/CONTRIBUTING.md @5758703
+/GOVERNANCE.md @5758703
+/SECURITY.md @5758703
+/ROADMAP.md @5758703
+/THIRD_PARTY_NOTICES.md @5758703
+/CODE_OF_CONDUCT.md @5758703
+/CHANGELOG.md @5758703
+
+# ---------------------------------------------------------------------------
+# 任命 Module Owner 后，将对应目录追加为其 GitHub 用户名，例如：
+# /backend/services/vehicle_track.py @5758703 @some-vehicle-owner
+# /frontend/src/views/ai/face/ @5758703 @some-face-owner
+# ---------------------------------------------------------------------------

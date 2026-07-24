@@ -1,0 +1,57 @@
+name: 文档（Docs）
+description: README、贡献指南、部署文档等
+title: "[docs] "
+labels: ["docs", "needs-triage"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景和目标
+      description: 哪份文档有问题或缺失？读者是谁？
+    validations:
+      required: true
+  - type: dropdown
+    id: modules
+    attributes:
+      label: 涉及模块
+      multiple: true
+      options:
+        - docs
+        - devops
+        - backend
+        - frontend
+        - ai
+        - database
+      default: 0
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      value: |
+        - [ ] 文档路径与链接有效
+        - [ ] 命令可复制执行（如适用）
+        - [ ] 与代码现状一致
+    validations:
+      required: true
+  - type: checkboxes
+    id: needs
+    attributes:
+      label: 是否需要测试和文档
+      options:
+        - label: 需要按文档实际跑通一遍（冒烟）
+        - label: 仅文案修订，无需测试
+  - type: input
+    id: assignee_status
+    attributes:
+      label: 是否已有人员认领
+      value: "无人认领"
+    validations:
+      required: true

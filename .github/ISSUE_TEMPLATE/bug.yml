@@ -1,0 +1,89 @@
+name: Bug 报告
+description: 功能异常、崩溃、错误结果等
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请尽量提供可复现信息。安全漏洞请走 [SECURITY.md](../../SECURITY.md)，不要在此贴利用细节。
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景和目标
+      description: 发生了什么？你期望怎样？
+      placeholder: 例如：车辆追踪完成后结果视频黑屏无法播放……
+    validations:
+      required: true
+  - type: dropdown
+    id: modules
+    attributes:
+      label: 涉及模块
+      multiple: true
+      options:
+        - backend
+        - frontend
+        - ai
+        - devops
+        - database
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+      description: 可附截图、日志、接口返回
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 维护者可补充；报告人可先写「修复后应……」
+      value: |
+        - [ ] 按复现步骤不再出现该问题
+        - [ ] 相关回归路径手动验证通过
+    validations:
+      required: true
+  - type: checkboxes
+    id: needs
+    attributes:
+      label: 是否需要测试和文档
+      options:
+        - label: 需要补充/更新测试（或冒烟步骤）
+        - label: 需要更新文档
+  - type: input
+    id: assignee_status
+    attributes:
+      label: 是否已有人员认领
+      description: 无人认领请填「无人认领」
+      value: "无人认领"
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 建议优先级
+      options: [P0, P1, P2, P3]
+      default: 2
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境信息
+      placeholder: OS / Python / Node / 浏览器 / 相关模型 |

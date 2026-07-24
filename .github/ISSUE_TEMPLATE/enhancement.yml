@@ -1,0 +1,54 @@
+name: 增强 / 改进（Enhancement）
+description: 改进现有功能体验、性能或可维护性
+title: "[enhancement] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景和目标
+    validations:
+      required: true
+  - type: dropdown
+    id: modules
+    attributes:
+      label: 涉及模块
+      multiple: true
+      options:
+        - backend
+        - frontend
+        - ai
+        - devops
+        - database
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      value: |
+        - [ ] …
+        - [ ] 不引入无关重构
+    validations:
+      required: true
+  - type: checkboxes
+    id: needs
+    attributes:
+      label: 是否需要测试和文档
+      options:
+        - label: 需要测试 / 冒烟
+        - label: 需要文档
+  - type: input
+    id: assignee_status
+    attributes:
+      label: 是否已有人员认领
+      value: "无人认领"
+    validations:
+      required: true

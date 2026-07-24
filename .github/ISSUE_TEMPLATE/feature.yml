@@ -1,0 +1,77 @@
+name: 功能请求（Feature）
+description: 全新能力（建议先 Discussion）
+title: "[feature] "
+labels: ["feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        较大功能请先到 [Discussions](https://github.com/5758703/CV_PythonVue_TigerPro/discussions) 讨论方案，确认后再开本 Issue。
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景和目标
+      description: 要解决什么问题？用户价值是什么？
+    validations:
+      required: true
+  - type: input
+    id: discussion
+    attributes:
+      label: 相关 Discussion 链接
+      placeholder: https://github.com/5758703/CV_PythonVue_TigerPro/discussions/…
+  - type: dropdown
+    id: modules
+    attributes:
+      label: 涉及模块
+      multiple: true
+      options:
+        - backend
+        - frontend
+        - ai
+        - devops
+        - database
+        - docs
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+      description: 做完之后系统应呈现出什么能力/界面/接口
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 维护者会再审阅补充；请先给出可勾选清单
+      value: |
+        - [ ] …
+        - [ ] …
+        - [ ] 文档或 CHANGELOG 需要更新（如适用）
+    validations:
+      required: true
+  - type: checkboxes
+    id: needs
+    attributes:
+      label: 是否需要测试和文档
+      options:
+        - label: 需要测试 / 冒烟步骤
+        - label: 需要用户文档
+        - label: 需要更新 THIRD_PARTY_NOTICES（新依赖/模型时）
+  - type: input
+    id: assignee_status
+    attributes:
+      label: 是否已有人员认领
+      value: "无人认领"
+    validations:
+      required: true
+  - type: dropdown
+    id: difficulty
+    attributes:
+      label: 建议难度
+      options:
+        - good-first-issue
+        - help-wanted
+        - advanced
+      default: 1

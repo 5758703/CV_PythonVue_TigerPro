@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 想法与方案讨论（Discussion）
+    url: https://github.com/5758703/CV_PythonVue_TigerPro/discussions
+    about: 新功能想法请先开 Discussion，确认后再建 Issue。
+  - name: 安全漏洞（不要公开开 Issue）
+    url: https://github.com/5758703/CV_PythonVue_TigerPro/security/advisories/new
+    about: 请使用 Private Vulnerability Reporting 或见 SECURITY.md。
