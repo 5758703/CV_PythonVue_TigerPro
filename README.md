@@ -2,7 +2,7 @@
 
 Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RBAC + 模型管理 + 检测 / 姿态 / 人脸 / 车辆 / OCR 等）。
 
-**许可证：** [Apache-2.0](./LICENSE) · **仓库：** https://github.com/5758703/CV_PythonVue_TigerPro
+**许可证：** [Apache-2.0](./LICENSE)（[中文要点译本](./LICENSE.zh-CN.md)，仅供参考，以英文原版为准）· **仓库：** https://github.com/5758703/CV_PythonVue_TigerPro
 
 ## 快速开始
 
