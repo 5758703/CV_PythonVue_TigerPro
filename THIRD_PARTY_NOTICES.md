@@ -6,8 +6,6 @@
 
 本文为尽职调查清单，可能未穷尽；发现遗漏请提 PR 补全。最后核对：2026-07-25。
 
-> **说明：** 下表「来源」与 `backend/seed.py` 中对应 `model_key` 的 `source_url` 保持一致（或另行列出差异）。许可证以**上游页面当前声明**为准，拉取/商用前请复核。
-
 ---
 
 ## 1. 主要 Python / 前端依赖（摘要）
@@ -33,9 +31,7 @@
 | MobileSAM | 交互分割 | Apache-2.0 | git 依赖 |
 | Vue 3 / Vite / Element Plus / Pinia / Axios / ECharts | 前端 | MIT 等 | 见 package.json |
 
-> **重要（AGPL）：** Ultralytics（YOLO 训练/推理库及官方权重常见声明）为 **AGPL-3.0**。  
-> 若将本项目用于**闭源商业分发/SaaS**，请自行评估 AGPL 的网络交互开源义务，或购买 [Ultralytics 企业许可](https://www.ultralytics.com/license)，并与法务确认。  
-> 许可证全文：[GNU AGPL v3](https://www.gnu.org/licenses/agpl-3.0.html) · 上游副本：[ultralytics/LICENSE](https://github.com/ultralytics/ultralytics/blob/main/LICENSE)
+> **重要：** Ultralytics（YOLO）默认为 **AGPL-3.0**。若你将本项目用于闭源商业分发，请自行评估 AGPL 义务或购买 Ultralytics 企业许可，并与法务确认。
 
 ---
 
@@ -45,25 +41,18 @@
 
 下列条目已对照 `backend/seed.py` 的 `source_url`，并打开上游页面核对（核对日：**2026-07-25**）。
 
-| model_key | seed `source_url`（一致） | 任务 | 许可证（上游声明） | 可点击许可证 / 模型卡 | 一句话摘要 |
+| model_key / 名称 | 来源 | 任务 | 许可证（上游声明） | 许可证 / 模型卡链接 | 许可证注意 |
 |-----------|---------------------------|------|--------------------|------------------------|------------|
-| `yolo26n` / `yolo26s` | [Ultralytics/YOLO26](https://huggingface.co/Ultralytics/YOLO26)（seed 带 `#yolo26n.pt` / `#yolo26s.pt` 锚点） | 目标检测 | **AGPL-3.0** | [HF 模型卡 `license: agpl-3.0`](https://huggingface.co/Ultralytics/YOLO26) · [AGPL-3.0 全文](https://www.gnu.org/licenses/agpl-3.0.html) · [Ultralytics 许可说明/企业选项](https://www.ultralytics.com/license) · [GitHub LICENSE](https://github.com/ultralytics/ultralytics/blob/main/LICENSE) | **注意：AGPL。** 官方 YOLO26 权重与 Ultralytics 栈常按 AGPL 约束；闭源商用需评估开源义务或企业许可。 |
+| `yolo26n` / `yolo26s` | [Ultralytics/YOLO26](https://huggingface.co/Ultralytics/YOLO26)（`#yolo26n.pt` / `#yolo26s.pt`） | 目标检测 | **AGPL-3.0** | [HF 模型卡 `license: agpl-3.0`](https://huggingface.co/Ultralytics/YOLO26) · [AGPL-3.0 全文](https://www.gnu.org/licenses/agpl-3.0.html) · [Ultralytics 许可说明/企业选项](https://www.ultralytics.com/license) · [GitHub LICENSE](https://github.com/ultralytics/ultralytics/blob/main/LICENSE) | **注意：AGPL。** 官方 YOLO26 权重与 Ultralytics 栈常按 AGPL 约束；闭源商用需评估开源义务或企业许可。 |
 | `rf-detr-medium` | [Roboflow/rf-detr-medium](https://huggingface.co/Roboflow/rf-detr-medium) | 目标检测 | Apache-2.0 | [HF 模型卡 `license: apache-2.0`](https://huggingface.co/Roboflow/rf-detr-medium) · [Apache-2.0 全文](https://www.apache.org/licenses/LICENSE-2.0) | Roboflow RF-DETR Medium（COCO）；模型卡声明 Apache-2.0，商用相对友好，仍须保留版权与 NOTICE。 |
 | `mobile-sam` | [ChaoningZhang/MobileSAM](https://github.com/ChaoningZhang/MobileSAM) | 交互分割 | Apache-2.0 | [GitHub LICENSE（Apache-2.0）](https://github.com/ChaoningZhang/MobileSAM/blob/master/LICENSE) · [仓库页](https://github.com/ChaoningZhang/MobileSAM) | MobileSAM 代码与仓库许可证为 Apache-2.0；分发时保留许可证与归属声明。 |
 | `detr-resnet-50` | [facebook/detr-resnet-50](https://huggingface.co/facebook/detr-resnet-50) | 目标检测 | Apache-2.0 | [HF 模型卡 `license: apache-2.0`](https://huggingface.co/facebook/detr-resnet-50) · [Apache-2.0 全文](https://www.apache.org/licenses/LICENSE-2.0) | Facebook DETR + ResNet-50（COCO）；模型卡声明 Apache-2.0。 |
 | `vit-base` | [google/vit-base-patch16-224](https://huggingface.co/google/vit-base-patch16-224) | 图像分类 | Apache-2.0 | [HF 模型卡 `license: apache-2.0`](https://huggingface.co/google/vit-base-patch16-224) · [Apache-2.0 全文](https://www.apache.org/licenses/LICENSE-2.0) | Google ViT base（ImageNet）；模型卡声明 Apache-2.0。 |
-| `insightface-buffalo-s` / `insightface-buffalo-l` | [buffalo_s.zip](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip) / [buffalo_l.zip](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip) | 人脸识别 | **代码 MIT；权重默认非商用研究** | [InsightFace License 说明](https://github.com/deepinsight/insightface#license) · 商用识别包联系 [recognition-oss-pack@insightface.ai](mailto:recognition-oss-pack@insightface.ai) | **注意：特殊条款。** 代码 MIT 可商用；**含标注数据训练的模型（含 buffalo 等）默认仅非商用研究**；商用须另洽官方。另须遵守人脸数据隐私合规。 |
+| `insightface-buffalo-s` / `insightface-buffalo-l` | [buffalo_s.zip](https://github.com/deepinsight/insightface/releases/download/) / [buffalo_l.zip](https://github.com/deepinsight/insightface/releases/download/) | 人脸识别 | **代码 MIT；权重默认非商用研究** | [InsightFace License 说明](https://github.com/deepinsight/insightface#license) · 商用识别包联系 [recognition-oss-pack@insightface.ai](mailto:recognition-oss-pack@insightface.ai) | **注意：特殊条款。** 代码 MIT 可商用；**含标注数据训练的模型（含 buffalo 等）默认仅非商用研究**；商用须另洽官方。另须遵守人脸数据隐私合规。 |
 
-**核对方法摘要：**
+### 2.2 其余常用模型（许可证待继续补链）
 
-- YOLO26：HF API/模型卡 `cardData.license = agpl-3.0`，与 [ultralytics/ultralytics](https://github.com/ultralytics/ultralytics) 仓库 SPDX `AGPL-3.0` 一致。  
-- RF-DETR / DETR / ViT：HF 模型卡 frontmatter 均为 `license: apache-2.0`。  
-- MobileSAM：GitHub `license.spdx_id = Apache-2.0`，`LICENSE` 文件为 Apache 2.0 文本。  
-- InsightFace：官方 README「License」节写明代码 MIT、带标注训练数据的模型仅非商用研究；buffalo 等开源识别包商用需邮件申请。
-
-### 2.2 其余种子 / 常用模型（清单，许可证待继续补链）
-
-以下条目来源仍指向 seed 或业务绑定；**尚未全部做与 §2.1 同级的许可证链接核对**。使用前请打开对应模型卡/仓库确认。
+下列 `model_key` 来自 `backend/seed.py` 及业务绑定，许可证以**上游页面当前声明**为准，拉取前请复核。
 
 | model_key / 名称 | 来源 | 任务 | 许可证注意 |
 |------------------|------|------|------------|
