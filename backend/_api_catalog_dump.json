@@ -1,0 +1,3101 @@
+{
+  "stats": {
+    "endpointCount": 172,
+    "bridgeableCount": 148,
+    "domainCount": 18,
+    "scopeCount": 113
+  },
+  "domains": [
+    {
+      "id": "health",
+      "label": "健康检查",
+      "order": 0,
+      "risk": "low",
+      "group": "core",
+      "groupLabel": "基础",
+      "domainScope": "domain:health",
+      "endpointCount": 1,
+      "bridgeableCount": 1,
+      "scopes": [
+        "auth:public"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/health",
+          "openPath": "/openapi/v1/x/health",
+          "domain": "health",
+          "blueprint": "app",
+          "scope": "auth:public",
+          "auth": "public",
+          "summary": "服务健康检查",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "label": "认证 Auth",
+      "order": 1,
+      "risk": "medium",
+      "group": "core",
+      "groupLabel": "基础",
+      "domainScope": "domain:auth",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "auth:login",
+        "auth:public"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/auth/info",
+          "openPath": "/openapi/v1/x/auth/info",
+          "domain": "auth",
+          "blueprint": "auth",
+          "scope": "auth:login",
+          "auth": "login",
+          "summary": "登录用户身份：基本信息 + 角色标识 + 权限标识集合。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/login",
+          "openPath": "/openapi/v1/x/auth/login",
+          "domain": "auth",
+          "blueprint": "auth",
+          "scope": "auth:public",
+          "auth": "public",
+          "summary": "login",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "password",
+              "username"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/logout",
+          "openPath": "/openapi/v1/x/auth/logout",
+          "domain": "auth",
+          "blueprint": "auth",
+          "scope": "auth:public",
+          "auth": "public",
+          "summary": "logout",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/auth/register",
+          "openPath": "/openapi/v1/x/auth/register",
+          "domain": "auth",
+          "blueprint": "auth",
+          "scope": "auth:public",
+          "auth": "public",
+          "summary": "register",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "password",
+              "username"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/auth/routers",
+          "openPath": "/openapi/v1/x/auth/routers",
+          "domain": "auth",
+          "blueprint": "auth",
+          "scope": "auth:login",
+          "auth": "login",
+          "summary": "侧边栏路由：当前用户可见的目录/菜单(M/C)树。",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "sys_user",
+      "label": "系统·用户",
+      "order": 10,
+      "risk": "high",
+      "group": "system",
+      "groupLabel": "系统管理",
+      "domainScope": "domain:sys_user",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "system:user:add",
+        "system:user:edit",
+        "system:user:list",
+        "system:user:query",
+        "system:user:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/system/user",
+          "openPath": "/openapi/v1/x/system/user",
+          "domain": "sys_user",
+          "blueprint": "user",
+          "scope": "system:user:list",
+          "auth": "perm",
+          "summary": "list_users",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "pageNum",
+              "pageSize",
+              "status",
+              "username"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/user",
+          "openPath": "/openapi/v1/x/system/user",
+          "domain": "sys_user",
+          "blueprint": "user",
+          "scope": "system:user:add",
+          "auth": "perm",
+          "summary": "create_user",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "deptId",
+              "email",
+              "nickname",
+              "password",
+              "phone",
+              "sex",
+              "status",
+              "username"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/user/<int:uid>",
+          "openPath": "/openapi/v1/x/system/user/<int:uid>",
+          "domain": "sys_user",
+          "blueprint": "user",
+          "scope": "system:user:remove",
+          "auth": "perm",
+          "summary": "delete_user",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/user/<int:uid>",
+          "openPath": "/openapi/v1/x/system/user/<int:uid>",
+          "domain": "sys_user",
+          "blueprint": "user",
+          "scope": "system:user:query",
+          "auth": "perm",
+          "summary": "get_user",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/user/<int:uid>",
+          "openPath": "/openapi/v1/x/system/user/<int:uid>",
+          "domain": "sys_user",
+          "blueprint": "user",
+          "scope": "system:user:edit",
+          "auth": "perm",
+          "summary": "update_user",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "password"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sys_role",
+      "label": "系统·角色",
+      "order": 11,
+      "risk": "high",
+      "group": "system",
+      "groupLabel": "系统管理",
+      "domainScope": "domain:sys_role",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "system:role:add",
+        "system:role:edit",
+        "system:role:list",
+        "system:role:query",
+        "system:role:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/system/role",
+          "openPath": "/openapi/v1/x/system/role",
+          "domain": "sys_role",
+          "blueprint": "role",
+          "scope": "system:role:list",
+          "auth": "perm",
+          "summary": "list_roles",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "pageNum",
+              "pageSize",
+              "roleName"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/role",
+          "openPath": "/openapi/v1/x/system/role",
+          "domain": "sys_role",
+          "blueprint": "role",
+          "scope": "system:role:add",
+          "auth": "perm",
+          "summary": "create_role",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "dataScope",
+              "remark",
+              "roleKey",
+              "roleName",
+              "roleSort",
+              "status"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/role/<int:rid>",
+          "openPath": "/openapi/v1/x/system/role/<int:rid>",
+          "domain": "sys_role",
+          "blueprint": "role",
+          "scope": "system:role:remove",
+          "auth": "perm",
+          "summary": "delete_role",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/role/<int:rid>",
+          "openPath": "/openapi/v1/x/system/role/<int:rid>",
+          "domain": "sys_role",
+          "blueprint": "role",
+          "scope": "system:role:query",
+          "auth": "perm",
+          "summary": "get_role",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/role/<int:rid>",
+          "openPath": "/openapi/v1/x/system/role/<int:rid>",
+          "domain": "sys_role",
+          "blueprint": "role",
+          "scope": "system:role:edit",
+          "auth": "perm",
+          "summary": "update_role",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "sys_dept",
+      "label": "系统·部门",
+      "order": 12,
+      "risk": "high",
+      "group": "system",
+      "groupLabel": "系统管理",
+      "domainScope": "domain:sys_dept",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "system:dept:add",
+        "system:dept:edit",
+        "system:dept:list",
+        "system:dept:query",
+        "system:dept:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/system/dept",
+          "openPath": "/openapi/v1/x/system/dept",
+          "domain": "sys_dept",
+          "blueprint": "dept",
+          "scope": "system:dept:list",
+          "auth": "perm",
+          "summary": "list_depts",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "deptName"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/dept",
+          "openPath": "/openapi/v1/x/system/dept",
+          "domain": "sys_dept",
+          "blueprint": "dept",
+          "scope": "system:dept:add",
+          "auth": "perm",
+          "summary": "create_dept",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "deptName",
+              "email",
+              "leader",
+              "orderNum",
+              "parentId",
+              "phone",
+              "status"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/dept/<int:did>",
+          "openPath": "/openapi/v1/x/system/dept/<int:did>",
+          "domain": "sys_dept",
+          "blueprint": "dept",
+          "scope": "system:dept:remove",
+          "auth": "perm",
+          "summary": "delete_dept",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/dept/<int:did>",
+          "openPath": "/openapi/v1/x/system/dept/<int:did>",
+          "domain": "sys_dept",
+          "blueprint": "dept",
+          "scope": "system:dept:query",
+          "auth": "perm",
+          "summary": "get_dept",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/dept/<int:did>",
+          "openPath": "/openapi/v1/x/system/dept/<int:did>",
+          "domain": "sys_dept",
+          "blueprint": "dept",
+          "scope": "system:dept:edit",
+          "auth": "perm",
+          "summary": "update_dept",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "sys_job",
+      "label": "系统·岗位",
+      "order": 13,
+      "risk": "high",
+      "group": "system",
+      "groupLabel": "系统管理",
+      "domainScope": "domain:sys_job",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "system:job:add",
+        "system:job:edit",
+        "system:job:list",
+        "system:job:query",
+        "system:job:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/system/job",
+          "openPath": "/openapi/v1/x/system/job",
+          "domain": "sys_job",
+          "blueprint": "job",
+          "scope": "system:job:list",
+          "auth": "perm",
+          "summary": "list_jobs",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "pageNum",
+              "pageSize",
+              "status"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/job",
+          "openPath": "/openapi/v1/x/system/job",
+          "domain": "sys_job",
+          "blueprint": "job",
+          "scope": "system:job:add",
+          "auth": "perm",
+          "summary": "create_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "baseModel",
+              "batch",
+              "datasetId",
+              "device",
+              "epochs",
+              "imgsz",
+              "jobName",
+              "patience"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/job/<int:jid>",
+          "openPath": "/openapi/v1/x/system/job/<int:jid>",
+          "domain": "sys_job",
+          "blueprint": "job",
+          "scope": "system:job:remove",
+          "auth": "perm",
+          "summary": "delete_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/job/<int:jid>",
+          "openPath": "/openapi/v1/x/system/job/<int:jid>",
+          "domain": "sys_job",
+          "blueprint": "job",
+          "scope": "system:job:query",
+          "auth": "perm",
+          "summary": "get_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/job/<int:jid>",
+          "openPath": "/openapi/v1/x/system/job/<int:jid>",
+          "domain": "sys_job",
+          "blueprint": "job",
+          "scope": "system:job:edit",
+          "auth": "perm",
+          "summary": "update_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "sys_menu",
+      "label": "系统·菜单",
+      "order": 14,
+      "risk": "high",
+      "group": "system",
+      "groupLabel": "系统管理",
+      "domainScope": "domain:sys_menu",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "system:menu:add",
+        "system:menu:edit",
+        "system:menu:list",
+        "system:menu:query",
+        "system:menu:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/system/menu",
+          "openPath": "/openapi/v1/x/system/menu",
+          "domain": "sys_menu",
+          "blueprint": "menu",
+          "scope": "system:menu:list",
+          "auth": "perm",
+          "summary": "list_menus",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "menuName"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/menu",
+          "openPath": "/openapi/v1/x/system/menu",
+          "domain": "sys_menu",
+          "blueprint": "menu",
+          "scope": "system:menu:add",
+          "auth": "perm",
+          "summary": "create_menu",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "component",
+              "icon",
+              "menuName",
+              "menuType",
+              "orderNum",
+              "parentId",
+              "path",
+              "perms",
+              "status",
+              "visible"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/menu/<int:mid>",
+          "openPath": "/openapi/v1/x/system/menu/<int:mid>",
+          "domain": "sys_menu",
+          "blueprint": "menu",
+          "scope": "system:menu:remove",
+          "auth": "perm",
+          "summary": "delete_menu",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/menu/<int:mid>",
+          "openPath": "/openapi/v1/x/system/menu/<int:mid>",
+          "domain": "sys_menu",
+          "blueprint": "menu",
+          "scope": "system:menu:query",
+          "auth": "perm",
+          "summary": "get_menu",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/menu/<int:mid>",
+          "openPath": "/openapi/v1/x/system/menu/<int:mid>",
+          "domain": "sys_menu",
+          "blueprint": "menu",
+          "scope": "system:menu:edit",
+          "auth": "perm",
+          "summary": "update_menu",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "camera",
+      "label": "摄像头 / 监控",
+      "order": 20,
+      "risk": "high",
+      "group": "media",
+      "groupLabel": "视频监控",
+      "domainScope": "domain:camera",
+      "endpointCount": 8,
+      "bridgeableCount": 8,
+      "scopes": [
+        "camera:add",
+        "camera:edit",
+        "camera:list",
+        "camera:query",
+        "camera:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/camera",
+          "openPath": "/openapi/v1/x/camera",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:list",
+          "auth": "perm",
+          "summary": "list_cameras",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "name",
+              "pageNum",
+              "pageSize",
+              "status"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/camera",
+          "openPath": "/openapi/v1/x/camera",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:add",
+          "auth": "perm",
+          "summary": "create_camera",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/camera/<int:cid>",
+          "openPath": "/openapi/v1/x/camera/<int:cid>",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:remove",
+          "auth": "perm",
+          "summary": "delete_camera",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/camera/<int:cid>",
+          "openPath": "/openapi/v1/x/camera/<int:cid>",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:edit",
+          "auth": "perm",
+          "summary": "update_camera",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/camera/<int:cid>/stream",
+          "openPath": "/openapi/v1/x/camera/<int:cid>/stream",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:query",
+          "auth": "special",
+          "summary": "stream_camera",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "check",
+              "shared"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/camera/batch-delete",
+          "openPath": "/openapi/v1/x/camera/batch-delete",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:remove",
+          "auth": "perm",
+          "summary": "batch_delete_cameras",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/camera/devices",
+          "openPath": "/openapi/v1/x/camera/devices",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:query",
+          "auth": "perm",
+          "summary": "枚举服务器本机的 DirectShow 视频设备名（用于「获取本机摄像头」）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/camera/upload",
+          "openPath": "/openapi/v1/x/camera/upload",
+          "domain": "camera",
+          "blueprint": "camera",
+          "scope": "camera:add",
+          "auth": "perm",
+          "summary": "upload_video",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [
+              "file"
+            ],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "ai_model",
+      "label": "AI 模型与推理",
+      "order": 30,
+      "risk": "medium",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:ai_model",
+      "endpointCount": 37,
+      "bridgeableCount": 37,
+      "scopes": [
+        "ai:model:add",
+        "ai:model:download",
+        "ai:model:edit",
+        "ai:model:list",
+        "ai:model:query",
+        "ai:model:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/ai/model",
+          "openPath": "/openapi/v1/x/ai/model",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:list",
+          "auth": "perm",
+          "summary": "list_models",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "category",
+              "modelName",
+              "orderBy",
+              "orderDir",
+              "pageNum",
+              "pageSize",
+              "source",
+              "task"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model",
+          "openPath": "/openapi/v1/x/ai/model",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:add",
+          "auth": "perm",
+          "summary": "create_model",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "category",
+              "description",
+              "filePath",
+              "fileSize",
+              "library",
+              "modelKey",
+              "modelName",
+              "sourceUrl",
+              "status",
+              "task",
+              "version"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/ai/model/<int:mid>",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:remove",
+          "auth": "perm",
+          "summary": "delete_model",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/<int:mid>",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "get_model",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/ai/model/<int:mid>",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:edit",
+          "auth": "perm",
+          "summary": "update_model",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "modelKey"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/analyze-report",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/analyze-report",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "对已完成的图片检测结果做 DeepSeek AI 分析，生成正式检测报告。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/analyze-text",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/analyze-text",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "文本任务在线测试（transformers，如 FinBERT 情感分析）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/answer-question",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/answer-question",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "抽取式问答 QA（transformers）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/classify-image",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/classify-image",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "图像分类在线测试（transformers，如 ViT/ResNet）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/detect",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/detect",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "在线测试：用模型权重对上传图片做检测（YOLO 或 transformers）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/detect-video",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/detect-video",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "视频检测：启动异步逐帧任务，立即返回 jobId（前端轮询进度）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/<int:mid>/download",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/download",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:download",
+          "auth": "perm",
+          "summary": "下载本地权重文件到浏览器（仅单文件权重，目录型 transformers 模型不支持）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/extract-entities",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/extract-entities",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "命名实体识别 NER（transformers）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/fetch",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/fetch",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:add",
+          "auth": "perm",
+          "summary": "从模型来源拉取权重到服务器（按来源 URL 自动分流 HuggingFace / ModelScope / Roboflow）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/fill-mask",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/fill-mask",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "完形填空（transformers）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/generate-text",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/generate-text",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "文本生成/翻译/摘要（transformers）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/ocr",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/ocr",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "文字识别（GOT-OCR2）：上传图片 -> 识别文本。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/pose",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/pose",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "姿态估计（图片）：上传图片 -> 关键点 + 骨架图(base64)。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/pose-video",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/pose-video",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "姿态估计（视频）：启动异步逐帧任务，返回 jobId（进度复用 video-progress）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/segment",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/segment",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "实例/交互分割：RF-DETR-Seg / Ultralytics(YOLOE) / MobileSAM。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/segment-video",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/segment-video",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "实例分割视频：RF-DETR-Seg 或 Ultralytics(YOLOE)，异步任务。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/talking-head",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/talking-head",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "数字人合成：上传人像图 + 驱动音频，启动异步任务，返回 jobId。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/<int:mid>/talking-progress/<job_id>",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/talking-progress/<job_id>",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "查询数字人合成任务进度。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/track-frame",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/track-frame",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "摄像头实时追踪：单帧 -> 检测框 + 轨迹ID（前端叠画）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/track-video",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/track-video",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "目标追踪：启动异步逐帧 ByteTrack 任务，返回 jobId（进度复用 video-progress）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/transcribe",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/transcribe",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "语音识别在线测试（funasr SenseVoice）：上传音频 → 转写 + 情感/事件。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/tts",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/tts",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "文本转语音在线测试：文本 -> wav(base64)。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/tts-clone",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/tts-clone",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "零样本音色克隆（VoxCPM）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/<int:mid>/tts-speakers",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/tts-speakers",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "文本转语音可用音色列表（VibeVoice 等有预置音色；transformers TTS 无）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/<int:mid>/video-progress/<job_id>",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/video-progress/<job_id>",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "查询视频检测任务进度。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/<int:mid>/zero-shot",
+          "openPath": "/openapi/v1/x/ai/model/<int:mid>/zero-shot",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "零样本分类（transformers）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/batch-delete",
+          "openPath": "/openapi/v1/x/ai/model/batch-delete",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:remove",
+          "auth": "perm",
+          "summary": "batch_delete",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "ids"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/categories",
+          "openPath": "/openapi/v1/x/ai/model/categories",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:list",
+          "auth": "perm",
+          "summary": "list_categories",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/ocr-paddle",
+          "openPath": "/openapi/v1/x/ai/model/ocr-paddle",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "PaddleOCR（RapidOCR）：检测模型 + 识别模型 + 图片 -> 文本 + 框。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/output/<path:name>",
+          "openPath": "/openapi/v1/x/ai/model/output/<path:name>",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:query",
+          "auth": "perm",
+          "summary": "返回带框输出视频（防目录穿越）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/model/tasks",
+          "openPath": "/openapi/v1/x/ai/model/tasks",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:list",
+          "auth": "perm",
+          "summary": "库内实际出现的任务 slug 去重列表，供任务查询下拉。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/model/upload",
+          "openPath": "/openapi/v1/x/ai/model/upload",
+          "domain": "ai_model",
+          "blueprint": "ai_model",
+          "scope": "ai:model:add",
+          "auth": "perm",
+          "summary": "upload_weight",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [
+              "modelKey"
+            ],
+            "files": [
+              "file"
+            ],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "training",
+      "label": "训练 / 标注",
+      "order": 31,
+      "risk": "high",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:training",
+      "endpointCount": 43,
+      "bridgeableCount": 43,
+      "scopes": [
+        "ai:training:add",
+        "ai:training:edit",
+        "ai:training:list",
+        "ai:training:query",
+        "ai:training:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/ai/training/base-models",
+          "openPath": "/openapi/v1/x/ai/training/base-models",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "训练基座模型列表（含 YOLO11 / 本地羽毛球微调权重）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets",
+          "openPath": "/openapi/v1/x/ai/training/datasets",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:list",
+          "auth": "perm",
+          "summary": "list_datasets",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "name",
+              "pageNum",
+              "pageSize"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets",
+          "openPath": "/openapi/v1/x/ai/training/datasets",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "create_dataset",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "classNames",
+              "description",
+              "format",
+              "name",
+              "sourcePath",
+              "splitRatio"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/ai/training/datasets/<int:did>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:remove",
+          "auth": "perm",
+          "summary": "delete_dataset",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/<int:did>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "get_dataset",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/ai/training/datasets/<int:did>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "update_dataset",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "description",
+              "format",
+              "name",
+              "sourcePath"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/image/<stem>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/image/<stem>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "在线标注：获取样本原图。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/labels/<stem>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/labels/<stem>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "在线标注：删除样本标签文件。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/labels/<stem>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/labels/<stem>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "在线标注：读取 YOLO 标签。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "PUT",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/labels/<stem>",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/labels/<stem>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "在线标注：保存 YOLO 标签。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/samples",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/samples",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "在线标注：样本列表（含已标/未标统计）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "列出四套标注工具状态（互不影响的独立工作区）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/<tool>/apply",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/<tool>/apply",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "将工具工作区标签回灌到 raw/labels（供构建训练）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/<tool>/export",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/<tool>/export",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "X-AnyLabeling：导出独立标注包 zip。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/<tool>/import",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/<tool>/import",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "向指定工具工作区导入 YOLO 标签（zip 或多个 .txt），不自动覆盖 raw。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/cvat/pull",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/cvat/pull",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "annotate_cvat_pull",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/cvat/push",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/cvat/push",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "annotate_cvat_push",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/roboflow/pull",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/roboflow/pull",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "annotate_roboflow_pull",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "version"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/annotate/tools/roboflow/push",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/annotate/tools/roboflow/push",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "annotate_roboflow_push",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/build",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/build",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "多格式数据集 → YOLO 统一格式并生成 data.yaml。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/convert",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/convert",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "数据集格式转换。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/extract-frames",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/extract-frames",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "上传视频并按间隔抽帧到 raw/images/（用于后续在线标注）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/quality/analyze",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/quality/analyze",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "分析数据集标注质量（YOLO 配对、类别分布、框统计等）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/<int:did>/samples",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/samples",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "预览数据集文件列表与结构检测。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/datasets/<int:did>/upload",
+          "openPath": "/openapi/v1/x/ai/training/datasets/<int:did>/upload",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "上传数据集文件：图片、XML、YOLO txt、data.yaml 或 zip 压缩包。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/convert/types",
+          "openPath": "/openapi/v1/x/ai/training/datasets/convert/types",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "list_convert_types",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/datasets/formats",
+          "openPath": "/openapi/v1/x/ai/training/datasets/formats",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "返回支持的数据集格式列表（含详细说明）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs",
+          "openPath": "/openapi/v1/x/ai/training/jobs",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:list",
+          "auth": "perm",
+          "summary": "list_jobs",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "pageNum",
+              "pageSize",
+              "status"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs",
+          "openPath": "/openapi/v1/x/ai/training/jobs",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:add",
+          "auth": "perm",
+          "summary": "create_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "baseModel",
+              "batch",
+              "datasetId",
+              "device",
+              "epochs",
+              "imgsz",
+              "jobName",
+              "patience"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/ai/training/jobs/<int:jid>",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:remove",
+          "auth": "perm",
+          "summary": "delete_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs/<int:jid>",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "get_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs/<int:jid>/artifact/<path:filename>",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/artifact/<path:filename>",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "job_artifact",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs/<int:jid>/cancel",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/cancel",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "取消训练：落盘取消标志 + 状态 cancelling/cancelled，训练线程在 batch 回调中停止。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs/<int:jid>/deploy",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/deploy",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "将 best.pt 注册到模型管理（ai_model）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs/<int:jid>/download-export",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/download-export",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "download_export",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "file"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs/<int:jid>/export",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/export",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "export_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "format"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs/<int:jid>/logs",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/logs",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "增量读取训练/验证日志。query: type=train|val offset limit",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs/<int:jid>/progress",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/progress",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "job_progress",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs/<int:jid>/start",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/start",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:edit",
+          "auth": "perm",
+          "summary": "start_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs/<int:jid>/test",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/test",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "test_job",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [
+              "conf"
+            ],
+            "files": [
+              "image"
+            ],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/training/jobs/<int:jid>/validate",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/validate",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "启动后台验证任务（写 val.log），并用 validate-progress 查询结果。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/jobs/<int:jid>/validate-progress",
+          "openPath": "/openapi/v1/x/ai/training/jobs/<int:jid>/validate-progress",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "validate_progress",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/training/presets/badminton",
+          "openPath": "/openapi/v1/x/ai/training/presets/badminton",
+          "domain": "training",
+          "blueprint": "training",
+          "scope": "ai:training:query",
+          "auth": "perm",
+          "summary": "羽毛球检测自训预设：数据集默认值 + 推荐基座 + 部署字段。",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "face",
+      "label": "人脸识别",
+      "order": 32,
+      "risk": "high",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:face",
+      "endpointCount": 7,
+      "bridgeableCount": 7,
+      "scopes": [
+        "ai:face:add",
+        "ai:face:edit",
+        "ai:face:list",
+        "ai:face:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/ai/face/persons",
+          "openPath": "/openapi/v1/x/ai/face/persons",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:list",
+          "auth": "perm",
+          "summary": "list_persons",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "name"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/face/persons",
+          "openPath": "/openapi/v1/x/ai/face/persons",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:add",
+          "auth": "perm",
+          "summary": "create_person",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "employeeNo",
+              "name",
+              "remark",
+              "status"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/ai/face/persons/<int:pid>",
+          "openPath": "/openapi/v1/x/ai/face/persons/<int:pid>",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:remove",
+          "auth": "perm",
+          "summary": "delete_person",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/face/persons/<int:pid>",
+          "openPath": "/openapi/v1/x/ai/face/persons/<int:pid>",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:list",
+          "auth": "perm",
+          "summary": "get_person",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/ai/face/persons/<int:pid>",
+          "openPath": "/openapi/v1/x/ai/face/persons/<int:pid>",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:edit",
+          "auth": "perm",
+          "summary": "update_person",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "employeeNo",
+              "name",
+              "remark"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/face/persons/<int:pid>/enroll",
+          "openPath": "/openapi/v1/x/ai/face/persons/<int:pid>/enroll",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:add",
+          "auth": "perm",
+          "summary": "为人员登记人脸：multipart files[] + modelId。可多图取平均特征。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/face/recognize",
+          "openPath": "/openapi/v1/x/ai/face/recognize",
+          "domain": "face",
+          "blueprint": "face",
+          "scope": "ai:face:list",
+          "auth": "perm",
+          "summary": "上传一帧做 1:N 识别。form: file, modelId, threshold, detThresh, draw。",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "vehicle",
+      "label": "车辆追踪",
+      "order": 33,
+      "risk": "medium",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:vehicle",
+      "endpointCount": 7,
+      "bridgeableCount": 7,
+      "scopes": [
+        "ai:vehicle:list"
+      ],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/ai/vehicle/detect-image",
+          "openPath": "/openapi/v1/x/ai/vehicle/detect-image",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "上传单张车辆图片：检测车辆 + 车牌定位/OCR，返回标注图与明细。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/vehicle/export-records",
+          "openPath": "/openapi/v1/x/ai/vehicle/export-records",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "按 sessionId 导出过车记录 CSV 文本。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/vehicle/output/<path:name>",
+          "openPath": "/openapi/v1/x/ai/vehicle/output/<path:name>",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "返回车辆追踪输出视频（与模型页 output 同源目录，权限走车辆菜单）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/vehicle/reset-session",
+          "openPath": "/openapi/v1/x/ai/vehicle/reset-session",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "reset_session",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [
+              "sessionId"
+            ],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/vehicle/track-frame",
+          "openPath": "/openapi/v1/x/ai/vehicle/track-frame",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "实时单帧：车辆追踪 + 车牌 OCR + 测速 + 拥堵 + 越线。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/vehicle/track-video",
+          "openPath": "/openapi/v1/x/ai/vehicle/track-video",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "上传视频异步追踪，输出带标注 MP4 与过车记录。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/vehicle/video-progress/<job_id>",
+          "openPath": "/openapi/v1/x/ai/vehicle/video-progress/<job_id>",
+          "domain": "vehicle",
+          "blueprint": "vehicle",
+          "scope": "ai:vehicle:list",
+          "auth": "perm",
+          "summary": "video_progress",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "water",
+      "label": "水位检测",
+      "order": 34,
+      "risk": "low",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:water",
+      "endpointCount": 1,
+      "bridgeableCount": 1,
+      "scopes": [
+        "ai:water:list"
+      ],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/ai/water-level/detect",
+          "openPath": "/openapi/v1/x/ai/water-level/detect",
+          "domain": "water",
+          "blueprint": "water_level",
+          "scope": "ai:water:list",
+          "auth": "perm",
+          "summary": "水位检测：上传水位尺图片 + RapidOCR 模型 -> 水位值 + 标注图。",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "table",
+      "label": "表格识别",
+      "order": 35,
+      "risk": "low",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:table",
+      "endpointCount": 1,
+      "bridgeableCount": 1,
+      "scopes": [
+        "ai:table:list"
+      ],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/ai/table/recognize",
+          "openPath": "/openapi/v1/x/ai/table/recognize",
+          "domain": "table",
+          "blueprint": "table_recog",
+          "scope": "ai:table:list",
+          "auth": "perm",
+          "summary": "YOLO 检表 → RapidOCR → SLANet_plus → HTML/CSV。",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "badminton",
+      "label": "羽毛球分析",
+      "order": 36,
+      "risk": "low",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:badminton",
+      "endpointCount": 5,
+      "bridgeableCount": 5,
+      "scopes": [
+        "ai:badminton:list"
+      ],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/ai/badminton/analyze",
+          "openPath": "/openapi/v1/x/ai/badminton/analyze",
+          "domain": "badminton",
+          "blueprint": "badminton",
+          "scope": "ai:badminton:list",
+          "auth": "perm",
+          "summary": "启动羽毛球视频分析（异步）。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/badminton/artifact/<job_id>/<path:name>",
+          "openPath": "/openapi/v1/x/ai/badminton/artifact/<job_id>/<path:name>",
+          "domain": "badminton",
+          "blueprint": "badminton",
+          "scope": "ai:badminton:list",
+          "auth": "perm",
+          "summary": "artifact",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/badminton/detect-court",
+          "openPath": "/openapi/v1/x/ai/badminton/detect-court",
+          "domain": "badminton",
+          "blueprint": "badminton",
+          "scope": "ai:badminton:list",
+          "auth": "perm",
+          "summary": "提取首帧并自动检测球场四角（0-1 归一化），失败时 courtPoints 为空。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/ai/badminton/extract-frame",
+          "openPath": "/openapi/v1/x/ai/badminton/extract-frame",
+          "domain": "badminton",
+          "blueprint": "badminton",
+          "scope": "ai:badminton:list",
+          "auth": "perm",
+          "summary": "提取视频首帧，用于球场四角标注。form: autoDetect=1 时尝试自动检测四角。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/ai/badminton/progress/<job_id>",
+          "openPath": "/openapi/v1/x/ai/badminton/progress/<job_id>",
+          "domain": "badminton",
+          "blueprint": "badminton",
+          "scope": "ai:badminton:list",
+          "auth": "perm",
+          "summary": "progress",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "alert",
+      "label": "检测告警",
+      "order": 37,
+      "risk": "medium",
+      "group": "ai",
+      "groupLabel": "AI 能力",
+      "domainScope": "domain:alert",
+      "endpointCount": 8,
+      "bridgeableCount": 8,
+      "scopes": [
+        "ai:alert:edit",
+        "ai:alert:list",
+        "ai:alert:query",
+        "ai:alert:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/alerts/evaluate",
+          "openPath": "/openapi/v1/x/alerts/evaluate",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:list",
+          "auth": "perm",
+          "summary": "对一帧检测结果评估全部启用规则。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/alerts/events",
+          "openPath": "/openapi/v1/x/alerts/events",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:list",
+          "auth": "perm",
+          "summary": "list_events",
+          "bridgeable": true,
+          "hints": {
+            "query": [
+              "pageNum",
+              "pageSize",
+              "ruleKey",
+              "status"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/alerts/events/<int:eid>",
+          "openPath": "/openapi/v1/x/alerts/events/<int:eid>",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:remove",
+          "auth": "perm",
+          "summary": "remove_event",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/alerts/events/<int:eid>/ack",
+          "openPath": "/openapi/v1/x/alerts/events/<int:eid>/ack",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:edit",
+          "auth": "perm",
+          "summary": "ack_event",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/alerts/reset-runtime",
+          "openPath": "/openapi/v1/x/alerts/reset-runtime",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:list",
+          "auth": "perm",
+          "summary": "停止检测时清除连续帧/冷却状态。",
+          "bridgeable": true,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/alerts/rules",
+          "openPath": "/openapi/v1/x/alerts/rules",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:list",
+          "auth": "perm",
+          "summary": "list_rules",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/alerts/rules/<int:rid>",
+          "openPath": "/openapi/v1/x/alerts/rules/<int:rid>",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:query",
+          "auth": "perm",
+          "summary": "get_rule",
+          "bridgeable": true,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/alerts/rules/<int:rid>",
+          "openPath": "/openapi/v1/x/alerts/rules/<int:rid>",
+          "domain": "alert",
+          "blueprint": "alert",
+          "scope": "ai:alert:edit",
+          "auth": "perm",
+          "summary": "管理员更新告警规则：阈值 / 文案模板 / 叠加样式 / 启停。",
+          "bridgeable": true,
+          "hints": {}
+        }
+      ]
+    },
+    {
+      "id": "open_app",
+      "label": "开放平台管理",
+      "order": 90,
+      "risk": "critical",
+      "group": "platform",
+      "groupLabel": "开放平台",
+      "domainScope": "domain:open_app",
+      "endpointCount": 14,
+      "bridgeableCount": 0,
+      "scopes": [
+        "system:openapp:add",
+        "system:openapp:edit",
+        "system:openapp:list",
+        "system:openapp:query",
+        "system:openapp:remove"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/api/system/open-app",
+          "openPath": "/openapi/v1/x/system/open-app",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:list",
+          "auth": "perm",
+          "summary": "list_apps",
+          "bridgeable": false,
+          "hints": {
+            "query": [
+              "category",
+              "domainId",
+              "name",
+              "pageNum",
+              "pageSize"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/open-app",
+          "openPath": "/openapi/v1/x/system/open-app",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:add",
+          "auth": "perm",
+          "summary": "create_app",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "domainId",
+              "scopes"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/open-app/<int:aid>",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:remove",
+          "auth": "perm",
+          "summary": "delete_app",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/open-app/<int:aid>",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:query",
+          "auth": "perm",
+          "summary": "get_app",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/open-app/<int:aid>",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:edit",
+          "auth": "perm",
+          "summary": "update_app",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "category",
+              "dailyLimit",
+              "domainId",
+              "name",
+              "qpsLimit",
+              "remark",
+              "scopes"
+            ]
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/open-app/<int:aid>/keys",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>/keys",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:add",
+          "auth": "perm",
+          "summary": "create_key",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "name"
+            ]
+          }
+        },
+        {
+          "method": "DELETE",
+          "path": "/api/system/open-app/<int:aid>/keys/<int:kid>",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>/keys/<int:kid>",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:remove",
+          "auth": "perm",
+          "summary": "delete_key",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "PUT",
+          "path": "/api/system/open-app/<int:aid>/keys/<int:kid>",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>/keys/<int:kid>",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:edit",
+          "auth": "perm",
+          "summary": "update_key",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": [
+              "name"
+            ]
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/open-app/<int:aid>/logs",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>/logs",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:query",
+          "auth": "perm",
+          "summary": "list_logs",
+          "bridgeable": false,
+          "hints": {
+            "query": [
+              "pageNum",
+              "pageSize"
+            ],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/open-app/<int:aid>/usage",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>/usage",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:query",
+          "auth": "perm",
+          "summary": "近 N 日调用量 + 按 capability 聚合（供图表）。",
+          "bridgeable": false,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/open-app/<int:aid>/webhook/test",
+          "openPath": "/openapi/v1/x/system/open-app/<int:aid>/webhook/test",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:edit",
+          "auth": "perm",
+          "summary": "test_webhook",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/open-app/ensure-domains",
+          "openPath": "/openapi/v1/x/system/open-app/ensure-domains",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:add",
+          "auth": "perm",
+          "summary": "为每个 Blueprint 域各建/刷新一个应用，覆盖项目全部可分类接口。",
+          "bridgeable": false,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/api/system/open-app/from-domain",
+          "openPath": "/openapi/v1/x/system/open-app/from-domain",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:add",
+          "auth": "perm",
+          "summary": "按业务域一键新建应用，Scope 覆盖该域全部接口。",
+          "bridgeable": false,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/system/open-app/scopes",
+          "openPath": "/openapi/v1/x/system/open-app/scopes",
+          "domain": "open_app",
+          "blueprint": "open_app",
+          "scope": "system:openapp:list",
+          "auth": "perm",
+          "summary": "list_scopes",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "openapi",
+      "label": "Open API 元接口",
+      "order": 91,
+      "risk": "low",
+      "group": "platform",
+      "groupLabel": "开放平台",
+      "domainScope": "domain:openapi",
+      "endpointCount": 10,
+      "bridgeableCount": 0,
+      "scopes": [
+        "open:openapi:access"
+      ],
+      "endpoints": [
+        {
+          "method": "GET",
+          "path": "/openapi/v1/capabilities",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "capabilities",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/openapi/v1/docs",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "docs",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/openapi/v1/face/recognize",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "face_recognize",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [
+              "detThresh",
+              "draw",
+              "modelId",
+              "threshold"
+            ],
+            "files": [
+              "file",
+              "image"
+            ],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/openapi/v1/health",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "公开存活探测（无需 AppKey）。",
+          "bridgeable": false,
+          "hints": {}
+        },
+        {
+          "method": "GET",
+          "path": "/openapi/v1/jobs/<job_id>",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "get_job",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/openapi/v1/metrics",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "prometheus_metrics",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/openapi/v1/openapi.json",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "openapi_json",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [],
+            "files": [],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/openapi/v1/vision/detect",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "图片目标检测。form: file|image, modelId, conf?, draw?, async?",
+          "bridgeable": false,
+          "hints": {}
+        },
+        {
+          "method": "POST",
+          "path": "/openapi/v1/vision/ocr",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "vision_ocr",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [
+              "detId",
+              "recId"
+            ],
+            "files": [
+              "file",
+              "image"
+            ],
+            "jsonKeys": []
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/openapi/v1/water/read",
+          "openPath": null,
+          "domain": "openapi",
+          "blueprint": "openapi_v1",
+          "scope": "open:openapi:access",
+          "auth": "open",
+          "summary": "water_read",
+          "bridgeable": false,
+          "hints": {
+            "query": [],
+            "form": [
+              "detId",
+              "recId",
+              "waterYRatio"
+            ],
+            "files": [
+              "file",
+              "image"
+            ],
+            "jsonKeys": []
+          }
+        }
+      ]
+    }
+  ]
+}

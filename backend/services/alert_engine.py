@@ -18,6 +18,7 @@ _SUGGESTIONS = {
     "crowd-gathering": "评估区域承载上限、做人流疏导与分流；增派现场管理人员。",
     "ppe-no-hardhat": "立即提醒未戴安全帽人员补戴或撤离危险区域；入口增设佩戴检查。",
     "line-intrusion": "核查越线人员身份与事由；必要时广播劝离并联动门禁/安保。",
+    "zone-intrusion": "核查区域越界人员/车辆身份与事由；必要时广播劝离并联动门禁/安保。",
     "stranger-face": "核查现场人员身份；必要时登记访客或联动门禁/安保。",
 }
 
@@ -77,6 +78,19 @@ _DEFAULT_OVERLAY: dict[str, dict[str, Any]] = {
         "showTriangle": True,
         "triangleFill": "#FFFFFF",
         "triangleMark": "#722ED1",
+    },
+    "zone-intrusion": {
+        "fillColor": "#CF1322",
+        "borderColor": "#A8071A",
+        "textColor": "#FFFFFF",
+        "titleLines": ["ZONE ALARM"],
+        "subtitleLines": ["区域越界", "请勿闯入/离开"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#A8071A",
     },
     "stranger-face": {
         "fillColor": "#409EFF",
@@ -345,6 +359,134 @@ def _eval_line_crossing(rule, cfg: dict, detections: list[dict], ctx: dict | Non
         return detail
 
 
+def _parse_region(raw) -> list[list[float]] | None:
+    """解析归一化多边形 [[x,y],...]。"""
+    from services.track_zone import parse_region
+    return parse_region(raw)
+
+
+def _eval_zone_crossing(rule, cfg: dict, detections: list[dict], ctx: dict | None) -> dict | None:
+    """基于 trackId 检测框与多边形重叠面积（≥30%）判定有效进出。"""
+    from services.track_zone import (
+        DEFAULT_AREA_RATIO,
+        is_effectively_inside,
+        region_to_pixels,
+        zone_cross_by_area,
+    )
+
+    ctx = ctx or {}
+    region = _parse_region(ctx.get("region")) or _parse_region(cfg.get("region"))
+    if not region:
+        return None
+    min_conf = float(cfg.get("min_confidence", 0.25))
+    direction = (cfg.get("direction") or "both").strip().lower()
+    targets = _line_class_targets(cfg)
+    try:
+        area_ratio = float(cfg.get("area_ratio", cfg.get("areaRatio", DEFAULT_AREA_RATIO)))
+    except (TypeError, ValueError):
+        area_ratio = DEFAULT_AREA_RATIO
+    fw = ctx.get("frame_width") or ctx.get("frameWidth")
+    fh = ctx.get("frame_height") or ctx.get("frameHeight")
+    try:
+        fw = float(fw) if fw is not None else None
+        fh = float(fh) if fh is not None else None
+    except (TypeError, ValueError):
+        fw, fh = None, None
+    if not fw or not fh or fw <= 0 or fh <= 0:
+        return None
+
+    rid = rule.id if hasattr(rule, "id") else rule.get("id")
+    src = (ctx.get("source_key") or "default")
+    key = (rid, src)
+    frame_token = ctx.get("frame_token")
+
+    poly = region_to_pixels(region, int(fw), int(fh))
+    dets = _filter_dets(detections, min_conf)
+    with _lock:
+        st = _runtime.setdefault(
+            key, {"streak": 0, "last_fire_ts": 0.0, "centroids": {}, "crossed": set(), "inside": {}}
+        )
+        if frame_token is not None and st.get("frame_token") == frame_token:
+            return st.get("frame_detail")
+
+        inside_map: dict = st.setdefault("inside", {})
+        crossed = st.setdefault("crossed", set())
+        if not isinstance(crossed, set):
+            crossed = set()
+            st["crossed"] = crossed
+        hits = []
+
+        for d in dets:
+            if not _match_class(d.get("className", ""), targets):
+                continue
+            tid = d.get("trackId", d.get("track_id"))
+            if tid is None:
+                continue
+            try:
+                tid = int(tid)
+            except (TypeError, ValueError):
+                continue
+            bbox = d.get("bbox") or d.get("box")
+            if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+                continue
+            try:
+                x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+            except (TypeError, ValueError):
+                continue
+            # bbox 可能是归一化或像素
+            if max(x1, y1, x2, y2) <= 1.5:
+                px_bbox = [x1 * fw, y1 * fh, x2 * fw, y2 * fh]
+            else:
+                px_bbox = [x1, y1, x2, y2]
+            curr_in = is_effectively_inside(
+                px_bbox, poly,
+                area_ratio=area_ratio,
+                class_id=d.get("classId"),
+                class_name=d.get("className"),
+            )
+            prev_in = inside_map.get(tid)
+            inside_map[tid] = curr_in
+            if prev_in is None:
+                continue
+            cross_dir = zone_cross_by_area(bool(prev_in), bool(curr_in))
+            if cross_dir == 0:
+                continue
+            if direction == "in" and cross_dir <= 0:
+                continue
+            if direction == "out" and cross_dir >= 0:
+                continue
+            mark = (tid, cross_dir)
+            if mark in crossed:
+                continue
+            crossed.add(mark)
+            hits.append({
+                "trackId": tid,
+                "direction": "in" if cross_dir > 0 else "out",
+                "className": d.get("className"),
+                "confidence": d.get("confidence"),
+                "bbox": d.get("bbox"),
+            })
+
+        detail = None
+        if hits:
+            detail = {
+                "matched": True,
+                "crossCount": len(hits),
+                "direction": direction,
+                "region": region,
+                "areaRatio": area_ratio,
+                "classes": sorted({h["className"] for h in hits if h.get("className")}),
+                "maxConfidence": round(
+                    max((float(h.get("confidence") or 0) for h in hits), default=0), 4
+                ),
+                "crossings": hits[:10],
+            }
+        if frame_token is not None:
+            st["frame_token"] = frame_token
+            st["frame_detail"] = detail
+        return detail
+
+
 def _is_unmatched_face(d: dict) -> bool:
     """人脸识别结果是否为未匹配（陌生人）。"""
     if d.get("matched") is False:
@@ -403,6 +545,8 @@ def _condition_met(rule, detections: list[dict], ctx: dict | None = None) -> dic
         return _eval_count_threshold(rule, cfg, detections)
     if rtype == "line_crossing":
         return _eval_line_crossing(rule, cfg, detections, ctx)
+    if rtype == "zone_crossing":
+        return _eval_zone_crossing(rule, cfg, detections, ctx)
     if rtype == "unmatched_face":
         return _eval_unmatched_face(rule, cfg, detections)
     return None
@@ -462,6 +606,14 @@ def _title_message(rule, detail: dict) -> tuple[str, str]:
         title = f"越线入侵：{n} 次穿越" + (f"（{dirs}）" if dirs else "")
         msg = _SUGGESTIONS.get(key) or _SUGGESTIONS["line-intrusion"]
         return title, msg
+    if key == "zone-intrusion" or (
+        (rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")) == "zone_crossing"
+    ):
+        n = detail.get("crossCount", 0)
+        dirs = "、".join(sorted({c.get("direction", "") for c in (detail.get("crossings") or []) if c.get("direction")}))
+        title = f"区域越界：{n} 次穿越" + (f"（{dirs}）" if dirs else "")
+        msg = _SUGGESTIONS.get(key) or _SUGGESTIONS["zone-intrusion"]
+        return title, msg
     if key == "stranger-face" or (
         (rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")) == "unmatched_face"
     ):
@@ -515,6 +667,7 @@ def active_overlay_style(
     frame_width: float | None = None,
     frame_height: float | None = None,
     line: list | None = None,
+    region: list | None = None,
     source_key: str = "default",
     frame_token: str | None = None,
 ) -> dict | None:
@@ -524,6 +677,7 @@ def active_overlay_style(
         "frame_width": frame_width,
         "frame_height": frame_height,
         "line": line,
+        "region": region,
         "frame_token": frame_token,
     }
     matched: list[tuple[int, int, Any, dict]] = []
@@ -547,6 +701,7 @@ def active_overlay_style(
             "fire-smoke": 0,
             "ppe-no-hardhat": 5,
             "crowd-gathering": 10,
+            "zone-intrusion": 12,
             "line-intrusion": 15,
             "stranger-face": 8,
         }.get(key, 20)
@@ -598,6 +753,8 @@ def active_overlay_kind(
         return "ppe"
     if key == "line-intrusion":
         return "intrusion"
+    if key == "zone-intrusion":
+        return "zone"
     return "generic"
 
 
@@ -611,6 +768,7 @@ def evaluate_rules(
     frame_width: float | None = None,
     frame_height: float | None = None,
     line: list | None = None,
+    region: list | None = None,
     frame_token: str | None = None,
 ) -> list[dict]:
     """评估规则列表；满足连续帧 + 冷却则触发并可选持久化。"""
@@ -622,6 +780,7 @@ def evaluate_rules(
         "frame_width": frame_width,
         "frame_height": frame_height,
         "line": line,
+        "region": region,
         "frame_token": frame_token,
     }
 
@@ -632,8 +791,8 @@ def evaluate_rules(
         rid = rule.id if hasattr(rule, "id") else rule.get("id")
         cfg = rule.config() if hasattr(rule, "config") else (rule.get("config") or {})
         rtype = rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")
-        # 越线/陌生人：瞬时或低频事件，默认连续 1～2 帧
-        if rtype == "line_crossing":
+        # 越线/区域越界/陌生人：瞬时或低频事件，默认连续 1～2 帧
+        if rtype in ("line_crossing", "zone_crossing"):
             default_consec = 1
         elif rtype == "unmatched_face":
             default_consec = 2

@@ -213,6 +213,32 @@
             <el-slider v-model="editCfg.min_confidence" :min="0.05" :max="0.95" :step="0.05" show-input />
           </el-form-item>
         </template>
+        <template v-else-if="editForm.ruleType === 'zone_crossing'">
+          <el-form-item label="统计类别">
+            <el-input v-model="editCfg.classesText" placeholder="逗号分隔，如 person,car,bus" />
+            <div class="cfg-help">
+              <p>仅对这些类别做区域进出判定。追踪页自定义多边形会覆盖本默认区域。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="默认多边形">
+            <el-input
+              v-model="editCfg.regionText"
+              type="textarea"
+              :rows="3"
+              placeholder='归一化 JSON，如 [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]'
+            />
+          </el-form-item>
+          <el-form-item label="方向">
+            <el-radio-group v-model="editCfg.direction">
+              <el-radio value="both">双向</el-radio>
+              <el-radio value="in">仅进入</el-radio>
+              <el-radio value="out">仅离开</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="最低置信度">
+            <el-slider v-model="editCfg.min_confidence" :min="0.05" :max="0.95" :step="0.05" show-input />
+          </el-form-item>
+        </template>
         <template v-else-if="editForm.ruleType === 'unmatched_face'">
           <el-alert
             type="info"
@@ -369,6 +395,7 @@ const editCfg = reactive({
   classesText: '',
   class_names_text: '',
   lineText: '0.1,0.5,0.9,0.5',
+  regionText: '[[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]',
   direction: 'both',
   min_confidence: 0.3,
   min_count: 4,
@@ -409,6 +436,7 @@ const ruleTypeLabel = (t) =>
     class_presence: '类别出现',
     count_threshold: '数量阈值',
     line_crossing: '越线入侵',
+    zone_crossing: '区域越界',
     unmatched_face: '陌生人脸',
   }[t] || t)
 const severityLabel = (s) => ({ high: '高', medium: '中', low: '低' }[s] || s)
@@ -427,6 +455,11 @@ const ruleThreshold = (row) => {
     const dir = c.direction || 'both'
     const line = Array.isArray(c.line) ? c.line.map((n) => Number(n).toFixed(2)).join(',') : '-'
     return `线[${line}] 方向:${dir}`
+  }
+  if (row.ruleType === 'zone_crossing') {
+    const dir = c.direction || 'both'
+    const n = Array.isArray(c.region) ? c.region.length : 0
+    return `多边形 ${n} 点 方向:${dir}`
   }
   if (row.ruleType === 'unmatched_face') {
     return `未匹配底库 · 连续${c.consecutive_frames ?? 2}帧 · 冷却${c.cooldown_sec ?? 60}s`
@@ -510,11 +543,16 @@ const openEdit = (row) => {
   editCfg.classesText = (c.classes || []).join(',')
   editCfg.class_names_text = (c.class_names || [c.class_name || 'person']).join(',')
   editCfg.lineText = Array.isArray(c.line) ? c.line.join(',') : (c.line || '0.1,0.5,0.9,0.5')
+  editCfg.regionText = Array.isArray(c.region)
+    ? JSON.stringify(c.region)
+    : (c.region || '[[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]]')
   editCfg.direction = c.direction || 'both'
   editCfg.min_confidence = Number(c.min_confidence ?? 0.3)
   editCfg.min_count = Number(c.min_count ?? 4)
   editCfg.video_min_count = Number(c.video_min_count ?? c.min_count ?? 3)
-  editCfg.consecutive_frames = Number(c.consecutive_frames ?? (row.ruleType === 'line_crossing' ? 1 : 2))
+  editCfg.consecutive_frames = Number(c.consecutive_frames ?? (
+    row.ruleType === 'line_crossing' || row.ruleType === 'zone_crossing' ? 1 : 2
+  ))
   editCfg.cooldown_sec = Number(c.cooldown_sec ?? (row.ruleType === 'unmatched_face' ? 60 : 30))
   editCfg.title_template = c.title_template || ''
   editCfg.message_template = c.message_template || ''
@@ -524,6 +562,7 @@ const openEdit = (row) => {
     'ppe-no-hardhat': 5,
     'stranger-face': 8,
     'crowd-gathering': 10,
+    'zone-intrusion': 12,
     'line-intrusion': 15,
   })[row.ruleKey] ?? 20
   const defaultFill = ({
@@ -531,6 +570,7 @@ const openEdit = (row) => {
     'ppe-no-hardhat': '#FF7A00',
     'stranger-face': '#409EFF',
     'crowd-gathering': '#FFD400',
+    'zone-intrusion': '#CF1322',
     'line-intrusion': '#9254DE',
   })[row.ruleKey] || '#FFD400'
   editOv.enabled = ov.enabled !== false
@@ -594,6 +634,13 @@ const saveEdit = async () => {
       if (parts.length === 4 && parts.every((n) => Number.isFinite(n))) {
         config.line = parts
       }
+    } else if (editForm.ruleType === 'zone_crossing') {
+      config.classes = editCfg.classesText.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+      config.direction = editCfg.direction || 'both'
+      try {
+        const parsed = JSON.parse(editCfg.regionText || '[]')
+        if (Array.isArray(parsed) && parsed.length >= 3) config.region = parsed
+      } catch (_) { /* keep previous */ }
     } else {
       const names = editCfg.class_names_text.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
       config.class_names = names

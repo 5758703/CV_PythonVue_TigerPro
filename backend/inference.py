@@ -427,7 +427,7 @@ def _apply_alert_center_overlay(frame_bgr, style_or_kind, img_w, img_h):
     return cv2.cvtColor(np.asarray(pil.convert("RGB")), cv2.COLOR_RGB2BGR)
 
 
-def _video_alert_ctx(alert_rules, source_key, line=None):
+def _video_alert_ctx(alert_rules, source_key, line=None, region=None):
     """初始化视频逐帧告警上下文；无规则时返回 None。"""
     if not alert_rules:
         return None
@@ -440,13 +440,15 @@ def _video_alert_ctx(alert_rules, source_key, line=None):
         "max_person": 0,
         "overlay_frames": 0,
         "line": line,
+        "region": region,
     }
 
 
-def _apply_frame_video_alerts(plotted, detections, ctx, frames, fps, *, line=None):
+def _apply_frame_video_alerts(plotted, detections, ctx, frames, fps, *, line=None, region=None):
     """对单帧应用告警叠加并累计统计。
 
     line: 可选归一化警戒线，供 line_crossing 规则使用（追踪视频）。
+    region: 可选归一化多边形，供 zone_crossing 规则使用。
     """
     if not ctx:
         return plotted
@@ -463,6 +465,7 @@ def _apply_frame_video_alerts(plotted, detections, ctx, frames, fps, *, line=Non
     fh, fw = plotted.shape[:2]
     frame_token = f"{ctx.get('source_key', 'video')}-{frames}-{uuid.uuid4().hex[:8]}"
     alert_line = line if line is not None else ctx.get("line")
+    alert_region = region if region is not None else ctx.get("region")
     overlay_style = active_overlay_style(
         ctx["rule_objs"],
         detections,
@@ -470,6 +473,7 @@ def _apply_frame_video_alerts(plotted, detections, ctx, frames, fps, *, line=Non
         frame_width=fw,
         frame_height=fh,
         line=alert_line,
+        region=alert_region,
         source_key=ctx["source_key"],
         frame_token=frame_token,
     )
@@ -487,6 +491,7 @@ def _apply_frame_video_alerts(plotted, detections, ctx, frames, fps, *, line=Non
         frame_width=fw,
         frame_height=fh,
         line=alert_line,
+        region=alert_region,
         frame_token=frame_token,
     )
     for t in triggered:
@@ -1938,15 +1943,34 @@ def pose_video_rtmlib(model_key, abs_weight_path, src_path, dst_path, conf=0.25,
 
 
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
-                progress_cb=None, alert_rules=None, alert_source_key=None, classes=None):
+                progress_cb=None, alert_rules=None, alert_source_key=None, classes=None,
+                region=None, class_preset=None, zone_style=None):
     """YOLO + ByteTrack 逐帧追踪，输出带框+ID 视频。
 
     line: 归一化 [x1,y1,x2,y2]（0–1）或 None。非 None 时统计越线进/出。
+    region: 归一化多边形 [[x,y],...]（≥3 点）。启用 TrackZone 区域过滤 + 进出双向计数。
+    classes / class_preset: 类别过滤（person / vehicle / person_vehicle / all）。
+    zone_style: 区域样式 {"borderColor","fillColor","fillAlpha"}。
     alert_rules: 启用告警时传入规则 dict 列表（烧录中央叠加 + 触发统计）。
-    返回统计：帧数 / 唯一目标数 / 各类别去重计数 / 越线 {in,out,total} 或 None。
+    返回统计：帧数 / 唯一目标数 / 各类别去重计数 / 越线或区域进出统计。
     """
+    from services.track_zone import (
+        ZoneFlowCounter,
+        draw_zone_overlay,
+        occupancy_from_counter,
+        parse_region,
+        is_effectively_inside,
+        region_to_pixels,
+        resolve_classes,
+    )
+
     model = _get_model(abs_path)
-    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key or "track-video", line=line)
+    class_filter = resolve_classes(class_preset, classes)
+    region_norm = parse_region(region)
+    alert_ctx = _video_alert_ctx(
+        alert_rules, alert_source_key or "track-video",
+        line=line, region=region_norm,
+    )
 
     cap = None
     writer = None
@@ -1964,45 +1988,83 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
 
         px_line = None
         crossing = None
-        if line and len(line) == 4:
+        if line and len(line) == 4 and region_norm is None:
             px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h]
             crossing = {"in": 0, "out": 0, "total": 0}
+
+        px_region = None
+        zone_counter = None
+        if region_norm is not None:
+            px_region = region_to_pixels(region_norm, w, h)
+            zone_counter = ZoneFlowCounter()
 
         seen_ids = set()
         class_ids = {}            # className -> set(track_id)
         last_centroid = {}        # track_id -> (cx, cy)
         counted = set()           # (track_id, direction) 去抖
+        zone_occupancy = {"person": set(), "vehicle": set(), "other": set()}
         frames = 0
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
+            # 区域模式：全帧追踪以保持跨边界 ID，再用多边形做区域过滤/进出判断
+            # （等同 TrackZone 区域语义，并修复仅 mask 追踪时无法判断方向的问题）
             track_kw = dict(persist=True, tracker="bytetrack.yaml",
                             conf=conf, imgsz=imgsz, verbose=False, device="cpu")
-            if classes:
-                track_kw["classes"] = classes
+            if class_filter:
+                track_kw["classes"] = class_filter
             r = model.track(frame, **track_kw)[0]
             detections = []
+            frame_alarms = []
+            active_ids: set = set()
             if r.boxes is not None and r.boxes.id is not None:
                 names = r.names
                 ids = r.boxes.id.int().tolist()
                 clss = r.boxes.cls.int().tolist()
                 confs = r.boxes.conf.cpu().tolist()
                 xyxy = r.boxes.xyxy.cpu().tolist()
+                active_ids = set(int(t) for t in ids)
+                from services.track_zone import class_group
                 for tid, cid, conf_v, box in zip(ids, clss, confs, xyxy):
-                    seen_ids.add(tid)
                     name = names.get(cid, str(cid))
-                    class_ids.setdefault(name, set()).add(tid)
-                    detections.append({
+                    cx = (box[0] + box[2]) / 2.0
+                    cy = (box[1] + box[3]) / 2.0
+                    in_zone = True
+                    if px_region is not None:
+                        # ≥30% 面积重叠才算有效在区内（擦边不计）
+                        in_zone = is_effectively_inside(
+                            box, px_region, center=(cx, cy),
+                            class_id=int(cid), class_name=name,
+                        )
+                    # 区域过滤：统计/告警只关心区内或穿越事件；框仍绘制
+                    det = {
                         "className": name,
                         "classId": int(cid),
                         "confidence": round(float(conf_v), 4),
                         "bbox": [round(float(v), 1) for v in box],
                         "trackId": int(tid),
-                    })
+                        "inZone": bool(in_zone) if px_region is not None else None,
+                    }
+                    if px_region is None or in_zone:
+                        seen_ids.add(tid)
+                        class_ids.setdefault(name, set()).add(tid)
+                        detections.append(det)
+                    elif zone_counter is not None and int(tid) in zone_counter.id_history:
+                        # 仅保留有历史轨迹的区外目标，用于判定离开
+                        detections.append(det)
+
+                    if zone_counter is not None and px_region is not None:
+                        alarm = zone_counter.update(
+                            int(tid), (cx, cy), px_region,
+                            class_id=int(cid), class_name=name, bbox=box,
+                        )
+                        if alarm:
+                            frame_alarms.append(alarm)
+                        if in_zone:
+                            zone_occupancy[class_group(int(cid), name)].add(int(tid))
+
                     if px_line is not None:
-                        cx = (box[0] + box[2]) / 2.0
-                        cy = (box[1] + box[3]) / 2.0
                         prev = last_centroid.get(tid)
                         if prev is not None:
                             d = _crosses(prev, (cx, cy), px_line)
@@ -2018,13 +2080,25 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 names = r.names
                 for b in r.boxes:
                     cid = int(b.cls[0])
+                    box = b.xyxy[0].tolist()
+                    cx = (box[0] + box[2]) / 2.0
+                    cy = (box[1] + box[3]) / 2.0
+                    if px_region is not None and not is_effectively_inside(
+                        box, px_region, center=(cx, cy),
+                        class_id=cid, class_name=names.get(cid, str(cid)),
+                    ):
+                        continue
                     detections.append({
                         "className": names.get(cid, str(cid)),
                         "classId": cid,
                         "confidence": round(float(b.conf[0]), 4),
-                        "bbox": [round(float(v), 1) for v in b.xyxy[0].tolist()],
+                        "bbox": [round(float(v), 1) for v in box],
                         "trackId": None,
+                        "inZone": True if px_region is not None else None,
                     })
+
+            if zone_counter is not None:
+                frame_alarms.extend(zone_counter.end_frame(active_ids))
 
             annotated = r.plot()  # BGR，带框+ID
             if px_line is not None:
@@ -2034,10 +2108,20 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 cv2.putText(annotated, f"IN:{crossing['in']} OUT:{crossing['out']}",
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2,
                             cv2.LINE_AA)
+            if zone_counter is not None and px_region is not None:
+                zs = zone_style if isinstance(zone_style, dict) else {}
+                annotated = draw_zone_overlay(
+                    annotated, px_region, zone_counter, frame_alarms,
+                    occupancy=occupancy_from_counter(zone_counter),
+                    border_color=zs.get("borderColor") or zs.get("border_color"),
+                    fill_color=zs.get("fillColor") or zs.get("fill_color"),
+                    fill_alpha=zs.get("fillAlpha", zs.get("fill_alpha")),
+                )
             frames += 1
             if alert_ctx:
                 annotated = _apply_frame_video_alerts(
-                    annotated, detections, alert_ctx, frames, fps, line=line)
+                    annotated, detections, alert_ctx, frames, fps,
+                    line=line, region=region_norm)
             _write_bgr(writer, annotated, ew, eh)
             if progress_cb:
                 progress_cb(frames, total)
@@ -2046,6 +2130,10 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
             cap.release()
         if writer is not None:
             writer.close()
+
+    # 区域模式下用 zone 进出统计作为 crossing（兼容前端字段）
+    if zone_counter is not None:
+        crossing = zone_counter.snapshot()
 
     result = {
         "frames": frames,
@@ -2056,43 +2144,116 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
         "uniqueObjects": len(seen_ids),
         "classCounts": {name: len(idset) for name, idset in class_ids.items()},
         "crossing": crossing,
+        "zoneCrossing": zone_counter.snapshot() if zone_counter else None,
+        "zoneOccupancy": {
+            g: len(ids) for g, ids in zone_occupancy.items()
+        } if zone_counter else None,
+        "classPreset": class_preset,
+        "regionEnabled": region_norm is not None,
     }
     result.update(_video_alert_stats(alert_ctx))
     return result
 
 
-def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classes=None):
+def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classes=None,
+                region=None, class_preset=None, session_id=None):
     """单帧追踪（摄像头实时）：返回 检测框 + 轨迹ID（不画图，前端叠画）。
 
     reset=True（会话首帧）用 persist=False 重置跟踪器/ID；之后 persist=True 续追。
-    classes: 可选 YOLO 类别 ID 列表，仅追踪指定类别。
+    classes / class_preset: 可选类别过滤。
+    region: 归一化多边形，启用区域进出统计与 inZone 标记。
     """
+    from services.track_zone import (
+        get_or_create_zone_counter,
+        parse_region,
+        is_effectively_inside,
+        region_to_pixels,
+        resolve_classes,
+    )
+
     arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("无法解析图片")
     model = _get_model(abs_path)
+    class_filter = resolve_classes(class_preset, classes)
+    region_norm = parse_region(region)
+    h, w = img.shape[:2]
+    px_region = region_to_pixels(region_norm, w, h) if region_norm else None
+
+    if reset:
+        get_or_create_zone_counter(abs_path, session_id, reset=True)
+
     track_kw = dict(persist=not reset, tracker="bytetrack.yaml",
                     conf=conf, imgsz=imgsz, verbose=False, device="cpu")
-    if classes:
-        track_kw["classes"] = classes
+    if class_filter:
+        track_kw["classes"] = class_filter
     r = model.track(img, **track_kw)[0]
     names = r.names
     detections = []
+    frame_alarms = []
+    zone_snap = None
+    zone_occ = None
     if r.boxes is not None:
         ids = (r.boxes.id.int().tolist()
                if r.boxes.id is not None else [None] * len(r.boxes))
+        counter = (
+            get_or_create_zone_counter(abs_path, session_id, reset=False)
+            if px_region is not None else None
+        )
+        active_ids = set()
         for b, tid in zip(r.boxes, ids):
             cid = int(b.cls[0])
-            detections.append({
+            box = [round(float(v), 1) for v in b.xyxy[0].tolist()]
+            cx = (box[0] + box[2]) / 2.0
+            cy = (box[1] + box[3]) / 2.0
+            in_zone = (
+                is_effectively_inside(
+                    box, px_region, center=(cx, cy),
+                    class_id=cid, class_name=names.get(cid, str(cid)),
+                )
+                if px_region is not None else None
+            )
+            det = {
                 "className": names.get(cid, str(cid)),
                 "classId": cid,
                 "confidence": round(float(b.conf[0]), 4),
-                "bbox": [round(float(v), 1) for v in b.xyxy[0].tolist()],
+                "bbox": box,
                 "trackId": tid,
-            })
-    h, w = img.shape[:2]
-    return {"detections": detections, "width": w, "height": h}
+                "inZone": in_zone,
+            }
+            detections.append(det)
+            if counter is not None and tid is not None and px_region is not None:
+                active_ids.add(int(tid))
+                alarm = counter.update(
+                    int(tid), (cx, cy), px_region,
+                    class_id=cid, class_name=det["className"], bbox=box,
+                )
+                if alarm:
+                    det["alarm"] = alarm["event"]
+                    frame_alarms.append(alarm)
+        if counter is not None:
+            for a in counter.end_frame(active_ids):
+                frame_alarms.append(a)
+            zone_snap = counter.snapshot()
+            from services.track_zone import occupancy_from_counter
+            zone_occ = occupancy_from_counter(counter)
+    elif px_region is not None:
+        # 无检测时仍推进会话并返回累计计数，供前端框内绘制
+        counter = get_or_create_zone_counter(abs_path, session_id, reset=False)
+        counter.end_frame(set())
+        zone_snap = counter.snapshot()
+        from services.track_zone import occupancy_from_counter
+        zone_occ = occupancy_from_counter(counter)
+    return {
+        "detections": detections,
+        "width": w,
+        "height": h,
+        "zoneCrossing": zone_snap,
+        "zoneOccupancy": zone_occ,
+        "alarms": frame_alarms,
+        "regionEnabled": region_norm is not None,
+    }
 
 
 # ------------------------------------------------------------ transformers 文本任务

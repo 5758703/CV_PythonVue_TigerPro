@@ -54,6 +54,58 @@ def _parse_line(raw):
     return None
 
 
+def _parse_region(raw):
+    if not raw:
+        return None
+    try:
+        from services.track_zone import parse_region
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return parse_region(data)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_zone_style():
+    raw = request.form.get("zoneStyle") or request.form.get("zone_style")
+    if raw:
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                return {
+                    "borderColor": parsed.get("borderColor") or parsed.get("border_color"),
+                    "fillColor": parsed.get("fillColor") or parsed.get("fill_color"),
+                    "fillAlpha": parsed.get("fillAlpha", parsed.get("fill_alpha")),
+                }
+        except (TypeError, ValueError):
+            pass
+    border_c = request.form.get("zoneBorderColor") or request.form.get("zone_border_color")
+    fill_c = request.form.get("zoneFillColor") or request.form.get("zone_fill_color")
+    if border_c or fill_c:
+        return {"borderColor": border_c, "fillColor": fill_c}
+    return None
+
+
+def _resolve_track_classes(*, vehicle_only_default: bool = True):
+    """classPreset 优先；否则 vehicleOnly → 仅车辆类。"""
+    from services.track_zone import resolve_classes
+
+    class_preset = (request.form.get("classPreset") or request.form.get("class_preset") or "").strip() or None
+    classes = None
+    raw_classes = request.form.get("classes")
+    if raw_classes:
+        try:
+            parsed = json.loads(raw_classes)
+            if isinstance(parsed, list):
+                classes = [int(v) for v in parsed]
+        except (TypeError, ValueError):
+            classes = None
+    resolved = resolve_classes(class_preset, classes)
+    if resolved is not None:
+        return resolved, class_preset
+    vehicle_only = _parse_bool("vehicleOnly", vehicle_only_default)
+    return (DEFAULT_VEHICLE_CLASSES if vehicle_only else None), class_preset
+
+
 def _parse_float(name, default=None):
     raw = request.form.get(name)
     if raw is None or str(raw).strip() == "":
@@ -138,6 +190,7 @@ def _resolve_models():
 
 def _vehicle_worker(job_id, cfg_bundle):
     from inference import _get_model, _open_h264, _write_bgr, _video_alert_ctx, _apply_frame_video_alerts, _video_alert_stats
+    from services.track_zone import region_to_pixels
     from services.vehicle_track import (
         DEFAULT_VEHICLE_CLASSES,
         draw_vehicle_hud,
@@ -151,9 +204,15 @@ def _vehicle_worker(job_id, cfg_bundle):
     conf = cfg_bundle["conf"]
     imgsz = cfg_bundle["imgsz"]
     line = cfg_bundle["line"]
-    classes = cfg_bundle.get("classes") or DEFAULT_VEHICLE_CLASSES
+    region_norm = cfg_bundle.get("region")
+    zone_style = cfg_bundle.get("zone_style")
+    classes = cfg_bundle.get("classes")
+    if classes is None and not cfg_bundle.get("class_preset"):
+        classes = DEFAULT_VEHICLE_CLASSES
     session = get_session(cfg_bundle["session_id"], reset=True)
-    alert_ctx = _video_alert_ctx(cfg_bundle.get("alert_rules"), job_id, line=line)
+    alert_ctx = _video_alert_ctx(
+        cfg_bundle.get("alert_rules"), job_id, line=line, region=region_norm,
+    )
 
     cap = None
     writer = None
@@ -172,6 +231,10 @@ def _vehicle_worker(job_id, cfg_bundle):
             cfg_bundle["progress_cb"](0, total)
         writer, ew, eh = _open_h264(dst_path, fps, w, h)
         px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h] if line else None
+        px_region = region_to_pixels(region_norm, w, h) if region_norm else None
+        # 区域模式优先，不画越线计数线
+        if px_region is not None:
+            px_line = None
 
         model = _get_model(detect_path)
         # 预加载车牌模型：失败则降级为无车牌检测（启发式 ROI），避免首帧卡死
@@ -222,16 +285,25 @@ def _vehicle_worker(job_id, cfg_bundle):
                 enable_speed=cfg_bundle.get("enable_speed", True),
                 meters_per_pixel=cfg_bundle.get("meters_per_pixel"),
                 line_px=px_line,
+                region_px=px_region,
                 plate_conf=cfg_bundle.get("plate_conf", 0.2),
                 ocr_cooldown_sec=cfg_bundle.get("ocr_cooldown_sec", 0.55),
                 congestion_thresholds=cfg_bundle.get("congestion_thresholds"),
             )
             congestion_samples.append(enriched.get("congestion", {}).get("level"))
-            annotated = draw_vehicle_hud(frame, enriched, line_px=px_line)
+            annotated = draw_vehicle_hud(
+                frame, enriched,
+                line_px=px_line,
+                region_px=px_region,
+                zone_style=zone_style,
+                zone_counter=session.zone_counter,
+            )
             frames += 1
             if alert_ctx:
                 annotated = _apply_frame_video_alerts(
-                    annotated, enriched.get("detections") or [], alert_ctx, frames, fps, line=line)
+                    annotated, enriched.get("detections") or [], alert_ctx, frames, fps,
+                    line=line, region=region_norm,
+                )
             _write_bgr(writer, annotated, ew, eh)
             if cfg_bundle.get("progress_cb"):
                 cfg_bundle["progress_cb"](frames, total)
@@ -243,7 +315,12 @@ def _vehicle_worker(job_id, cfg_bundle):
             "width": ew,
             "height": eh,
             "uniqueObjects": len(session.track_history),
-            "crossing": dict(session.crossing),
+            "crossing": (
+                session.zone_counter.snapshot()
+                if session.zone_counter is not None
+                else dict(session.crossing)
+            ),
+            "regionEnabled": px_region is not None,
             "records": session.records,
             "recordCount": len(session.records),
             "congestionSummary": {
@@ -369,7 +446,7 @@ def detect_image_api():
 @vehicle_bp.post("/track-frame")
 @permission_required("ai:vehicle:list")
 def track_frame():
-    """实时单帧：车辆追踪 + 车牌 OCR + 测速 + 拥堵 + 越线。"""
+    """实时单帧：车辆追踪 + 车牌 OCR + 测速 + 拥堵 + 越线/区域进出。"""
     file = request.files.get("file")
     if file is None or not file.filename:
         return jsonify(code=400, message="未接收到图片（field: file）"), 400
@@ -381,14 +458,15 @@ def track_frame():
     conf = _parse_float("conf", 0.25) or 0.25
     imgsz = int(_parse_float("imgsz", 640) or 640)
     line = _parse_line(request.form.get("line"))
+    region = _parse_region(request.form.get("region"))
+    zone_style = _parse_zone_style()
+    classes, _class_preset = _resolve_track_classes(vehicle_only_default=True)
     enable_ocr = _parse_bool("enableOcr", True)
     enable_speed = _parse_bool("enableSpeed", True)
     meters_per_pixel = _parse_float("metersPerPixel")
     plate_conf = _parse_float("plateConf", 0.2) or 0.2
     session_id = (request.form.get("sessionId") or "").strip() or uuid.uuid4().hex
     reset = _parse_bool("reset", False)
-    vehicle_only = _parse_bool("vehicleOnly", True)
-    classes = DEFAULT_VEHICLE_CLASSES if vehicle_only else None
     congestion = {
         "light": int(_parse_float("congestionLight", 3) or 3),
         "moderate": int(_parse_float("congestionModerate", 8) or 8),
@@ -399,6 +477,7 @@ def track_frame():
     try:
         import cv2
         from inference import track_frame as yolo_track_frame
+        from services.track_zone import region_to_pixels
         from services.vehicle_track import enrich_vehicle_frame, get_session
 
         arr = __import__("numpy").frombuffer(image_bytes, __import__("numpy").uint8)
@@ -413,6 +492,9 @@ def track_frame():
         session = get_session(session_id, reset=reset)
         h, w = img.shape[:2]
         px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h] if line else None
+        px_region = region_to_pixels(region, w, h) if region else None
+        if px_region is not None:
+            px_line = None
 
         enriched = enrich_vehicle_frame(
             img,
@@ -424,11 +506,14 @@ def track_frame():
             enable_speed=enable_speed,
             meters_per_pixel=meters_per_pixel if meters_per_pixel and meters_per_pixel > 0 else None,
             line_px=px_line,
+            region_px=px_region,
             plate_conf=plate_conf,
             ocr_cooldown_sec=0.5,
             congestion_thresholds=congestion,
         )
         enriched["sessionId"] = session_id
+        if zone_style:
+            enriched["zoneStyle"] = zone_style
         return jsonify(code=0, message="ok", data=enriched)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"车辆追踪失败：{e}"), 500
@@ -453,18 +538,24 @@ def track_video():
     conf = _parse_float("conf", 0.25) or 0.25
     imgsz = int(_parse_float("imgsz", 640) or 640)
     line = _parse_line(request.form.get("line"))
+    region = _parse_region(request.form.get("region"))
+    zone_style = _parse_zone_style()
+    classes, class_preset = _resolve_track_classes(vehicle_only_default=True)
     enable_ocr = _parse_bool("enableOcr", True)
     enable_speed = _parse_bool("enableSpeed", True)
     meters_per_pixel = _parse_float("metersPerPixel")
     plate_conf = _parse_float("plateConf", 0.2) or 0.2
     session_id = uuid.uuid4().hex
-    vehicle_only = _parse_bool("vehicleOnly", True)
-    classes = DEFAULT_VEHICLE_CLASSES if vehicle_only else None
     congestion = {
         "light": int(_parse_float("congestionLight", 3) or 3),
         "moderate": int(_parse_float("congestionModerate", 8) or 8),
         "heavy": int(_parse_float("congestionHeavy", 15) or 15),
     }
+
+    if region and not line:
+        pass  # 区域模式
+    elif region and line:
+        line = None  # 区域优先
 
     alert_rules = None
     if _parse_bool("alertEnabled", False):
@@ -507,6 +598,9 @@ def track_video():
         "conf": conf,
         "imgsz": imgsz,
         "line": line,
+        "region": region,
+        "zone_style": zone_style,
+        "class_preset": class_preset,
         "enable_ocr": enable_ocr and models.get("ocr_fn") is not None,
         "enable_speed": enable_speed,
         "meters_per_pixel": meters_per_pixel if meters_per_pixel and meters_per_pixel > 0 else None,

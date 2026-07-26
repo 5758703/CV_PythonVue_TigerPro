@@ -69,10 +69,31 @@
                 <el-option :value="320" label="320" />
               </el-select>
             </el-form-item>
+            <el-form-item v-if="mode !== 'image'" label="计数方式">
+              <el-select v-model="countMode" style="width: 130px" :disabled="busy" @change="onCountModeChange">
+                <el-option label="多边形区域" value="zone" />
+                <el-option label="计数线" value="line" />
+                <el-option label="不计数" value="none" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="mode !== 'image'" label="统计类别">
+              <el-select v-model="classPreset" style="width: 120px" :disabled="busy">
+                <el-option label="仅车" value="vehicle" />
+                <el-option label="人+车" value="person_vehicle" />
+                <el-option label="仅人" value="person" />
+                <el-option label="全部" value="all" />
+              </el-select>
+            </el-form-item>
+            <el-form-item v-if="mode !== 'image' && countMode === 'zone'" label="边框色">
+              <el-color-picker v-model="zoneBorderColor" :disabled="busy" />
+            </el-form-item>
+            <el-form-item v-if="mode !== 'image' && countMode === 'zone'" label="填充色">
+              <el-color-picker v-model="zoneFillColor" show-alpha :disabled="busy" />
+            </el-form-item>
             <el-form-item>
               <el-checkbox v-model="enableOcr" :disabled="busy">号牌 OCR</el-checkbox>
               <el-checkbox v-if="mode !== 'image'" v-model="enableSpeed" :disabled="busy" style="margin-left: 8px">测速</el-checkbox>
-              <el-checkbox v-model="vehicleOnly" :disabled="busy" style="margin-left: 8px">仅车辆类</el-checkbox>
+              <el-checkbox v-if="mode === 'image'" v-model="vehicleOnly" :disabled="busy" style="margin-left: 8px">仅车辆类</el-checkbox>
             </el-form-item>
             <el-form-item v-if="enableSpeed && mode !== 'image'" label="米/像素">
               <el-input-number v-model="metersPerPixel" :min="0" :step="0.001" :precision="4" style="width: 130px" :disabled="busy" />
@@ -119,6 +140,8 @@
                 <el-button v-else type="danger" :icon="SwitchButton" @click="liveStop">停止</el-button>
                 <el-checkbox v-model="alertEnabled" :disabled="liveRunning" style="margin-left: 12px">启用告警</el-checkbox>
                 <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
+                <el-button v-if="liveRegion" link type="primary" @click="clearLiveRegion">清除区域</el-button>
+                <el-button v-if="countMode==='zone' && liveRegionPts.length >= 3 && !liveRegion" link type="success" @click="finishLiveRegion">闭合区域</el-button>
                 <el-button v-if="recordCount" link type="primary" :icon="Download" @click="exportCsv">导出 CSV</el-button>
                 <el-button link type="primary" @click="activeTab = 'results'">实时画面</el-button>
               </div>
@@ -141,7 +164,7 @@
             type="info"
             :closable="false"
             class="flow-tip"
-            title="车牌推荐：YOLO26s 四点 pose（透视）→ YOLO26n bbox → OBB；OCR 推荐 PP-OCRv6 small det+rec。"
+            title="支持多边形区域/计数线的人车进出统计；车牌推荐 YOLO26s 四点 pose → YOLO26n bbox；OCR 推荐 PP-OCRv6 small det+rec。"
           />
         </el-card>
 
@@ -165,14 +188,24 @@
             <el-col v-if="file" :xs="24" :lg="previewUrl ? 12 : 24">
               <el-card shadow="never" class="cfg-card">
                 <div class="line-tip">
-                  首帧画计数线（可选）：点两点。
-                  <el-button link type="primary" @click="clearFileLine">清除线</el-button>
+                  <template v-if="countMode === 'zone'">
+                    绘制多边形：依次点击添加顶点（≥3），完成后点「闭合区域」。
+                    <el-button link type="success" :disabled="fileRegionPts.length < 3" @click="finishFileRegion">闭合区域</el-button>
+                    <el-button link type="primary" @click="clearFileRegion">清除区域</el-button>
+                    <span v-if="fileRegion" class="meta">已设置监控区域（{{ fileRegion.length }} 点）</span>
+                    <span v-else-if="fileRegionPts.length" class="meta">已点 {{ fileRegionPts.length }} 个顶点</span>
+                  </template>
+                  <template v-else-if="countMode === 'line'">
+                    首帧画计数线（可选）：点两点。
+                    <el-button link type="primary" @click="clearFileLine">清除线</el-button>
+                  </template>
+                  <template v-else>当前不计数，可直接开始追踪。</template>
                 </div>
                 <canvas ref="frameCanvas" class="frame-canvas" @click="onFileCanvasClick" />
               </el-card>
             </el-col>
           </el-row>
-          <el-empty v-if="!file" description="选择视频后可预览并画越线，追踪结果在「追踪结果」页查看" :image-size="80" />
+          <el-empty v-if="!file" description="选择视频后可预览并设置区域/越线，追踪结果在「追踪结果」页查看" :image-size="80" />
         </template>
 
         <template v-else>
@@ -246,9 +279,17 @@
               </div>
               <video :key="resultUrl" :src="resultUrl" controls preload="metadata" class="player" />
               <div class="stats">
-                <el-tag type="success" effect="dark">唯一车辆 {{ stats.uniqueObjects ?? '-' }}</el-tag>
+                <el-tag type="success" effect="dark">唯一目标 {{ stats.uniqueObjects ?? '-' }}</el-tag>
                 <el-tag v-if="stats.crossing" type="warning" effect="dark">
-                  越线 进{{ stats.crossing.in }} 出{{ stats.crossing.out }}
+                  {{ stats.regionEnabled ? '区域' : '越线' }}
+                  进{{ stats.crossing.in }} 出{{ stats.crossing.out }}
+                  <template v-if="stats.crossing.net != null"> 净{{ stats.crossing.net }}</template>
+                </el-tag>
+                <el-tag v-if="stats.crossing?.person" type="success" effect="plain">
+                  人 进{{ stats.crossing.person.in }} 出{{ stats.crossing.person.out }}
+                </el-tag>
+                <el-tag v-if="stats.crossing?.vehicle" type="primary" effect="plain">
+                  车 进{{ stats.crossing.vehicle.in }} 出{{ stats.crossing.vehicle.out }}
                 </el-tag>
                 <el-tag v-if="stats.recordCount" type="info" effect="dark">过车记录 {{ stats.recordCount }}</el-tag>
                 <el-tag v-if="stats.congestionSummary" type="danger" effect="dark">
@@ -274,6 +315,8 @@
               <el-button v-if="!liveRunning" type="primary" size="small" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
               <el-button v-else type="danger" size="small" :icon="SwitchButton" @click="liveStop">停止</el-button>
               <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
+              <el-button v-if="liveRegion" link type="primary" @click="clearLiveRegion">清除区域</el-button>
+              <el-button v-if="countMode==='zone' && liveRegionPts.length >= 3 && !liveRegion" link type="success" @click="finishLiveRegion">闭合区域</el-button>
               <el-button v-if="recordCount" link type="primary" :icon="Download" @click="exportCsv">导出 CSV</el-button>
               <el-button link type="primary" @click="activeTab = 'config'">返回配置</el-button>
             </div>
@@ -283,13 +326,23 @@
                 <img v-show="mode === 'network'" ref="streamImg" class="cam-video" alt="网络摄像头" />
                 <canvas ref="camCanvas" class="cam-canvas" @click="onLiveClick" />
                 <div v-if="!liveRunning" class="cam-hint">
-                  {{ mode === 'network' ? '选择网络摄像头后点「开始」' : '点「开始」启用摄像头；可在画面点两点画计数线' }}
+                  <template v-if="countMode === 'zone'">
+                    {{ mode === 'network' ? '点「开始」后在画面点 ≥3 点并闭合区域' : '点「开始」后绘制多边形监控区域' }}
+                  </template>
+                  <template v-else-if="countMode === 'line'">
+                    {{ mode === 'network' ? '点「开始」后可画计数线' : '点「开始」后可在画面点两点画计数线' }}
+                  </template>
+                  <template v-else>
+                    {{ mode === 'network' ? '选择网络摄像头后点「开始」' : '点「开始」启用摄像头' }}
+                  </template>
                 </div>
                 <div v-if="liveRunning" class="cam-hud">
                   <el-tag type="success" effect="dark">{{ camFps }} FPS</el-tag>
-                  <el-tag type="warning" effect="dark">车辆 {{ liveDets.length }}</el-tag>
+                  <el-tag type="warning" effect="dark">目标 {{ liveDets.length }}</el-tag>
+                  <el-tag v-if="liveLine || liveRegion" type="danger" effect="dark">进{{ crossing.in }} 出{{ crossing.out }}</el-tag>
+                  <el-tag v-if="crossing.person" type="success" effect="plain">人 {{ crossing.person.in }}/{{ crossing.person.out }}</el-tag>
+                  <el-tag v-if="crossing.vehicle" type="primary" effect="plain">车 {{ crossing.vehicle.in }}/{{ crossing.vehicle.out }}</el-tag>
                   <el-tag :type="congestionTagType" effect="dark">{{ congestion.label || '—' }}</el-tag>
-                  <el-tag v-if="liveLine" type="danger" effect="dark">进{{ crossing.in }} 出{{ crossing.out }}</el-tag>
                   <el-tag v-if="recordCount" type="info" effect="dark">记录 {{ recordCount }}</el-tag>
                 </div>
               </div>
@@ -329,6 +382,10 @@ const imgsz = ref(640)
 const enableOcr = ref(true)
 const enableSpeed = ref(true)
 const vehicleOnly = ref(true)
+const countMode = ref('zone')  // zone | line | none
+const classPreset = ref('person_vehicle')
+const zoneBorderColor = ref('#2196f3')
+const zoneFillColor = ref('rgba(33, 150, 243, 0.12)')
 const metersPerPixel = ref(0.05)
 const alertEnabled = ref(false)
 
@@ -450,6 +507,9 @@ const imagePlateCount = ref(0)
 const frameCanvas = ref(null)
 const fileLinePts = ref([])
 const fileLine = ref(null)
+const fileRegionPts = ref([])
+const fileRegion = ref(null)
+let frameBaseImage = null
 
 const devices = ref([])
 const deviceId = ref('')
@@ -464,7 +524,10 @@ const liveRunning = ref(false)
 const liveDets = ref([])
 const camFps = ref(0)
 const liveLine = ref(null)
-const crossing = ref({ in: 0, out: 0 })
+const liveRegionPts = ref([])
+const liveRegion = ref(null)
+const zoneOcc = ref({ person: 0, vehicle: 0 })
+const crossing = ref({ in: 0, out: 0, person: { in: 0, out: 0 }, vehicle: { in: 0, out: 0 } })
 const congestion = ref({ label: '—', level: 'smooth' })
 const recentRecords = ref([])
 const recordCount = ref(0)
@@ -477,6 +540,27 @@ let frameCount = 0
 let fpsTimer = null
 let loopTimer = null
 let streamReady = false
+
+const emptyCross = () => ({ in: 0, out: 0, person: { in: 0, out: 0 }, vehicle: { in: 0, out: 0 } })
+const toCssColor = (raw, fallback = '#2196f3') => (raw ? String(raw) : fallback)
+const withAlpha = (raw, alpha = 0.12) => {
+  const s = String(raw || '').trim()
+  if (!s) return `rgba(33, 150, 243, ${alpha})`
+  if (s.startsWith('rgba(') || s.startsWith('rgb(')) return s
+  let h = s.startsWith('#') ? s.slice(1) : s
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+  if (h.length === 8) {
+    const a = parseInt(h.slice(6, 8), 16) / 255
+    h = h.slice(0, 6)
+    return `rgba(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}, ${Number.isFinite(a) ? a : alpha})`
+  }
+  if (h.length !== 6) return s
+  return `rgba(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)}, ${alpha})`
+}
+const zoneStylePayload = () => ({
+  borderColor: zoneBorderColor.value,
+  fillColor: zoneFillColor.value,
+})
 
 const busy = computed(() => liveRunning.value || fileRunning.value || imageRunning.value)
 const hasResults = computed(() => {
@@ -508,7 +592,7 @@ const newSessionId = () => {
   sessionId.value = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`)
 }
 
-const appendCommonFields = (fd, { reset = false, line = null } = {}) => {
+const appendCommonFields = (fd, { reset = false, line = null, region = null } = {}) => {
   fd.append('detectId', detectId.value)
   if (plateId.value) fd.append('plateId', plateId.value)
   if (detId.value && recId.value) {
@@ -519,11 +603,17 @@ const appendCommonFields = (fd, { reset = false, line = null } = {}) => {
   fd.append('imgsz', imgsz.value)
   fd.append('enableOcr', enableOcr.value ? '1' : '0')
   fd.append('enableSpeed', enableSpeed.value ? '1' : '0')
-  fd.append('vehicleOnly', vehicleOnly.value ? '1' : '0')
+  fd.append('classPreset', classPreset.value)
+  // 图片模式仍可用 vehicleOnly；视频/实时以 classPreset 为准
+  fd.append('vehicleOnly', (classPreset.value === 'vehicle' || vehicleOnly.value) ? '1' : '0')
   if (enableSpeed.value && metersPerPixel.value > 0) {
     fd.append('metersPerPixel', metersPerPixel.value)
   }
-  if (line) fd.append('line', JSON.stringify(line))
+  if (countMode.value === 'line' && line) fd.append('line', JSON.stringify(line))
+  if (countMode.value === 'zone' && region) {
+    fd.append('region', JSON.stringify(region))
+    fd.append('zoneStyle', JSON.stringify(zoneStylePayload()))
+  }
   if (sessionId.value) fd.append('sessionId', sessionId.value)
   fd.append('reset', reset ? '1' : '0')
 }
@@ -652,6 +742,8 @@ const onPick = (uploadFile) => {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = URL.createObjectURL(raw)
   clearFileLine()
+  clearFileRegion()
+  frameBaseImage = null
   clearFileOutput()
   drawFirstFrame(raw)
 }
@@ -678,51 +770,114 @@ const drawFirstFrame = (raw) => {
     const scale = dispW / v.videoWidth
     cv.width = dispW
     cv.height = Math.round(v.videoHeight * scale)
-    cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height)
+    const ctx = cv.getContext('2d')
+    ctx.drawImage(v, 0, 0, cv.width, cv.height)
+    frameBaseImage = ctx.getImageData(0, 0, cv.width, cv.height)
     URL.revokeObjectURL(url)
+    redrawFileCanvas()
   })
 }
 
-const redrawFileLine = () => {
+const redrawFileCanvas = () => {
   const cv = frameCanvas.value
-  if (!cv || !fileLinePts.value.length) return
+  if (!cv) return
   const ctx = cv.getContext('2d')
-  ctx.fillStyle = '#ff1744'
-  fileLinePts.value.forEach((p) => {
-    ctx.beginPath()
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
-    ctx.fill()
-  })
-  if (fileLinePts.value.length === 2) {
-    ctx.strokeStyle = '#ff1744'
+  if (frameBaseImage) ctx.putImageData(frameBaseImage, 0, 0)
+
+  if (countMode.value === 'line' && fileLinePts.value.length) {
+    ctx.fillStyle = '#ff1744'
+    fileLinePts.value.forEach((p) => {
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill()
+    })
+    if (fileLinePts.value.length === 2) {
+      ctx.strokeStyle = '#ff1744'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(fileLinePts.value[0].x, fileLinePts.value[0].y)
+      ctx.lineTo(fileLinePts.value[1].x, fileLinePts.value[1].y)
+      ctx.stroke()
+    }
+  }
+
+  const pts = fileRegion.value
+    ? fileRegion.value.map((p) => ({ x: p[0] * cv.width, y: p[1] * cv.height }))
+    : fileRegionPts.value
+  if (countMode.value === 'zone' && pts.length) {
+    const border = toCssColor(zoneBorderColor.value)
+    const fill = withAlpha(zoneFillColor.value)
+    ctx.fillStyle = border
+    pts.forEach((p) => { ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill() })
+    ctx.strokeStyle = border
     ctx.lineWidth = 2
     ctx.beginPath()
-    ctx.moveTo(fileLinePts.value[0].x, fileLinePts.value[0].y)
-    ctx.lineTo(fileLinePts.value[1].x, fileLinePts.value[1].y)
+    ctx.moveTo(pts[0].x, pts[0].y)
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+    if (fileRegion.value) ctx.closePath()
     ctx.stroke()
+    if (fileRegion.value) {
+      ctx.fillStyle = fill
+      ctx.fill()
+    }
   }
 }
 
 const onFileCanvasClick = (e) => {
-  if (fileLinePts.value.length >= 2) return
   const cv = frameCanvas.value
+  if (!cv || countMode.value === 'none') return
   const rect = cv.getBoundingClientRect()
   const x = (e.clientX - rect.left) * (cv.width / rect.width)
   const y = (e.clientY - rect.top) * (cv.height / rect.height)
-  fileLinePts.value.push({ x, y })
-  redrawFileLine()
-  if (fileLinePts.value.length === 2) {
-    fileLine.value = [
-      fileLinePts.value[0].x / cv.width, fileLinePts.value[0].y / cv.height,
-      fileLinePts.value[1].x / cv.width, fileLinePts.value[1].y / cv.height,
-    ]
+  if (countMode.value === 'line') {
+    if (fileLinePts.value.length >= 2) return
+    fileLinePts.value.push({ x, y })
+    redrawFileCanvas()
+    if (fileLinePts.value.length === 2) {
+      fileLine.value = [
+        fileLinePts.value[0].x / cv.width, fileLinePts.value[0].y / cv.height,
+        fileLinePts.value[1].x / cv.width, fileLinePts.value[1].y / cv.height,
+      ]
+    }
+    return
+  }
+  if (countMode.value === 'zone') {
+    if (fileRegion.value) return
+    fileRegionPts.value.push({ x, y })
+    redrawFileCanvas()
   }
 }
 
 const clearFileLine = () => {
   fileLinePts.value = []
   fileLine.value = null
-  if (file.value) drawFirstFrame(file.value)
+  redrawFileCanvas()
+  if (!frameBaseImage && file.value) drawFirstFrame(file.value)
+}
+
+const clearFileRegion = () => {
+  fileRegionPts.value = []
+  fileRegion.value = null
+  redrawFileCanvas()
+  if (!frameBaseImage && file.value) drawFirstFrame(file.value)
+}
+
+const finishFileRegion = () => {
+  const cv = frameCanvas.value
+  if (!cv || fileRegionPts.value.length < 3) {
+    ElMessage.warning('请至少点击 3 个点')
+    return
+  }
+  fileRegion.value = fileRegionPts.value.map((p) => [p.x / cv.width, p.y / cv.height])
+  fileRegionPts.value = []
+  redrawFileCanvas()
+  ElMessage.success('监控区域已设置')
+}
+
+const onCountModeChange = () => {
+  clearFileLine()
+  clearFileRegion()
+  clearLiveLine()
+  clearLiveRegion()
+  if (file.value && countMode.value !== 'none') drawFirstFrame(file.value)
 }
 
 const clearFile = () => {
@@ -731,12 +886,18 @@ const clearFile = () => {
   if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
   file.value = null
   clearFileLine()
+  clearFileRegion()
+  frameBaseImage = null
   processed.value = 0
   total.value = 0
   fileRunning.value = false
 }
 
 const runVideo = async () => {
+  if (countMode.value === 'zone' && !fileRegion.value) {
+    ElMessage.warning('请先绘制并闭合多边形监控区域')
+    return
+  }
   fileRunning.value = true
   activeTab.value = 'results'
   processed.value = 0
@@ -745,7 +906,10 @@ const runVideo = async () => {
   try {
     const fd = new FormData()
     fd.append('file', file.value)
-    appendCommonFields(fd, { line: fileLine.value })
+    appendCommonFields(fd, {
+      line: fileLine.value,
+      region: fileRegion.value,
+    })
     fd.append('alertEnabled', alertEnabled.value ? '1' : '0')
     const res = await vehicleApi.trackVideo(fd)
     await pollVideo(res.data.jobId)
@@ -887,7 +1051,8 @@ const getFrameSource = () => {
 
 const liveStart = async () => {
   newSessionId()
-  crossing.value = { in: 0, out: 0 }
+  crossing.value = emptyCross()
+  zoneOcc.value = { person: 0, vehicle: 0 }
   recentRecords.value = []
   recordCount.value = 0
   congestion.value = { label: '—', level: 'smooth' }
@@ -970,24 +1135,50 @@ const scheduleLoop = (delayMs = 0) => {
 }
 
 const onLiveClick = (e) => {
-  if (!liveRunning.value) return
+  if (!liveRunning.value || countMode.value === 'none') return
   const cv = camCanvas.value
   const rect = cv.getBoundingClientRect()
   const x = (e.clientX - rect.left) * (cv.width / rect.width)
   const y = (e.clientY - rect.top) * (cv.height / rect.height)
-  if (!cv._p0) {
-    cv._p0 = [x, y]
-    liveLine.value = null
-  } else {
-    liveLine.value = [cv._p0[0] / cv.width, cv._p0[1] / cv.height, x / cv.width, y / cv.height]
-    cv._p0 = null
-    crossing.value = { in: 0, out: 0 }
+  if (countMode.value === 'line') {
+    if (!cv._p0) {
+      cv._p0 = [x, y]
+      liveLine.value = null
+    } else {
+      liveLine.value = [cv._p0[0] / cv.width, cv._p0[1] / cv.height, x / cv.width, y / cv.height]
+      cv._p0 = null
+      crossing.value = emptyCross()
+    }
+    return
+  }
+  if (countMode.value === 'zone') {
+    if (liveRegion.value) return
+    liveRegionPts.value.push({ x, y })
   }
 }
 
 const clearLiveLine = () => {
   liveLine.value = null
   if (camCanvas.value) camCanvas.value._p0 = null
+}
+
+const clearLiveRegion = () => {
+  liveRegion.value = null
+  liveRegionPts.value = []
+  zoneOcc.value = { person: 0, vehicle: 0 }
+  crossing.value = emptyCross()
+}
+
+const finishLiveRegion = () => {
+  const cv = camCanvas.value
+  if (!cv || liveRegionPts.value.length < 3) {
+    ElMessage.warning('请至少点击 3 个点')
+    return
+  }
+  liveRegion.value = liveRegionPts.value.map((p) => [p.x / cv.width, p.y / cv.height])
+  liveRegionPts.value = []
+  crossing.value = emptyCross()
+  ElMessage.success('监控区域已设置')
 }
 
 const notifyAlert = (item) => {
@@ -1013,6 +1204,7 @@ const evaluateAlerts = async (detections, frameW, frameH) => {
       frameHeight: frameH,
     }
     if (liveLine.value) payload.line = liveLine.value
+    if (liveRegion.value) payload.region = liveRegion.value
     const res = await alertApi.evaluate(payload)
     const list = res.data?.triggered || []
     list.filter((t) => t.notify).forEach(notifyAlert)
@@ -1069,6 +1261,80 @@ const camDraw = (data, overlayStyle = null) => {
     ctx.moveTo(ln[0], ln[1])
     ctx.lineTo(ln[2], ln[3])
     ctx.stroke()
+  }
+
+  const zonePts = liveRegion.value
+    ? liveRegion.value.map((p) => ({ x: p[0] * cv.width, y: p[1] * cv.height }))
+    : liveRegionPts.value
+  if (zonePts.length) {
+    const border = toCssColor(zoneBorderColor.value)
+    const fill = withAlpha(zoneFillColor.value)
+    ctx.strokeStyle = border
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    ctx.moveTo(zonePts[0].x, zonePts[0].y)
+    for (let i = 1; i < zonePts.length; i++) ctx.lineTo(zonePts[i].x, zonePts[i].y)
+    if (liveRegion.value) ctx.closePath()
+    ctx.stroke()
+    zonePts.forEach((p) => {
+      ctx.fillStyle = border
+      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill()
+    })
+    if (liveRegion.value) {
+      ctx.fillStyle = fill
+      ctx.fill()
+      const labels = []
+      if (zoneOcc.value.vehicle > 0) labels.push(`车：${zoneOcc.value.vehicle}`)
+      if (zoneOcc.value.person > 0) labels.push(`人：${zoneOcc.value.person}`)
+      if (labels.length) {
+        const cx = zonePts.reduce((s, p) => s + p.x, 0) / zonePts.length
+        const cy = zonePts.reduce((s, p) => s + p.y, 0) / zonePts.length
+        let polyArea = 0
+        for (let i = 0; i < zonePts.length; i++) {
+          const a = zonePts[i], b = zonePts[(i + 1) % zonePts.length]
+          polyArea += a.x * b.y - b.x * a.y
+        }
+        polyArea = Math.abs(polyArea) / 2
+        const targetArea = Math.max(polyArea * 0.06, 1)
+        const xs = zonePts.map((p) => p.x), ys = zonePts.map((p) => p.y)
+        const bw = Math.max(...xs) - Math.min(...xs)
+        const bh = Math.max(...ys) - Math.min(...ys)
+        const fontFamily = '"Microsoft YaHei", "PingFang SC", sans-serif'
+        const measure = (size) => {
+          ctx.font = `bold ${size}px ${fontFamily}`
+          const widths = labels.map((t) => ctx.measureText(t).width)
+          const lineH = size * 1.15
+          const gap = Math.max(4, size / 8)
+          const tw = Math.max(...widths)
+          const th = labels.length * lineH + gap * Math.max(0, labels.length - 1)
+          return { tw, th, lineH, gap }
+        }
+        let lo = 14, hi = Math.max(18, Math.floor(Math.min(bw, bh) * 0.22)), best = 14
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1
+          const { tw, th } = measure(mid)
+          if (tw * th <= targetArea) { best = mid; lo = mid + 1 }
+          else hi = mid - 1
+        }
+        best = Math.min(Math.round(best * 2.5), Math.max(18, Math.floor(Math.min(bw, bh) * 0.95)))
+        const { lineH, gap } = measure(best)
+        const totalH = labels.length * lineH + gap * Math.max(0, labels.length - 1)
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        const outline = Math.max(2, Math.floor(best / 18))
+        labels.forEach((t, i) => {
+          const ty = cy - totalH / 2 + i * (lineH + gap) + lineH / 2
+          ctx.lineWidth = outline * 2
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+          ctx.strokeText(t, cx, ty)
+          ctx.fillStyle = '#fff'
+          ctx.fillText(t, cx, ty)
+        })
+        ctx.textAlign = 'left'
+        ctx.textBaseline = 'top'
+        ctx.font = '13px sans-serif'
+      }
+    }
   }
 
   const cong = data.congestion || {}
@@ -1132,13 +1398,35 @@ const liveLoop = () => {
     try {
       const fd = new FormData()
       fd.append('file', blob, 'frame.jpg')
-      appendCommonFields(fd, { reset: camFirst, line: liveLine.value })
+      appendCommonFields(fd, {
+        reset: camFirst,
+        line: liveLine.value,
+        region: liveRegion.value,
+      })
       camFirst = false
       const res = await vehicleApi.trackFrame(fd)
       const data = res.data || {}
       if (data.sessionId) sessionId.value = data.sessionId
       liveDets.value = data.detections || []
-      crossing.value = data.crossing || crossing.value
+      if (data.crossing) {
+        crossing.value = {
+          in: data.crossing.in || 0,
+          out: data.crossing.out || 0,
+          person: data.crossing.person || { in: 0, out: 0 },
+          vehicle: data.crossing.vehicle || { in: 0, out: 0 },
+        }
+      }
+      if (data.zoneOccupancy) {
+        zoneOcc.value = {
+          person: data.zoneOccupancy.person || 0,
+          vehicle: data.zoneOccupancy.vehicle || 0,
+        }
+      } else if (data.crossing?.person || data.crossing?.vehicle) {
+        zoneOcc.value = {
+          person: data.crossing?.person?.in || 0,
+          vehicle: data.crossing?.vehicle?.in || 0,
+        }
+      }
       congestion.value = data.congestion || congestion.value
       recentRecords.value = data.recentRecords || []
       recordCount.value = data.recordCount || 0
@@ -1200,6 +1488,7 @@ onBeforeUnmount(() => {
 .alert-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .section-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .line-tip { font-size: 13px; color: #5a6b87; margin-bottom: 8px; }
+.meta { margin-left: 10px; color: #67c23a; }
 .frame-canvas { max-width: 100%; border: 1px solid #e4e7ed; border-radius: 6px; cursor: crosshair; }
 .progress-box { padding: 22px 4px; }
 .progress-title { font-weight: 600; margin-bottom: 12px; color: #3a4a63; }

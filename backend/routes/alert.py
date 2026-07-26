@@ -81,6 +81,11 @@ def update_rule(rid):
                     pass
         if "direction" in cfg and str(cfg["direction"]) not in ("in", "out", "both"):
             cfg["direction"] = "both"
+        if "region" in cfg:
+            from services.track_zone import parse_region
+            parsed_region = parse_region(cfg["region"])
+            if parsed_region:
+                cfg["region"] = parsed_region
         rule.config_json = json.dumps(cfg, ensure_ascii=False)
 
     db.session.commit()
@@ -155,6 +160,7 @@ def evaluate():
     frame_width = data.get("frameWidth") or data.get("frame_width")
     frame_height = data.get("frameHeight") or data.get("frame_height")
     line = data.get("line")
+    region = data.get("region")
     frame_token = str(data.get("frameToken") or uuid.uuid4())
 
     # ruleKeys 未传 → 全部启用规则（兼容旧前端）；传 [] → 不评估
@@ -196,6 +202,7 @@ def evaluate():
         frame_width=frame_width,
         frame_height=frame_height,
         line=line,
+        region=region,
         frame_token=frame_token,
     )
     overlay = active_overlay_style(
@@ -205,6 +212,7 @@ def evaluate():
         frame_width=frame_width,
         frame_height=frame_height,
         line=line,
+        region=region,
         source_key=source_key,
         frame_token=frame_token,
     )

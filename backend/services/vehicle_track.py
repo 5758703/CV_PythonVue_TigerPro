@@ -1,4 +1,4 @@
-"""道路车辆追踪服务：ByteTrack + 可选车牌检测 + RapidOCR + 标定测速 + 拥堵统计 + 越线计数。"""
+"""道路车辆追踪服务：ByteTrack + 可选车牌检测 + RapidOCR + 标定测速 + 拥堵统计 + 越线/区域进出计数。"""
 from __future__ import annotations
 
 import os
@@ -38,6 +38,15 @@ class VehicleSession:
     counted: set[tuple[int, int]] = field(default_factory=set)
     records: list[dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
+    zone_counter: Any = None  # ZoneFlowCounter：多边形区域人/车进出
+
+
+def ensure_zone_counter(session: VehicleSession):
+    """懒创建区域进出计数器。"""
+    if session.zone_counter is None:
+        from services.track_zone import ZoneFlowCounter
+        session.zone_counter = ZoneFlowCounter()
+    return session.zone_counter
 
 
 def get_session(session_id: str, reset: bool = False) -> VehicleSession:
@@ -453,16 +462,30 @@ def enrich_vehicle_frame(
     enable_speed: bool = True,
     meters_per_pixel: float | None = None,
     line_px: list[float] | None = None,
+    region_px: np.ndarray | None = None,
     plate_conf: float = 0.2,
     ocr_cooldown_sec: float = 0.6,
     history_len: int = 12,
     congestion_thresholds: dict | None = None,
 ) -> dict:
-    """在追踪结果上叠加车牌、速度、越线与会话记录。"""
+    """在追踪结果上叠加车牌、速度、越线/区域进出与会话记录。
+
+    region_px 优先于 line_px：有多边形时用 ZoneFlowCounter（人/车分组进出）。
+    """
+    from services.track_zone import (
+        class_group,
+        is_effectively_inside,
+        occupancy_from_counter,
+    )
+
     h, w = img_bgr.shape[:2]
     now = time.time()
     enriched = []
     thr = congestion_thresholds or {}
+    use_zone = region_px is not None and len(region_px) >= 3
+    zone_counter = ensure_zone_counter(session) if use_zone else None
+    active_ids: set[int] = set()
+    frame_alarms: list[dict] = []
 
     for d in detections:
         tid = d.get("trackId")
@@ -472,23 +495,41 @@ def enrich_vehicle_frame(
         item["plateBbox"] = None
         item["plateSource"] = None
         item["speedKmh"] = None
+        item["inZone"] = None
+        item["alarm"] = None
 
         if tid is None or len(bbox) < 4:
             enriched.append(item)
             continue
 
+        tid_i = int(tid)
         cx = (bbox[0] + bbox[2]) / 2.0
         cy = (bbox[1] + bbox[3]) / 2.0
-        hist = session.track_history.setdefault(int(tid), [])
+        hist = session.track_history.setdefault(tid_i, [])
         hist.append((cx, cy, now))
         if len(hist) > history_len:
             del hist[:-history_len]
 
-        if line_px and len(line_px) == 4:
+        group = class_group(d.get("classId"), d.get("className"))
+        is_vehicle = group == "vehicle"
+
+        if use_zone and zone_counter is not None:
+            active_ids.add(tid_i)
+            in_zone = is_effectively_inside(bbox, region_px, center=(cx, cy), class_name=d.get("className"))
+            item["inZone"] = bool(in_zone)
+            alarm = zone_counter.update(
+                tid_i, (cx, cy), region_px,
+                class_id=d.get("classId"), class_name=d.get("className"),
+                bbox=bbox,
+            )
+            if alarm:
+                item["alarm"] = alarm.get("event")
+                frame_alarms.append(alarm)
+        elif line_px and len(line_px) == 4:
             prev = hist[-2] if len(hist) >= 2 else None
             if prev:
                 direction = _crosses((prev[0], prev[1]), (cx, cy), line_px)
-                key = (int(tid), direction)
+                key = (tid_i, direction)
                 if direction != 0 and key not in session.counted:
                     session.counted.add(key)
                     if direction > 0:
@@ -497,12 +538,13 @@ def enrich_vehicle_frame(
                         session.crossing["out"] += 1
                     session.crossing["total"] = session.crossing["in"] + session.crossing["out"]
 
-        if enable_speed:
+        if enable_speed and is_vehicle:
             item["speedKmh"] = _calc_speed_kmh(hist, meters_per_pixel)
 
-        plate_info = session.plates.get(int(tid))
-        need_ocr = enable_ocr and ocr_fn is not None
-        last_ocr = session.last_ocr_at.get(int(tid), 0)
+        # 号牌 OCR 仅对车辆
+        plate_info = session.plates.get(tid_i)
+        need_ocr = enable_ocr and ocr_fn is not None and is_vehicle
+        last_ocr = session.last_ocr_at.get(tid_i, 0)
 
         # 行驶场景：近距/大框车辆缩短 OCR 冷却，便于多帧投票
         bw = max(1.0, float(bbox[2]) - float(bbox[0]))
@@ -533,10 +575,10 @@ def enrich_vehicle_frame(
                     best_pb = pb
                     best_src = psrc
 
-            session.last_ocr_at[int(tid)] = now
+            session.last_ocr_at[tid_i] = now
 
             if best_text and best_rank >= 0.28:
-                votes = session.plate_votes.setdefault(int(tid), [])
+                votes = session.plate_votes.setdefault(tid_i, [])
                 votes.append({"text": best_text, "rank": best_rank, "score": best_score, "time": now})
                 if len(votes) > 12:
                     del votes[:-12]
@@ -559,12 +601,12 @@ def enrich_vehicle_frame(
                         "source": best_src,
                         "voteCount": len(votes),
                     }
-                    session.plates[int(tid)] = plate_info
+                    session.plates[tid_i] = plate_info
                     item["plateBbox"] = best_pb
                     item["plateSource"] = best_src
                     session.records.append({
                         "time": now,
-                        "trackId": int(tid),
+                        "trackId": tid_i,
                         "className": d.get("className"),
                         "plate": display_text,
                         "plateScore": best_score,
@@ -579,8 +621,21 @@ def enrich_vehicle_frame(
 
         enriched.append(item)
 
+    if zone_counter is not None:
+        frame_alarms.extend(zone_counter.end_frame(active_ids))
+        zone_snap = zone_counter.snapshot()
+        crossing_out = zone_snap
+        zone_occ = occupancy_from_counter(zone_counter)
+    else:
+        crossing_out = dict(session.crossing)
+        zone_occ = {"person": 0, "vehicle": 0}
+
+    vehicle_count = sum(
+        1 for d in enriched
+        if class_group(d.get("classId"), d.get("className")) == "vehicle"
+    )
     congestion = congestion_level(
-        len(enriched),
+        vehicle_count,
         light=int(thr.get("light", 3)),
         moderate=int(thr.get("moderate", 8)),
         heavy=int(thr.get("heavy", 15)),
@@ -589,7 +644,11 @@ def enrich_vehicle_frame(
         "detections": enriched,
         "width": w,
         "height": h,
-        "crossing": dict(session.crossing),
+        "crossing": crossing_out,
+        "zoneCrossing": crossing_out if use_zone else None,
+        "zoneOccupancy": zone_occ if use_zone else None,
+        "regionEnabled": use_zone,
+        "alarms": frame_alarms,
         "congestion": congestion,
         "recordCount": len(session.records),
         "recentRecords": session.records[-20:],
@@ -646,16 +705,25 @@ def _draw_label_bgr(img_bgr, text: str, origin, *, color=(0, 200, 80), font_size
     return cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
 
 
-def draw_vehicle_hud(img_bgr, result: dict, *, line_px=None) -> np.ndarray:
-    """在 BGR 图上绘制车辆框、ID、号牌、速度（供视频导出 / 图片识别）。"""
+def draw_vehicle_hud(
+    img_bgr,
+    result: dict,
+    *,
+    line_px=None,
+    region_px=None,
+    zone_style=None,
+    zone_counter=None,
+) -> np.ndarray:
+    """在 BGR 图上绘制车辆框、ID、号牌、速度、区域/越线统计（供视频导出 / 图片识别）。"""
     vis = img_bgr.copy()
     for d in result.get("detections") or []:
         bbox = d.get("bbox") or []
         if len(bbox) < 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
-        color = (0, 200, 80)
-        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        alarm = d.get("alarm")
+        color = (0, 0, 255) if alarm else (0, 200, 80)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 3 if alarm else 2)
         parts = []
         if d.get("trackId") is not None:
             parts.append(f"ID{d['trackId']}")
@@ -664,6 +732,8 @@ def draw_vehicle_hud(img_bgr, result: dict, *, line_px=None) -> np.ndarray:
             parts.append(str(d["plate"]))
         if d.get("speedKmh"):
             parts.append(f"{d['speedKmh']}km/h")
+        if alarm:
+            parts.append(str(alarm))
         label = " ".join(parts)
         vis = _draw_label_bgr(vis, label, (x1, max(4, y1 - 22)), color=color, font_size=17)
         pb = d.get("plateBbox")
@@ -676,15 +746,30 @@ def draw_vehicle_hud(img_bgr, result: dict, *, line_px=None) -> np.ndarray:
             vis, f"拥堵: {cong.get('label', '-')}", (10, 8),
             color=(0, 165, 255), font_size=18,
         )
-    crossing = result.get("crossing") or {}
-    if line_px and len(line_px) == 4:
-        p1 = (int(line_px[0]), int(line_px[1]))
-        p2 = (int(line_px[2]), int(line_px[3]))
-        cv2.line(vis, p1, p2, (0, 0, 255), 2)
-        vis = _draw_label_bgr(
-            vis, f"进:{crossing.get('in', 0)} 出:{crossing.get('out', 0)}",
-            (10, 36), color=(0, 0, 255), font_size=18,
+
+    if region_px is not None and len(region_px) >= 3:
+        from services.track_zone import draw_zone_overlay
+        zs = zone_style if isinstance(zone_style, dict) else {}
+        vis = draw_zone_overlay(
+            vis,
+            region_px,
+            counter=zone_counter,
+            alarms_this_frame=result.get("alarms"),
+            occupancy=result.get("zoneOccupancy"),
+            border_color=zs.get("borderColor") or zs.get("border_color"),
+            fill_color=zs.get("fillColor") or zs.get("fill_color"),
+            fill_alpha=zs.get("fillAlpha", zs.get("fill_alpha")),
         )
+    else:
+        crossing = result.get("crossing") or {}
+        if line_px and len(line_px) == 4:
+            p1 = (int(line_px[0]), int(line_px[1]))
+            p2 = (int(line_px[2]), int(line_px[3]))
+            cv2.line(vis, p1, p2, (0, 0, 255), 2)
+            vis = _draw_label_bgr(
+                vis, f"进:{crossing.get('in', 0)} 出:{crossing.get('out', 0)}",
+                (10, 36), color=(0, 0, 255), font_size=18,
+            )
     return vis
 
 

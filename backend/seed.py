@@ -1261,6 +1261,33 @@ def seed_alert_rules():
         "message_template": "核查越线人员身份与事由；必要时广播劝离并联动门禁/安保。",
         "overlay": line_overlay,
     }
+    zone_overlay = {
+        "fillColor": "#CF1322",
+        "borderColor": "#A8071A",
+        "textColor": "#FFFFFF",
+        "titleLines": ["ZONE ALARM"],
+        "subtitleLines": ["区域越界", "请勿闯入/离开"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#A8071A",
+    }
+    zone_cfg = {
+        "classes": [
+            "person", "Person", "people", "human", "pedestrian", "人", "行人",
+            "car", "bus", "truck", "motorcycle", "bicycle", "车辆", "汽车",
+        ],
+        "region": [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]],
+        "direction": "both",
+        "min_confidence": 0.25,
+        "consecutive_frames": 1,
+        "cooldown_sec": 30,
+        "title_template": "区域越界：{crossCount} 次穿越",
+        "message_template": "核查区域越界人员/车辆身份与事由；必要时广播劝离并联动门禁/安保。",
+        "overlay": zone_overlay,
+    }
     stranger_cfg = {
         "min_confidence": 0.0,
         "consecutive_frames": 2,
@@ -1307,6 +1334,15 @@ def seed_alert_rules():
             status="1",
         ),
         dict(
+            rule_key="zone-intrusion",
+            name="区域越界告警",
+            description="目标进出 TrackZone 多边形区域时触发（目标追踪页自定义多边形可覆盖默认区域）",
+            rule_type="zone_crossing",
+            config_json=json.dumps(zone_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
+        dict(
             rule_key="stranger-face",
             name="陌生人脸告警",
             description="人脸识别未匹配底库时触发（建议在「人脸识别」页开启启用告警）",
@@ -1323,6 +1359,7 @@ def seed_alert_rules():
         "crowd-gathering": crowd_cfg,
         "ppe-no-hardhat": ppe_cfg,
         "line-intrusion": line_cfg,
+        "zone-intrusion": zone_cfg,
         "stranger-face": stranger_cfg,
     }
     for fields in defaults:

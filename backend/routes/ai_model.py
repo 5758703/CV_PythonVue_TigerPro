@@ -1560,7 +1560,8 @@ def pose_video_route(mid):
 
 
 def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line,
-                  alert_rules_payload=None):
+                  alert_rules_payload=None, region=None, classes=None, class_preset=None,
+                  zone_style=None):
     """后台线程：逐帧追踪，按帧上报进度，完成写结果。"""
     def cb(processed, total):
         with _video_jobs_lock:
@@ -1574,6 +1575,8 @@ def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, l
             abs_path, src_path, out_path, conf=conf, imgsz=imgsz,
             line=line, progress_cb=cb,
             alert_rules=alert_rules_payload, alert_source_key=job_id,
+            region=region, classes=classes, class_preset=class_preset,
+            zone_style=zone_style,
         )
         stats["output"] = out_name
         with _video_jobs_lock:
@@ -1593,7 +1596,15 @@ def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, l
 @ai_model_bp.post("/<int:mid>/track-video")
 @permission_required("ai:model:query")
 def track_video_route(mid):
-    """目标追踪：启动异步逐帧 ByteTrack 任务，返回 jobId（进度复用 video-progress）。"""
+    """目标追踪：启动异步逐帧 ByteTrack 任务，返回 jobId（进度复用 video-progress）。
+
+    可选 form 字段：
+      line — 归一化计数线 [x1,y1,x2,y2]
+      region — 归一化多边形 [[x,y],...]（TrackZone 区域过滤 + 进出双向计数）
+      classPreset — all|person|vehicle|person_vehicle
+      classes — JSON 类别 ID 列表
+      zoneStyle — JSON {borderColor, fillColor, fillAlpha} 区域边框/填充色
+    """
     m = AiModel.query.get_or_404(mid)
     if (m.library or "ultralytics") != "ultralytics" or (m.task or "") != "object-detection":
         return jsonify(code=400, message="目标追踪仅支持 YOLO（ultralytics）目标检测模型"), 400
@@ -1617,16 +1628,56 @@ def track_video_route(mid):
     except (TypeError, ValueError):
         imgsz = 640
 
+    import json as _json
+
     line = None
     raw_line = request.form.get("line")
     if raw_line:
         try:
-            import json
-            parsed = json.loads(raw_line)
+            parsed = _json.loads(raw_line)
             if isinstance(parsed, list) and len(parsed) == 4:
                 line = [float(v) for v in parsed]
         except (ValueError, TypeError):
             line = None
+
+    region = None
+    raw_region = request.form.get("region")
+    if raw_region:
+        try:
+            from services.track_zone import parse_region
+            region = parse_region(_json.loads(raw_region) if isinstance(raw_region, str) else raw_region)
+        except (ValueError, TypeError):
+            region = None
+
+    classes = None
+    raw_classes = request.form.get("classes")
+    if raw_classes:
+        try:
+            parsed = _json.loads(raw_classes)
+            if isinstance(parsed, list):
+                classes = [int(v) for v in parsed]
+        except (ValueError, TypeError):
+            classes = None
+    class_preset = (request.form.get("classPreset") or request.form.get("class_preset") or "").strip() or None
+
+    zone_style = None
+    raw_zone_style = request.form.get("zoneStyle") or request.form.get("zone_style")
+    if raw_zone_style:
+        try:
+            parsed = _json.loads(raw_zone_style) if isinstance(raw_zone_style, str) else raw_zone_style
+            if isinstance(parsed, dict):
+                zone_style = {
+                    "borderColor": parsed.get("borderColor") or parsed.get("border_color"),
+                    "fillColor": parsed.get("fillColor") or parsed.get("fill_color"),
+                    "fillAlpha": parsed.get("fillAlpha", parsed.get("fill_alpha")),
+                }
+        except (ValueError, TypeError):
+            zone_style = None
+    if zone_style is None:
+        border_c = request.form.get("zoneBorderColor") or request.form.get("zone_border_color")
+        fill_c = request.form.get("zoneFillColor") or request.form.get("zone_fill_color")
+        if border_c or fill_c:
+            zone_style = {"borderColor": border_c, "fillColor": fill_c}
 
     alert_enabled = str(request.form.get("alertEnabled", "0")).strip().lower() in (
         "1", "true", "on", "yes"
@@ -1669,7 +1720,8 @@ def track_video_route(mid):
                                "stats": None, "error": None}
     threading.Thread(
         target=_track_worker,
-        args=(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line, rules_payload),
+        args=(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line,
+              rules_payload, region, classes, class_preset, zone_style),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
@@ -1678,7 +1730,10 @@ def track_video_route(mid):
 @ai_model_bp.post("/<int:mid>/track-frame")
 @permission_required("ai:model:query")
 def track_frame_route(mid):
-    """摄像头实时追踪：单帧 -> 检测框 + 轨迹ID（前端叠画）。"""
+    """摄像头实时追踪：单帧 -> 检测框 + 轨迹ID（前端叠画）。
+
+    可选 form：region / classPreset / classes / sessionId
+    """
     m = AiModel.query.get_or_404(mid)
     if (m.library or "ultralytics") != "ultralytics" or (m.task or "") != "object-detection":
         return jsonify(code=400, message="目标追踪仅支持 YOLO（ultralytics）目标检测模型"), 400
@@ -1694,8 +1749,38 @@ def track_frame_route(mid):
         conf = 0.25
     reset = request.form.get("reset", "0") == "1"
     try:
+        imgsz = int(request.form.get("imgsz", 640))
+    except (TypeError, ValueError):
+        imgsz = 640
+
+    import json as _json
+    region = None
+    raw_region = request.form.get("region")
+    if raw_region:
+        try:
+            from services.track_zone import parse_region
+            region = parse_region(_json.loads(raw_region))
+        except (ValueError, TypeError):
+            region = None
+    classes = None
+    raw_classes = request.form.get("classes")
+    if raw_classes:
+        try:
+            parsed = _json.loads(raw_classes)
+            if isinstance(parsed, list):
+                classes = [int(v) for v in parsed]
+        except (ValueError, TypeError):
+            classes = None
+    class_preset = (request.form.get("classPreset") or request.form.get("class_preset") or "").strip() or None
+    session_id = (request.form.get("sessionId") or request.form.get("session_id") or "").strip() or None
+
+    try:
         from inference import track_frame
-        result = track_frame(abs_path, file.read(), conf=conf, reset=reset)
+        result = track_frame(
+            abs_path, file.read(), conf=conf, reset=reset, imgsz=imgsz,
+            classes=classes, region=region, class_preset=class_preset,
+            session_id=session_id,
+        )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"追踪失败：{e}"), 500
     return jsonify(code=0, message="ok", data=result)
