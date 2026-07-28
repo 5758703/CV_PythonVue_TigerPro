@@ -72,7 +72,7 @@ class Config:
     DEEPSEEK_BASE_URL = os.getenv(
         "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
     )
-    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
     # 开放平台 / 对象存储（P1–P3）
     OBJECT_STORE_BACKEND = (os.getenv("OBJECT_STORE_BACKEND") or "local").strip().lower()
