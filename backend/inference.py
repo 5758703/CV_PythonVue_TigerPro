@@ -1036,13 +1036,45 @@ def _yolo_infer_settings():
 
 
 def _openvino_target_dir(abs_path: str, *, precision: str, imgsz: int) -> str:
+    """OpenVINO 缓存目录名必须以 `_openvino_model` 结尾，否则 Ultralytics 无法识别格式。
+
+    历史错误命名 `{stem}_openvino_{precision}_i{imgsz}` 会导致：
+    model='...' is not a supported model format
+    """
+    stem = os.path.splitext(os.path.basename(abs_path))[0]
+    parent = os.path.dirname(abs_path)
+    return os.path.join(parent, f"{stem}_openvino_{precision}_i{imgsz}_openvino_model")
+
+
+def _openvino_legacy_target_dir(abs_path: str, *, precision: str, imgsz: int) -> str:
+    """旧版缓存目录（缺少 `_openvino_model` 后缀，Ultralytics 8.x 无法加载）。"""
     stem = os.path.splitext(os.path.basename(abs_path))[0]
     parent = os.path.dirname(abs_path)
     return os.path.join(parent, f"{stem}_openvino_{precision}_i{imgsz}")
 
 
+def _purge_invalid_openvino_dir(path: str) -> None:
+    """删除无法被 Ultralytics 识别的 OpenVINO 缓存目录，避免反复踩坑。"""
+    if not path or not os.path.isdir(path):
+        return
+    name = os.path.basename(path).lower()
+    # 仅清理本项目生成的 OV 缓存命名，避免误删用户其它目录
+    if "openvino" not in name:
+        return
+    if name.endswith("_openvino_model"):
+        return
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        pass
+
+
 def _find_openvino_load_path(export_dir: str) -> str | None:
+    """若目录可被 Ultralytics 按 OpenVINO 加载则返回该目录，否则 None。"""
     if not export_dir or not os.path.isdir(export_dir):
+        return None
+    # Ultralytics AutoBackend：目录名须包含 `openvino_model` 才会判为 openvino
+    if "openvino_model" not in os.path.basename(export_dir).lower():
         return None
     xmls = []
     for root, _dirs, files in os.walk(export_dir):
@@ -1051,12 +1083,21 @@ def _find_openvino_load_path(export_dir: str) -> str | None:
                 xmls.append(os.path.join(root, f))
     if not xmls:
         return None
-    # Ultralytics 通常把整个目录交给 YOLO()
-    return export_dir
+    # 需有配套 .bin，避免半截导出被当成可用
+    for xml in xmls:
+        bin_path = os.path.splitext(xml)[0] + ".bin"
+        if os.path.isfile(bin_path):
+            return export_dir
+    return None
 
 
 def _ensure_openvino_artifact(abs_path: str, *, precision: str = "fp16", imgsz: int = 640) -> str:
     """惰性导出并缓存 OpenVINO 模型目录；已存在则直接复用。"""
+    # 清理历史错误命名缓存（无 `_openvino_model` 后缀）
+    _purge_invalid_openvino_dir(
+        _openvino_legacy_target_dir(abs_path, precision=precision, imgsz=imgsz)
+    )
+
     target = _openvino_target_dir(abs_path, precision=precision, imgsz=imgsz)
     found = _find_openvino_load_path(target)
     if found:
@@ -1086,7 +1127,12 @@ def _ensure_openvino_artifact(abs_path: str, *, precision: str = "fp16", imgsz: 
     else:
         src_dir = default_dir
     if not _find_openvino_load_path(src_dir):
-        raise FileNotFoundError(f"OpenVINO 导出未生成可用 xml：{src_dir}")
+        # 默认导出目录若缺后缀也会被拒；尝试规范命名
+        if os.path.isdir(src_dir) and "openvino_model" not in os.path.basename(src_dir).lower():
+            raise FileNotFoundError(
+                f"OpenVINO 导出目录无法识别（需含 openvino_model）：{src_dir}"
+            )
+        raise FileNotFoundError(f"OpenVINO 导出未生成可用 xml/bin：{src_dir}")
     if os.path.abspath(src_dir) != os.path.abspath(target):
         if os.path.isdir(target):
             shutil.rmtree(target, ignore_errors=True)
@@ -1124,8 +1170,13 @@ def _get_model(abs_path):
                 ov_src = _ensure_openvino_artifact(abs_path, precision=precision, imgsz=imgsz)
                 model = YOLO(ov_src)
             except Exception as e:  # noqa: BLE001
+                # 清理可能残留的错误命名 / 半截缓存，避免下次仍踩坑
+                _purge_invalid_openvino_dir(
+                    _openvino_legacy_target_dir(abs_path, precision=precision, imgsz=imgsz)
+                )
                 if backend == "openvino":
                     raise RuntimeError(f"OpenVINO 加载失败：{e}") from e
+                # auto：回退 PyTorch .pt（脑肿瘤等大权重首次 OV 导出易失败或命名不符）
                 model = None
         if model is None:
             model = YOLO(abs_path)
