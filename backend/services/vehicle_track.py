@@ -15,6 +15,21 @@ from inference import _crosses, detect_image
 
 # COCO: bicycle, car, motorcycle, bus, truck
 DEFAULT_VEHICLE_CLASSES = [1, 2, 3, 5, 7]
+# 测速用短历史；开启轨迹时保留更长路径点
+DEFAULT_HISTORY_LEN = 12
+DEFAULT_TRAIL_LEN = 90
+
+# 轨迹/框配色（BGR），按 trackId 取模
+_TRAIL_COLORS_BGR = [
+    (80, 200, 0),
+    (255, 160, 0),
+    (60, 160, 230),
+    (80, 80, 245),
+    (222, 84, 146),
+    (194, 194, 19),
+    (0, 200, 200),
+    (180, 105, 255),
+]
 
 _CN_PROVINCES = "京沪津渝冀晋蒙辽吉黑苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云藏陕甘青宁新港澳"
 _PLATE_ALNUM = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789"
@@ -451,6 +466,15 @@ def _calc_speed_kmh(history: list[tuple[float, float, float]], meters_per_pixel:
     return round(dist_m / dt * 3.6, 1)
 
 
+def _trail_color_bgr(track_id: int) -> tuple[int, int, int]:
+    return _TRAIL_COLORS_BGR[int(track_id) % len(_TRAIL_COLORS_BGR)]
+
+
+def _trail_points(hist: list[tuple[float, float, float]]) -> list[list[float]]:
+    """历史 (x,y,t) → 绘制用 [[x,y], ...]。"""
+    return [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in hist]
+
+
 def enrich_vehicle_frame(
     img_bgr: np.ndarray,
     detections: list[dict],
@@ -460,17 +484,19 @@ def enrich_vehicle_frame(
     ocr_fn: Callable[[bytes], dict] | None = None,
     enable_ocr: bool = True,
     enable_speed: bool = True,
+    enable_trail: bool = True,
     meters_per_pixel: float | None = None,
     line_px: list[float] | None = None,
     region_px: np.ndarray | None = None,
     plate_conf: float = 0.2,
     ocr_cooldown_sec: float = 0.6,
-    history_len: int = 12,
+    history_len: int | None = None,
     congestion_thresholds: dict | None = None,
 ) -> dict:
-    """在追踪结果上叠加车牌、速度、越线/区域进出与会话记录。
+    """在追踪结果上叠加车牌、速度、轨迹、越线/区域进出与会话记录。
 
     region_px 优先于 line_px：有多边形时用 ZoneFlowCounter（人/车分组进出）。
+    enable_trail：为每个 Track ID 输出 trail 路径点（中心点序列）。
     """
     from services.track_zone import (
         class_group,
@@ -486,6 +512,9 @@ def enrich_vehicle_frame(
     zone_counter = ensure_zone_counter(session) if use_zone else None
     active_ids: set[int] = set()
     frame_alarms: list[dict] = []
+    if history_len is None:
+        history_len = DEFAULT_TRAIL_LEN if enable_trail else DEFAULT_HISTORY_LEN
+    history_len = max(2, int(history_len))
 
     for d in detections:
         tid = d.get("trackId")
@@ -497,6 +526,7 @@ def enrich_vehicle_frame(
         item["speedKmh"] = None
         item["inZone"] = None
         item["alarm"] = None
+        item["trail"] = []
 
         if tid is None or len(bbox) < 4:
             enriched.append(item)
@@ -512,6 +542,9 @@ def enrich_vehicle_frame(
 
         group = class_group(d.get("classId"), d.get("className"))
         is_vehicle = group == "vehicle"
+
+        if enable_trail:
+            item["trail"] = _trail_points(hist)
 
         if use_zone and zone_counter is not None:
             active_ids.add(tid_i)
@@ -630,6 +663,14 @@ def enrich_vehicle_frame(
         crossing_out = dict(session.crossing)
         zone_occ = {"person": 0, "vehicle": 0}
 
+    # 清理长时间未再出现的轨迹，避免会话内存膨胀
+    live_ids = {int(d["trackId"]) for d in enriched if d.get("trackId") is not None}
+    stale = [tid for tid in list(session.track_history.keys()) if tid not in live_ids]
+    # 仅当本帧有检测时清理；空帧保留历史以免闪断丢轨迹
+    if live_ids and len(stale) > 64:
+        for tid in stale[: len(stale) - 32]:
+            session.track_history.pop(tid, None)
+
     vehicle_count = sum(
         1 for d in enriched
         if class_group(d.get("classId"), d.get("className")) == "vehicle"
@@ -652,6 +693,7 @@ def enrich_vehicle_frame(
         "congestion": congestion,
         "recordCount": len(session.records),
         "recentRecords": session.records[-20:],
+        "trailEnabled": bool(enable_trail),
     }
 
 
@@ -705,6 +747,29 @@ def _draw_label_bgr(img_bgr, text: str, origin, *, color=(0, 200, 80), font_size
     return cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
 
 
+def _draw_trails_bgr(vis: np.ndarray, detections: list[dict]) -> np.ndarray:
+    """按 Track ID 绘制运动轨迹折线（先画轨迹，再画框）。"""
+    for d in detections or []:
+        trail = d.get("trail") or []
+        if len(trail) < 2:
+            continue
+        tid = d.get("trackId")
+        color = _trail_color_bgr(int(tid) if tid is not None else 0)
+        pts = []
+        for p in trail:
+            if not p or len(p) < 2:
+                continue
+            pts.append([int(round(float(p[0]))), int(round(float(p[1])))])
+        if len(pts) < 2:
+            continue
+        arr = np.asarray(pts, dtype=np.int32).reshape(-1, 1, 2)
+        cv2.polylines(vis, [arr], False, color, 2, lineType=cv2.LINE_AA)
+        # 轨迹起点小圆 + 当前位置点
+        cv2.circle(vis, tuple(pts[0]), 3, color, -1, lineType=cv2.LINE_AA)
+        cv2.circle(vis, tuple(pts[-1]), 4, color, -1, lineType=cv2.LINE_AA)
+    return vis
+
+
 def draw_vehicle_hud(
     img_bgr,
     result: dict,
@@ -713,20 +778,30 @@ def draw_vehicle_hud(
     region_px=None,
     zone_style=None,
     zone_counter=None,
+    draw_trails: bool | None = None,
 ) -> np.ndarray:
-    """在 BGR 图上绘制车辆框、ID、号牌、速度、区域/越线统计（供视频导出 / 图片识别）。"""
+    """在 BGR 图上绘制轨迹、车辆框、ID、号牌、速度、区域/越线统计。"""
     vis = img_bgr.copy()
-    for d in result.get("detections") or []:
+    dets = result.get("detections") or []
+    if draw_trails is None:
+        draw_trails = bool(result.get("trailEnabled", True))
+    if draw_trails:
+        vis = _draw_trails_bgr(vis, dets)
+
+    for d in dets:
         bbox = d.get("bbox") or []
         if len(bbox) < 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in bbox[:4]]
         alarm = d.get("alarm")
-        color = (0, 0, 255) if alarm else (0, 200, 80)
+        tid = d.get("trackId")
+        color = (0, 0, 255) if alarm else (
+            _trail_color_bgr(int(tid)) if tid is not None else (0, 200, 80)
+        )
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 3 if alarm else 2)
         parts = []
-        if d.get("trackId") is not None:
-            parts.append(f"ID{d['trackId']}")
+        if tid is not None:
+            parts.append(f"ID{tid}")
         parts.append(str(d.get("className") or "vehicle"))
         if d.get("plate"):
             parts.append(str(d["plate"]))

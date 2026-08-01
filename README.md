@@ -136,7 +136,7 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 - 权限分类：
   - 功能权限 — 菜单(M目录/C菜单)、按钮(F，前端 `v-permission`)、API 接口(A，后端校验)
   - 数据权限 — 角色 `data_scope`：1 仅本人 / 2 本部门 / 3 本部门及下级 / 4 全部
-- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace 底库 1:N）** / **表格识别（YOLO+RapidOCR+SLANet）** / **车辆追踪** 等
+- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace 底库 1:N）** / **表格识别（YOLO+RapidOCR+SLANet）** / **目标追踪（含车辆追踪场景）** 等
 - 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**
 
 ## 默认账号（种子数据自动写入）

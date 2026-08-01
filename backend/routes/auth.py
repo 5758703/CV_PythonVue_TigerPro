@@ -87,12 +87,22 @@ def info():
 @auth_bp.get("/routers")
 @login_required
 def routers():
-    """侧边栏路由：当前用户可见的目录/菜单(M/C)树。"""
+    """侧边栏路由：当前用户可见的目录/菜单(M/C)树。
+
+    visible=0 显示；visible=1 隐藏（仍可保留权限标识供接口鉴权）。
+    """
     user = current_user()
     if user.is_admin:
-        menus = Menu.query.filter(Menu.menu_type.in_(["M", "C"]), Menu.status == "0").all()
+        menus = Menu.query.filter(
+            Menu.menu_type.in_(["M", "C"]),
+            Menu.status == "0",
+            Menu.visible == "0",
+        ).all()
     else:
-        menus = [m for m in user.all_menus() if m.menu_type in ("M", "C") and m.status == "0"]
+        menus = [
+            m for m in user.all_menus()
+            if m.menu_type in ("M", "C") and m.status == "0" and m.visible == "0"
+        ]
     menus.sort(key=lambda m: (m.parent_id, m.order_num))
     return jsonify(code=0, data=_menu_tree(menus))
 

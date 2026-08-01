@@ -113,7 +113,8 @@ def _regroup_ai_menus():
         (274, 230, "/ai/face"),
         (276, 230, "/ai/alert"),
         (278, 230, "/ai/table"),
-        (280, 230, "/ai/vehicle"),
+        # 280 已并入目标追踪场景；path 由 _patch_vehicle_menu_merged_into_track 对齐 /ai/track
+        (280, 230, "/ai/track"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -207,6 +208,39 @@ def _patch_video_surveillance_menu():
     m1 = Menu.query.get(1)
     if m1 and m1.order_num != 2:
         m1.order_num = 2
+        changed = True
+    if changed:
+        db.session.commit()
+
+
+def _patch_vehicle_menu_merged_into_track():
+    """车辆追踪并入目标追踪场景：侧栏隐藏菜单 280，保留 ai:vehicle:list 权限（幂等）。
+
+    visible: 0=显示 1=隐藏。隐藏后仍可通过角色菜单授予车辆 API 权限。
+    """
+    changed = False
+    m280 = Menu.query.get(280)
+    if m280:
+        if m280.visible != "1":
+            m280.visible = "1"
+            changed = True
+        # 组件指向目标追踪壳；路径保留便于权限/兼容
+        if m280.component != "ai/track/index":
+            m280.component = "ai/track/index"
+            changed = True
+        if m280.path != "/ai/track":
+            # 侧栏已隐藏；path 对齐目标追踪，避免误点动态路由落到旧页
+            m280.path = "/ai/track"
+            changed = True
+        tip = "（已并入目标追踪·车辆场景）"
+        if tip not in (m280.menu_name or ""):
+            # 菜单管理里仍可见名称时便于识别；侧栏因 visible=1 不展示
+            if "车辆追踪" in (m280.menu_name or ""):
+                m280.menu_name = "车辆追踪" + tip
+                changed = True
+    m2801 = Menu.query.get(2801)
+    if m2801 and m2801.visible != "1":
+        m2801.visible = "1"
         changed = True
     if changed:
         db.session.commit()
@@ -307,9 +341,11 @@ def seed_ai_menus():
                     order=9, grant_common=True)
     _ensure_ai_menu(2781, 278, "表格识别查询", "F", "ai:table:query", grant_common=True)
     _ensure_ai_menu(280, 230, "车辆追踪", "C", "ai:vehicle:list",
-                    path="/ai/vehicle", component="ai/vehicle/index", icon="Van",
+                    path="/ai/track", component="ai/track/index", icon="Van",
                     order=10, grant_common=True)
     _ensure_ai_menu(2801, 280, "车辆追踪查询", "F", "ai:vehicle:query", grant_common=True)
+    # 已并入「目标追踪」场景：侧栏隐藏，保留权限标识供 /api/ai/vehicle 鉴权
+    _patch_vehicle_menu_merged_into_track()
     # 视频监控（顶级目录，order=1 排在 AI(0) 与系统管理(2) 之间）
     _ensure_ai_menu(240, 0, "摄像头管理", "C", "camera:list",
                     path="/camera", component="camera/index", icon="VideoCamera",

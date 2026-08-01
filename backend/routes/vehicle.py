@@ -283,6 +283,7 @@ def _vehicle_worker(job_id, cfg_bundle):
                 ocr_fn=cfg_bundle.get("ocr_fn"),
                 enable_ocr=cfg_bundle.get("enable_ocr", True),
                 enable_speed=cfg_bundle.get("enable_speed", True),
+                enable_trail=cfg_bundle.get("enable_trail", True),
                 meters_per_pixel=cfg_bundle.get("meters_per_pixel"),
                 line_px=px_line,
                 region_px=px_region,
@@ -297,6 +298,7 @@ def _vehicle_worker(job_id, cfg_bundle):
                 region_px=px_region,
                 zone_style=zone_style,
                 zone_counter=session.zone_counter,
+                draw_trails=cfg_bundle.get("enable_trail", True),
             )
             frames += 1
             if alert_ctx:
@@ -463,6 +465,7 @@ def track_frame():
     classes, _class_preset = _resolve_track_classes(vehicle_only_default=True)
     enable_ocr = _parse_bool("enableOcr", True)
     enable_speed = _parse_bool("enableSpeed", True)
+    enable_trail = _parse_bool("enableTrail", True)
     meters_per_pixel = _parse_float("metersPerPixel")
     plate_conf = _parse_float("plateConf", 0.2) or 0.2
     session_id = (request.form.get("sessionId") or "").strip() or uuid.uuid4().hex
@@ -504,6 +507,7 @@ def track_frame():
             ocr_fn=models.get("ocr_fn") if enable_ocr else None,
             enable_ocr=enable_ocr and models.get("ocr_fn") is not None,
             enable_speed=enable_speed,
+            enable_trail=enable_trail,
             meters_per_pixel=meters_per_pixel if meters_per_pixel and meters_per_pixel > 0 else None,
             line_px=px_line,
             region_px=px_region,
@@ -543,6 +547,7 @@ def track_video():
     classes, class_preset = _resolve_track_classes(vehicle_only_default=True)
     enable_ocr = _parse_bool("enableOcr", True)
     enable_speed = _parse_bool("enableSpeed", True)
+    enable_trail = _parse_bool("enableTrail", True)
     meters_per_pixel = _parse_float("metersPerPixel")
     plate_conf = _parse_float("plateConf", 0.2) or 0.2
     session_id = uuid.uuid4().hex
@@ -603,6 +608,7 @@ def track_video():
         "class_preset": class_preset,
         "enable_ocr": enable_ocr and models.get("ocr_fn") is not None,
         "enable_speed": enable_speed,
+        "enable_trail": enable_trail,
         "meters_per_pixel": meters_per_pixel if meters_per_pixel and meters_per_pixel > 0 else None,
         "plate_conf": plate_conf,
         "ocr_cooldown_sec": 0.55,
