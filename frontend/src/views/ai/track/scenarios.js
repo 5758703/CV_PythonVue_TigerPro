@@ -15,6 +15,12 @@ export const TRACK_SCENARIOS = [
     desc: '车牌 OCR、测速、拥堵、运动轨迹与过车记录',
     perm: 'ai:vehicle:list',
   },
+  {
+    key: 'absence',
+    label: '人员离岗检测',
+    desc: 'ByteTrack 检人 + InsightFace/FAISS 识人，连续时间判定离岗',
+    perm: 'ai:absence:list',
+  },
 ]
 
 export const DEFAULT_SCENARIO = 'general'

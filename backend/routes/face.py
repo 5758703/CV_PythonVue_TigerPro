@@ -198,6 +198,11 @@ def enroll(pid):
     db.session.add(row)
     db.session.commit()
     invalidate_gallery(m.model_key)
+    try:
+        from services.duty_faiss import invalidate as invalidate_duty_faiss
+        invalidate_duty_faiss(m.model_key)
+    except Exception:  # noqa: BLE001
+        pass
     return jsonify(
         code=0,
         message=f"登记成功（{len(vectors)} 张）",

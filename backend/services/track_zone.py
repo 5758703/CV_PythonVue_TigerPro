@@ -576,11 +576,13 @@ def draw_zone_overlay(
     border_color=None,
     fill_color=None,
     fill_alpha: float | None = None,
+    border_width: int | float | None = None,
 ) -> np.ndarray:
     """绘制监控区域、框内人车计数、角标 HUD、越界红框。
 
     occupancy: 当前帧有效在区内数量 {"person": n, "vehicle": m}；为 0 的项不绘制。
     border_color / fill_color: CSS 色或 [r,g,b(,a)]；fill_alpha 可覆盖填充透明度。
+    border_width: 边框线宽（像素），默认 2，范围 1–20。
     """
     out = frame
     if polygon is not None and len(polygon) >= 3:
@@ -593,7 +595,13 @@ def draw_zone_overlay(
                 fill_a = max(0.0, min(1.0, float(fill_alpha)))
             except (TypeError, ValueError):
                 pass
-        cv2.polylines(out, [polygon.astype(np.int32)], True, border_bgr, 2)
+        thickness = 2
+        if border_width is not None:
+            try:
+                thickness = max(1, min(20, int(round(float(border_width)))))
+            except (TypeError, ValueError):
+                thickness = 2
+        cv2.polylines(out, [polygon.astype(np.int32)], True, border_bgr, thickness)
         if fill_a > 0:
             overlay = out.copy()
             cv2.fillPoly(overlay, [polygon.astype(np.int32)], fill_bgr)

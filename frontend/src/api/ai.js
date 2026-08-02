@@ -188,6 +188,34 @@ export const vehicleApi = {
     request.post('/ai/vehicle/export-records', { sessionId }),
 }
 
+// ---------------- 人员离岗检测（ByteTrack + InsightFace + FAISS）
+export const absenceApi = {
+  staffOptions: (params) => request.get('/ai/absence/staff-options', { params }),
+  trackFrame: (formData) =>
+    request.post('/ai/absence/track-frame', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  trackVideo: (formData) =>
+    request.post('/ai/absence/track-video', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  motionProfile: (formData) =>
+    request.post('/ai/absence/motion-profile', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  videoProgress: (jobId) =>
+    request.get(`/ai/absence/video-progress/${jobId}`, { timeout: 0 }),
+  outputVideo: (name) =>
+    request.get(`/ai/absence/output/${name}`, { responseType: 'blob', timeout: 0 }),
+  resetSession: (sessionId) =>
+    request.post('/ai/absence/reset-session', { sessionId }),
+  exportEvents: (sessionId) =>
+    request.post('/ai/absence/export-events', { sessionId }),
+}
+
 // ---------------- 羽毛球视频分析
 export const badmintonApi = {
   extractFrame: (formData) =>

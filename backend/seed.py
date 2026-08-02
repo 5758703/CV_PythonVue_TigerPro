@@ -113,8 +113,9 @@ def _regroup_ai_menus():
         (274, 230, "/ai/face"),
         (276, 230, "/ai/alert"),
         (278, 230, "/ai/table"),
-        # 280 已并入目标追踪场景；path 由 _patch_vehicle_menu_merged_into_track 对齐 /ai/track
+        # 280/282 已并入目标追踪场景
         (280, 230, "/ai/track"),
+        (282, 230, "/ai/track"),
         (205, 231, "/ai/text"), (207, 231, "/ai/generate"),
         (208, 231, "/ai/ner"), (209, 231, "/ai/qa"),
         (210, 232, "/ai/asr"), (212, 232, "/ai/tts"),
@@ -246,6 +247,32 @@ def _patch_vehicle_menu_merged_into_track():
         db.session.commit()
 
 
+def _patch_absence_menu_merged_into_track():
+    """人员离岗并入目标追踪：侧栏隐藏菜单 282，保留 ai:absence:list。"""
+    changed = False
+    m282 = Menu.query.get(282)
+    if m282:
+        if m282.visible != "1":
+            m282.visible = "1"
+            changed = True
+        if m282.component != "ai/track/index":
+            m282.component = "ai/track/index"
+            changed = True
+        if m282.path != "/ai/track":
+            m282.path = "/ai/track"
+            changed = True
+        tip = "（已并入目标追踪·离岗场景）"
+        if tip not in (m282.menu_name or "") and "人员离岗" in (m282.menu_name or ""):
+            m282.menu_name = "人员离岗检测" + tip
+            changed = True
+    m2821 = Menu.query.get(2821)
+    if m2821 and m2821.visible != "1":
+        m2821.visible = "1"
+        changed = True
+    if changed:
+        db.session.commit()
+
+
 def seed_ai_menus():
     """AI 智能识别菜单种子（独立幂等：菜单不存在才写，已初始化项目也会补齐）。
 
@@ -346,6 +373,11 @@ def seed_ai_menus():
     _ensure_ai_menu(2801, 280, "车辆追踪查询", "F", "ai:vehicle:query", grant_common=True)
     # 已并入「目标追踪」场景：侧栏隐藏，保留权限标识供 /api/ai/vehicle 鉴权
     _patch_vehicle_menu_merged_into_track()
+    _ensure_ai_menu(282, 230, "人员离岗检测", "C", "ai:absence:list",
+                    path="/ai/track", component="ai/track/index", icon="User",
+                    order=11, grant_common=True)
+    _ensure_ai_menu(2821, 282, "人员离岗查询", "F", "ai:absence:query", grant_common=True)
+    _patch_absence_menu_merged_into_track()
     # 视频监控（顶级目录，order=1 排在 AI(0) 与系统管理(2) 之间）
     _ensure_ai_menu(240, 0, "摄像头管理", "C", "camera:list",
                     path="/camera", component="camera/index", icon="VideoCamera",

@@ -3,7 +3,7 @@
     <el-card shadow="never" class="scenario-card">
       <div class="scenario-header">
         <div class="scenario-title">目标追踪</div>
-        <div class="scenario-sub">按任务场景切换工作台：通用追踪 / 车辆追踪（可扩展）</div>
+        <div class="scenario-sub">按任务场景切换：通用追踪 / 车辆追踪 / 人员离岗检测</div>
       </div>
       <el-tabs v-model="scenario" class="scenario-tabs" @tab-change="onScenarioChange">
         <el-tab-pane
@@ -33,9 +33,18 @@
       title="当前账号无车辆追踪权限（ai:vehicle:list），请联系管理员授权，或切换到「通用追踪」。"
       class="perm-alert"
     />
+    <el-alert
+      v-if="scenario === 'absence' && !canUseAbsence"
+      type="warning"
+      :closable="false"
+      show-icon
+      title="当前账号无人员离岗权限（ai:absence:list），请联系管理员授权。"
+      class="perm-alert"
+    />
 
     <GeneralTrackPanel v-if="scenario === 'general'" />
     <VehicleTrackPanel v-else-if="scenario === 'vehicle' && canUseVehicle" />
+    <AbsenceTrackPanel v-else-if="scenario === 'absence' && canUseAbsence" />
   </div>
 </template>
 
@@ -47,6 +56,7 @@ import { TRACK_SCENARIOS, DEFAULT_SCENARIO, resolveScenario } from './scenarios'
 
 const GeneralTrackPanel = defineAsyncComponent(() => import('./panels/GeneralTrackPanel.vue'))
 const VehicleTrackPanel = defineAsyncComponent(() => import('./panels/VehicleTrackPanel.vue'))
+const AbsenceTrackPanel = defineAsyncComponent(() => import('./panels/AbsenceTrackPanel.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -55,6 +65,7 @@ const userStore = useUserStore()
 const scenario = ref(DEFAULT_SCENARIO)
 
 const canUseVehicle = computed(() => userStore.hasPerm('ai:vehicle:list'))
+const canUseAbsence = computed(() => userStore.hasPerm('ai:absence:list'))
 
 const currentDesc = computed(() => {
   const hit = TRACK_SCENARIOS.find((s) => s.key === scenario.value)
@@ -74,13 +85,10 @@ const syncQuery = (key) => {
 
 const applyScenarioFromRoute = () => {
   let key = resolveScenario(route.query.scenario)
-  if (key === 'vehicle' && !canUseVehicle.value) {
-    key = DEFAULT_SCENARIO
-  }
+  if (key === 'vehicle' && !canUseVehicle.value) key = DEFAULT_SCENARIO
+  if (key === 'absence' && !canUseAbsence.value) key = DEFAULT_SCENARIO
   scenario.value = key
-  if (route.query.scenario !== key) {
-    syncQuery(key)
-  }
+  if (route.query.scenario !== key) syncQuery(key)
 }
 
 const onScenarioChange = (name) => {
@@ -94,10 +102,13 @@ const onScenarioChange = (name) => {
 }
 
 onMounted(() => applyScenarioFromRoute())
-
 watch(() => route.query.scenario, () => applyScenarioFromRoute())
-watch(canUseVehicle, () => {
+watch([canUseVehicle, canUseAbsence], () => {
   if (scenario.value === 'vehicle' && !canUseVehicle.value) {
+    scenario.value = DEFAULT_SCENARIO
+    syncQuery(DEFAULT_SCENARIO)
+  }
+  if (scenario.value === 'absence' && !canUseAbsence.value) {
     scenario.value = DEFAULT_SCENARIO
     syncQuery(DEFAULT_SCENARIO)
   }

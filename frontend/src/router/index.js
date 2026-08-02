@@ -33,6 +33,12 @@ const routes = [
         redirect: { path: '/ai/track', query: { scenario: 'vehicle' } },
         meta: { title: '车辆追踪' },
       },
+      {
+        path: 'ai/absence',
+        name: 'aiAbsence',
+        redirect: { path: '/ai/track', query: { scenario: 'absence' } },
+        meta: { title: '人员离岗检测' },
+      },
       { path: 'ai/generate', name: 'aiGenerate', component: () => import('../views/ai/generate/index.vue'), meta: { title: '文本生成' } },
       { path: 'ai/ner', name: 'aiNer', component: () => import('../views/ai/ner/index.vue'), meta: { title: '实体识别' } },
       { path: 'ai/qa', name: 'aiQa', component: () => import('../views/ai/qa/index.vue'), meta: { title: '智能问答' } },

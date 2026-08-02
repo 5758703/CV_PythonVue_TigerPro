@@ -2230,7 +2230,7 @@ def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classe
     class_filter = resolve_classes(class_preset, classes)
     region_norm = parse_region(region)
     h, w = img.shape[:2]
-    px_region = region_to_pixels(region_norm, w, h) if region_norm else None
+    px_region = region_to_pixels(region_norm, w, h) if region_norm is not None else None
 
     if reset:
         get_or_create_zone_counter(abs_path, session_id, reset=True)

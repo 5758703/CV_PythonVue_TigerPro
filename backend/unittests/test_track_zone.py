@@ -256,3 +256,12 @@ def test_draw_zone_overlay_custom_colors():
         fill_color="rgba(0, 255, 0, 0.8)",
     )
     assert int(out2[100, 100][1]) > int(out[100, 100][1])
+
+
+def test_draw_zone_overlay_border_width():
+    from services.track_zone import draw_zone_overlay
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    poly = np.array([[10, 10], [110, 10], [110, 110], [10, 110]], dtype=np.int32)
+    thin = draw_zone_overlay(frame.copy(), poly, border_color="#ffffff", border_width=1, fill_alpha=0)
+    thick = draw_zone_overlay(frame.copy(), poly, border_color="#ffffff", border_width=8, fill_alpha=0)
+    assert int(thick.sum()) > int(thin.sum())

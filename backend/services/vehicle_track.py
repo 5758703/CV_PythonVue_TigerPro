@@ -834,6 +834,7 @@ def draw_vehicle_hud(
             border_color=zs.get("borderColor") or zs.get("border_color"),
             fill_color=zs.get("fillColor") or zs.get("fill_color"),
             fill_alpha=zs.get("fillAlpha", zs.get("fill_alpha")),
+            border_width=zs.get("borderWidth", zs.get("border_width", zs.get("lineWidth"))),
         )
     else:
         crossing = result.get("crossing") or {}
