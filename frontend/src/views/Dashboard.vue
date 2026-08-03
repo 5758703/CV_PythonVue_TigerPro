@@ -29,15 +29,20 @@
         <p class="hero-sub">多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 多模态 全栈纳管</p>
         <p class="hero-desc">
           一站式管理与在线测试多种 AI 模型：从 <b>HuggingFace / ModelScope / Roboflow</b> 拉取权重、统一纳管、按任务即点即测。
-          平台现支持 <b>14+ 类 AI 任务</b>，推理引擎涵盖 <b>YOLO · ByteTrack · transformers · funasr · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行。
-          视觉任务支持 <b>图片 / 视频 / 摄像头实时</b> 三种输入；图片检测可调 <b>DeepSeek AI</b> 生成正式分析报告。
+          平台现支持 <b>14+ 类 AI 任务</b>，推理引擎涵盖 <b>YOLO · ByteTrack · InsightFace · transformers · funasr · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行。
+          视觉任务支持 <b>图片 / 视频 / 摄像头实时</b> 三种输入；目标追踪覆盖 <b>车辆追踪</b> 与 <b>人员离岗检测</b>（多工位 + 移动镜头运动补偿）；图片检测可调 <b>DeepSeek AI</b> 生成正式分析报告。
         </p>
         <div class="hero-tags">
           <el-tag effect="dark" color="#409eff" class="htag">目标检测</el-tag>
           <el-tag effect="dark" color="#1a73e8" class="htag">模型训练闭环</el-tag>
           <el-tag effect="dark" color="#ff6b35" class="htag">视频抽帧 · 在线标注</el-tag>
-          <el-tag effect="dark" color="#67c23a" class="htag">图像分类</el-tag>
           <el-tag effect="dark" color="#1f6feb" class="htag">目标追踪 · 越线计数</el-tag>
+          <el-tag effect="dark" color="#2f54eb" class="htag">车辆追踪 · 车牌测速</el-tag>
+          <el-tag effect="dark" color="#c2255c" class="htag">人员离岗检测 · 运动补偿</el-tag>
+          <el-tag effect="dark" color="#13c2c2" class="htag">人脸识别 1:N</el-tag>
+          <el-tag effect="dark" color="#fa541c" class="htag">检测告警 · 监控墙</el-tag>
+          <el-tag effect="dark" color="#a0672c" class="htag">表格识别</el-tag>
+          <el-tag effect="dark" color="#67c23a" class="htag">图像分类</el-tag>
           <el-tag effect="dark" color="#00b894" class="htag">姿态估计</el-tag>
           <el-tag effect="dark" color="#d63384" class="htag">摄像头实时 · 录制</el-tag>
           <el-tag effect="dark" color="#b23b3b" class="htag">DeepSeek 分析报告</el-tag>
@@ -71,6 +76,24 @@
           </div>
           <el-icon v-if="i < trainSteps.length - 1" class="step-arrow"><ArrowRight /></el-icon>
         </div>
+      </div>
+    </el-card>
+
+    <!-- 场景快捷入口 -->
+    <el-card shadow="hover" class="scene-card">
+      <template #header>
+        <div class="loop-hd">
+          <span class="loop-title">热门场景 · 即点即用</span>
+        </div>
+      </template>
+      <div class="scene-grid">
+        <router-link v-for="s in sceneCards" :key="s.title" :to="s.to" class="scene-item">
+          <div class="scene-head">
+            <span class="scene-title">{{ s.title }}</span>
+            <el-tag v-if="s.badge" size="small" type="danger" effect="dark" class="scene-badge">{{ s.badge }}</el-tag>
+          </div>
+          <div class="scene-desc">{{ s.desc }}</div>
+        </router-link>
       </div>
     </el-card>
 
@@ -135,6 +158,40 @@ const TASK_LABELS = {
   "talking-head": "数字人",
 };
 const taskLabel = (t) => TASK_LABELS[t] || t || "其他";
+
+const sceneCards = [
+  {
+    title: "人员离岗检测",
+    badge: "NEW",
+    desc: "多工位在岗判定 · 人脸识人 · 移动镜头运动补偿",
+    to: { path: "/ai/track", query: { scenario: "absence" } },
+  },
+  {
+    title: "车辆追踪",
+    desc: "车牌 OCR · 测速拥堵 · 运动轨迹与过车记录",
+    to: { path: "/ai/track", query: { scenario: "vehicle" } },
+  },
+  {
+    title: "通用目标追踪",
+    desc: "ByteTrack 多目标 · 区域/越线进出统计",
+    to: { path: "/ai/track", query: { scenario: "general" } },
+  },
+  {
+    title: "人脸识别",
+    desc: "InsightFace 底库登记 · 1:N 实时识别",
+    to: { path: "/ai/face" },
+  },
+  {
+    title: "检测告警",
+    desc: "烟火 / 聚集 / PPE / 越线入侵 · 规则引擎与事件",
+    to: { path: "/ai/alert" },
+  },
+  {
+    title: "表格识别",
+    desc: "YOLO 检表 → RapidOCR → SLANet 结构还原",
+    to: { path: "/ai/table" },
+  },
+];
 
 const trainSteps = [
   { title: "新建数据集", desc: "yolo_flat 格式，配置检测类别" },
@@ -421,6 +478,49 @@ onBeforeUnmount(() => {
   font-size: 16px;
   flex: none;
 }
+.scene-card {
+  margin-bottom: 16px;
+}
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+}
+.scene-item {
+  display: block;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #eef1f6;
+  background: #fafbfd;
+  text-decoration: none;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.scene-item:hover {
+  border-color: #b7d3ff;
+  box-shadow: 0 6px 16px rgba(31, 111, 235, 0.12);
+  transform: translateY(-2px);
+}
+.scene-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.scene-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f2d3d;
+}
+.scene-badge {
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+.scene-desc {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #7a8aa5;
+  line-height: 1.5;
+}
 .stat-row {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
@@ -466,9 +566,15 @@ onBeforeUnmount(() => {
   .stat-row {
     grid-template-columns: repeat(3, 1fr);
   }
+  .scene-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 @media (max-width: 768px) {
   .stat-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .scene-grid {
     grid-template-columns: repeat(2, 1fr);
   }
   .loop-step {

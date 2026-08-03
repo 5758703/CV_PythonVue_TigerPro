@@ -1,142 +1,193 @@
 <template>
-  <div>
+  <div class="absence-page">
+    <!-- ======== 检测配置（与结果分离） ======== -->
     <el-card shadow="never" class="cfg-card">
-      <el-form :inline="true" label-width="auto">
-        <el-form-item label="模式">
-          <el-select v-model="mode" style="width: 140px" :disabled="busy" @change="onModeChange">
-            <el-option label="视频文件" value="file" />
-            <el-option label="本地摄像头" value="local" />
-            <el-option label="网络摄像头" value="network" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="人员检测">
-          <el-select v-model="detectId" placeholder="YOLO 检测" filterable style="width: 240px" :disabled="busy">
-            <el-option
-              v-for="m in detectModels"
-              :key="m.id"
-              :label="detectOptionLabel(m)"
-              :value="m.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="人脸模型">
-          <el-select v-model="faceModelId" placeholder="InsightFace" filterable style="width: 240px" :disabled="busy" @change="onFaceModelChange">
-            <el-option
-              v-for="m in faceModels"
-              :key="m.id"
-              :label="faceOptionLabel(m)"
-              :value="m.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="在岗名单">
-          <el-select
-            v-model="staffIds"
-            multiple
-            filterable
-            collapse-tags
-            collapse-tags-tooltip
-            placeholder="勾选已登记员工"
-            style="width: 260px"
-            :disabled="busy"
-            :loading="staffLoading"
-          >
-            <el-option v-for="p in staffOptions" :key="p.id" :label="staffLabel(p)" :value="p.id" />
-          </el-select>
-          <el-button link type="primary" :disabled="busy" @click="loadStaff">刷新</el-button>
-        </el-form-item>
-        <el-form-item label="离岗阈值(秒)">
-          <el-input-number v-model="absenceThresholdSec" :min="3" :max="3600" :step="5" :disabled="busy" />
-        </el-form-item>
-        <el-form-item label="人脸阈值">
-          <el-slider v-model="faceThreshold" :min="0.2" :max="0.8" :step="0.05" style="width: 120px" :disabled="busy" />
-        </el-form-item>
-        <el-form-item label="置信度">
-          <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" style="width: 120px" :disabled="busy" />
-        </el-form-item>
-        <el-form-item label="工位模式">
-          <el-select v-model="zoneMode" style="width: 140px" :disabled="busy" @change="onZoneModeChange">
-            <el-option label="整帧" value="none" />
-            <el-option label="单工位" value="single" />
-            <el-option label="多工位" value="multi" />
-          </el-select>
-          <span class="hint-inline">{{ zoneModeHint }}</span>
-        </el-form-item>
-        <template v-if="zoneMode === 'single'">
-          <el-form-item label="区域线色">
-            <el-color-picker v-model="zoneBorderColor" :disabled="busy" />
-          </el-form-item>
-          <el-form-item label="区域填充">
-            <el-color-picker v-model="zoneFillColor" show-alpha :disabled="busy" />
-          </el-form-item>
-          <el-form-item label="线宽">
-            <el-input-number v-model="zoneBorderWidth" :min="1" :max="16" :step="1" :disabled="busy" controls-position="right" style="width: 110px" />
-          </el-form-item>
-        </template>
-        <template v-if="zoneMode === 'multi'">
-          <el-form-item label="线宽">
-            <el-input-number v-model="zoneBorderWidth" :min="1" :max="16" :step="1" :disabled="busy" controls-position="right" style="width: 110px" />
-          </el-form-item>
-        </template>
-        <el-form-item v-if="mode === 'file'">
-          <el-upload :show-file-list="false" :auto-upload="false" accept="video/*" :on-change="onPick">
-            <el-button :icon="UploadFilled">选择视频</el-button>
-          </el-upload>
-          <el-button type="primary" style="margin-left: 8px" :loading="running" :disabled="!canStartFile" @click="runVideo">
-            开始检测
-          </el-button>
-        </el-form-item>
-        <el-form-item v-if="mode === 'local'" label="本地摄像头">
-          <el-select
-            v-model="deviceId"
-            placeholder="选择本地摄像头"
-            style="width: 240px"
-            :disabled="camRunning"
-            :loading="devicesLoading"
-            @change="onLocalDeviceChange"
-          >
-            <el-option
-              v-for="d in devices"
-              :key="d.deviceId"
-              :label="d.label"
-              :value="d.deviceId"
-            />
-          </el-select>
-          <el-button link type="primary" :disabled="camRunning" @click="refreshLocalDevices">刷新设备</el-button>
-        </el-form-item>
-        <el-form-item v-if="mode === 'network'" label="网络摄像头">
-          <el-select v-model="cameraId" filterable clearable style="width: 220px" :disabled="camRunning" :loading="camerasLoading" @change="onNetworkCameraChange">
-            <el-option v-for="c in managedCameras" :key="c.id" :label="cameraLabel(c)" :value="c.id" />
-          </el-select>
-          <el-button link type="primary" @click="loadCameras">刷新</el-button>
-        </el-form-item>
-        <el-form-item v-if="mode !== 'file'">
-          <el-button v-if="!camRunning" type="primary" :disabled="!canStartLive" @click="camStart">开始检测</el-button>
-          <el-button v-else type="danger" @click="camStopDetect">停止检测</el-button>
-          <el-button v-if="previewOpen && !camRunning" link type="danger" @click="closePreview">关闭预览</el-button>
-          <template v-if="zoneMode === 'single'">
-            <el-button v-if="camRegionPts.length >= 3 && !camRegion" link type="success" @click="finishCamRegion">闭合区域</el-button>
-            <el-button v-if="camRegion" link type="primary" @click="clearCamRegion">清除区域</el-button>
-          </template>
-          <template v-if="zoneMode === 'multi'">
-            <el-button link type="success" :disabled="draftPts.length < 3" @click="finishDraftZone">闭合并添加工位</el-button>
-            <el-button link type="warning" :disabled="!draftPts.length" @click="undoDraftPoint">撤销点</el-button>
-            <el-button link type="primary" :disabled="!draftPts.length" @click="clearDraft">清除草稿</el-button>
-          </template>
-          <el-button link type="primary" :disabled="!sessionId" @click="exportCsv">导出事件</el-button>
-        </el-form-item>
+      <template #header>
+        <div class="card-head">
+          <div class="card-head-left">
+            <span class="card-title">检测配置</span>
+            <el-tooltip placement="bottom-start">
+              <template #content>
+                <div class="help-pop">
+                  <p>{{ alertTitle }}</p>
+                  <p>推荐：YOLO26s 通用检测 + InsightFace Buffalo-L。人脸模型须与「人脸识别」页登记时一致，否则无法判定在岗（S/L 特征空间不通用）。</p>
+                </div>
+              </template>
+              <el-icon class="card-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+            <el-tag v-if="camRunning" type="success" size="small" effect="plain">检测中</el-tag>
+            <el-tag v-else-if="previewOpen && mode !== 'file'" type="info" size="small" effect="plain">预览中</el-tag>
+          </div>
+          <div class="card-head-actions">
+            <template v-if="mode === 'file'">
+              <el-button type="primary" :loading="running" :disabled="!canStartFile" @click="runVideo">开始检测</el-button>
+            </template>
+            <template v-else>
+              <el-button v-if="!camRunning" type="primary" :disabled="!canStartLive" @click="camStart">开始检测</el-button>
+              <el-button v-else type="danger" @click="camStopDetect">停止检测</el-button>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <el-form label-position="top" class="cfg-form" @submit.prevent>
+        <div class="cfg-section">
+          <div class="cfg-section-title">输入源</div>
+          <el-row :gutter="16">
+            <el-col :xs="24" :sm="8" :md="5">
+              <el-form-item label="来源">
+                <el-select v-model="mode" :disabled="busy" @change="onModeChange">
+                  <el-option label="视频文件" value="file" />
+                  <el-option label="本地摄像头" value="local" />
+                  <el-option label="网络摄像头" value="network" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col v-if="mode === 'file'" :xs="24" :sm="16" :md="10">
+              <el-form-item label="视频文件">
+                <div class="src-pick">
+                  <el-upload :show-file-list="false" :auto-upload="false" accept="video/*" :on-change="onPick">
+                    <el-button :icon="UploadFilled" :disabled="busy">选择视频</el-button>
+                  </el-upload>
+                  <span class="file-name" :title="file?.name">{{ file?.name || '未选择' }}</span>
+                </div>
+              </el-form-item>
+            </el-col>
+            <el-col v-if="mode === 'local'" :xs="24" :sm="16" :md="10">
+              <el-form-item label="本地摄像头">
+                <div class="src-pick">
+                  <el-select
+                    v-model="deviceId"
+                    placeholder="选择本地摄像头"
+                    :disabled="camRunning"
+                    :loading="devicesLoading"
+                    @change="onLocalDeviceChange"
+                  >
+                    <el-option v-for="d in devices" :key="d.deviceId" :label="d.label" :value="d.deviceId" />
+                  </el-select>
+                  <el-button link type="primary" :disabled="camRunning" @click="refreshLocalDevices">刷新</el-button>
+                </div>
+              </el-form-item>
+            </el-col>
+            <el-col v-if="mode === 'network'" :xs="24" :sm="16" :md="10">
+              <el-form-item label="网络摄像头">
+                <div class="src-pick">
+                  <el-select v-model="cameraId" filterable clearable :disabled="camRunning" :loading="camerasLoading" @change="onNetworkCameraChange">
+                    <el-option v-for="c in managedCameras" :key="c.id" :label="cameraLabel(c)" :value="c.id" />
+                  </el-select>
+                  <el-button link type="primary" @click="loadCameras">刷新</el-button>
+                </div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </div>
+
+        <div class="cfg-section">
+          <div class="cfg-section-title">模型</div>
+          <el-row :gutter="16">
+            <el-col :xs="24" :sm="12" :md="7">
+              <el-form-item label="人员检测">
+                <el-select v-model="detectId" placeholder="YOLO 检测" filterable :disabled="busy">
+                  <el-option v-for="m in detectModels" :key="m.id" :label="detectOptionLabel(m)" :value="m.id" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :sm="12" :md="7">
+              <el-form-item label="人脸模型">
+                <el-select v-model="faceModelId" placeholder="InsightFace" filterable :disabled="busy" @change="onFaceModelChange">
+                  <el-option v-for="m in faceModels" :key="m.id" :label="faceOptionLabel(m)" :value="m.id" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </div>
+
+        <div class="cfg-section">
+          <div class="cfg-section-title">在岗判定</div>
+          <el-row :gutter="16">
+            <el-col :xs="24" :sm="12" :md="8">
+              <el-form-item label="在岗名单">
+                <div class="src-pick">
+                  <el-select
+                    v-model="staffIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    placeholder="勾选已登记员工"
+                    :disabled="busy"
+                    :loading="staffLoading"
+                  >
+                    <el-option v-for="p in staffOptions" :key="p.id" :label="staffLabel(p)" :value="p.id" />
+                  </el-select>
+                  <el-button link type="primary" :disabled="busy" @click="loadStaff">刷新</el-button>
+                </div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="12" :sm="6" :md="5">
+              <el-form-item label="工位模式">
+                <el-select v-model="zoneMode" :disabled="busy" @change="onZoneModeChange">
+                  <el-option label="整帧" value="none" />
+                  <el-option label="单工位" value="single" />
+                  <el-option label="多工位" value="multi" />
+                </el-select>
+                <div class="field-hint">{{ zoneModeHint }}</div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="12" :sm="6" :md="5">
+              <el-form-item label="离岗阈值（秒）">
+                <el-input-number v-model="absenceThresholdSec" :min="3" :max="3600" :step="5" :disabled="busy" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </div>
+
+        <el-collapse class="adv-collapse">
+          <el-collapse-item name="adv">
+            <template #title>
+              <span class="adv-title">高级参数</span>
+              <span class="adv-sub">人脸阈值 {{ faceThreshold.toFixed(2) }} · 置信度 {{ conf.toFixed(2) }}</span>
+            </template>
+            <el-row :gutter="24">
+              <el-col :xs="24" :sm="12" :md="6">
+                <el-form-item label="人脸阈值">
+                  <el-slider v-model="faceThreshold" :min="0.2" :max="0.8" :step="0.05" :disabled="busy" />
+                </el-form-item>
+              </el-col>
+              <el-col :xs="24" :sm="12" :md="6">
+                <el-form-item label="检测置信度">
+                  <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" :disabled="busy" />
+                </el-form-item>
+              </el-col>
+              <template v-if="zoneMode === 'single'">
+                <el-col :xs="8" :sm="4" :md="3">
+                  <el-form-item label="区域线色">
+                    <el-color-picker v-model="zoneBorderColor" :disabled="busy" />
+                  </el-form-item>
+                </el-col>
+                <el-col :xs="8" :sm="4" :md="3">
+                  <el-form-item label="区域填充">
+                    <el-color-picker v-model="zoneFillColor" show-alpha :disabled="busy" />
+                  </el-form-item>
+                </el-col>
+              </template>
+              <el-col v-if="zoneMode !== 'none'" :xs="8" :sm="6" :md="4">
+                <el-form-item label="区域线宽">
+                  <el-input-number v-model="zoneBorderWidth" :min="1" :max="16" :step="1" :disabled="busy" controls-position="right" style="width: 100%" />
+                </el-form-item>
+              </el-col>
+            </el-row>
+          </el-collapse-item>
+        </el-collapse>
       </el-form>
-      <div v-if="zoneMode === 'multi'" class="zone-list">
+
+      <!-- 摄像头模式的工位列表（文件模式的列表在「工位绘制」卡内） -->
+      <div v-if="zoneMode === 'multi' && mode !== 'file'" class="zone-list">
         <div class="zone-list-title">工位列表（{{ dutyZones.length }}）</div>
-        <div v-if="!dutyZones.length" class="hint-inline">在画面上点 ≥3 点后「闭合并添加工位」</div>
+        <div v-if="!dutyZones.length" class="hint-inline">在实时画面上点 ≥3 点后「闭合并添加工位」</div>
         <div v-for="(z, i) in dutyZones" :key="z.id" class="zone-row">
           <span class="zone-swatch" :style="{ background: z.borderColor }" />
-          <el-input
-            v-model="z.name"
-            size="small"
-            style="width: 110px"
-            :disabled="busy"
-          />
+          <el-input v-model="z.name" size="small" style="width: 110px" :disabled="busy" />
           <el-select
             v-model="z.staffIds"
             multiple
@@ -150,23 +201,25 @@
           >
             <el-option v-for="p in staffOptions" :key="p.id" :label="staffLabel(p)" :value="p.id" />
           </el-select>
-          <el-color-picker
-            v-model="z.borderColor"
-            size="small"
-            :disabled="busy"
-            @change="(c) => onZoneColorChange(z, c)"
-          />
+          <el-color-picker v-model="z.borderColor" size="small" :disabled="busy" @change="(c) => onZoneColorChange(z, c)" />
           <el-button link type="danger" :disabled="busy" @click="removeDutyZone(i)">删除</el-button>
         </div>
       </div>
-      <el-alert type="info" :closable="false" show-icon
-        :title="alertTitle"
-        description="默认推荐：YOLO26s 通用检测 + InsightFace Buffalo-L。人脸模型须与「人脸识别」页登记时一致，否则无法判定在岗（S/L 特征空间不通用）。"
-      />
     </el-card>
 
-    <el-card v-if="mode === 'file' && previewUrl" shadow="never" class="cfg-card">
-      <div class="preview-title">原视频 / 画工位</div>
+    <!-- ======== 工位绘制（属于配置，独立成卡） ======== -->
+    <el-card v-if="mode === 'file' && previewUrl" shadow="never" class="draw-card">
+      <template #header>
+        <div class="card-head">
+          <div class="card-head-left">
+            <span class="card-title">{{ zoneMode === 'none' ? '视频预览' : '工位绘制' }}</span>
+            <template v-if="zoneMode !== 'none'">
+              <el-tag v-if="motionLoading" size="small" type="info">镜头运动分析中…</el-tag>
+              <el-tag v-else-if="motionProfile" size="small" type="success" effect="plain">已启用镜头运动补偿</el-tag>
+            </template>
+          </div>
+        </div>
+      </template>
       <el-row :gutter="16">
         <!-- 左侧：仅预览/定位，绝不画工位、绝不在 seek 时改右侧 -->
         <el-col :xs="24" :lg="zoneMode === 'none' ? 24 : 10">
@@ -202,8 +255,6 @@
             <el-button type="primary" size="small" :disabled="!canCaptureFrame" @click="captureDrawFrame(true)">
               用当前帧作底图
             </el-button>
-            <el-tag v-if="motionLoading" size="small" type="info">镜头运动分析中…</el-tag>
-            <el-tag v-else-if="motionProfile" size="small" type="success">已启用镜头运动补偿</el-tag>
             <span class="hint-inline">只有点此按钮才会更新右侧画布；拖定位条不会改右侧。</span>
           </div>
         </el-col>
@@ -216,13 +267,9 @@
             </el-tag>
             <el-tag v-else size="small" type="info" class="frozen-tag">尚未抓取底图</el-tag>
           </div>
-          <el-alert
-            class="zone-fixed-tip"
-            type="warning"
-            :closable="false"
-            show-icon
-            title="请在下方画布画工位（可连续画多个）。工位钉在画面内容上：镜头移动/拖动定位时，左侧叠加框会自动跟随所标注的真实位置（运动补偿）。"
-          />
+          <div class="field-hint zone-fixed-tip">
+            在下方画布画工位（可连续画多个）。工位钉在画面内容上：镜头移动或拖动定位时，左侧叠加框自动跟随所标注的真实位置。
+          </div>
           <div v-if="zoneMode === 'single'" class="line-tip">
             在画布上点 ≥3 点后闭合。
             <el-button link type="success" :disabled="regionPts.length < 3" @click="finishRegion">闭合区域</el-button>
@@ -237,16 +284,51 @@
           <canvas ref="drawCanvas" class="frame-canvas" @click="onDrawCanvasClick" />
         </el-col>
       </el-row>
+      <!-- 文件模式的多工位列表：紧邻绘制画布，边画边配名单 -->
+      <div v-if="zoneMode === 'multi'" class="zone-list">
+        <div class="zone-list-title">工位列表（{{ dutyZones.length }}）</div>
+        <div v-if="!dutyZones.length" class="hint-inline">在右侧画布点 ≥3 点后「闭合并添加工位」</div>
+        <div v-for="(z, i) in dutyZones" :key="z.id" class="zone-row">
+          <span class="zone-swatch" :style="{ background: z.borderColor }" />
+          <el-input v-model="z.name" size="small" style="width: 110px" :disabled="busy" />
+          <el-select
+            v-model="z.staffIds"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="本工位人员"
+            size="small"
+            style="width: 220px"
+            :disabled="busy"
+          >
+            <el-option v-for="p in staffOptions" :key="p.id" :label="staffLabel(p)" :value="p.id" />
+          </el-select>
+          <el-color-picker v-model="z.borderColor" size="small" :disabled="busy" @change="(c) => onZoneColorChange(z, c)" />
+          <el-button link type="danger" :disabled="busy" @click="removeDutyZone(i)">删除</el-button>
+        </div>
+      </div>
     </el-card>
 
-    <el-card v-if="mode === 'file'" shadow="never">
+    <!-- ======== 检测结果 ======== -->
+    <el-card v-if="mode === 'file'" shadow="never" class="res-card">
+      <template #header>
+        <div class="card-head">
+          <div class="card-head-left">
+            <span class="card-title">检测结果</span>
+            <el-tag v-if="running" size="small" type="warning" effect="plain">处理中</el-tag>
+          </div>
+          <div class="card-head-actions">
+            <el-button v-if="resultUrl" link type="primary" @click="downloadResult">下载结果视频</el-button>
+          </div>
+        </div>
+      </template>
       <div v-if="running" class="progress-box">
         <div>处理中 {{ processed }}/{{ total || '?' }}</div>
         <el-progress :percentage="percent" :stroke-width="16" />
       </div>
-      <el-empty v-else-if="!resultUrl" description="选择模型、名单与视频后开始" />
+      <el-empty v-else-if="!resultUrl" description="完成配置并点击「开始检测」后，结果将显示在此处" />
       <div v-else>
-        <div class="res-title">结果视频 <el-button link type="primary" @click="downloadResult">下载</el-button></div>
         <video :src="resultUrl" controls class="player" />
         <div class="stats">
           <el-tag :type="dutyTagType(stats.dutyStatus)" effect="dark">状态 {{ dutyStatusZh(stats.dutyStatus) }}</el-tag>
@@ -281,7 +363,28 @@
       </div>
     </el-card>
 
-    <div v-if="mode !== 'file'" class="cam-wrap">
+    <el-card v-if="mode !== 'file'" shadow="never" class="res-card">
+      <template #header>
+        <div class="card-head">
+          <div class="card-head-left">
+            <span class="card-title">实时画面与结果</span>
+            <span v-if="zoneMode !== 'none'" class="hint-inline">在画面上点击可绘制工位区</span>
+          </div>
+          <div class="card-head-actions">
+            <template v-if="zoneMode === 'single'">
+              <el-button v-if="camRegionPts.length >= 3 && !camRegion" link type="success" @click="finishCamRegion">闭合区域</el-button>
+              <el-button v-if="camRegion" link type="primary" @click="clearCamRegion">清除区域</el-button>
+            </template>
+            <template v-if="zoneMode === 'multi'">
+              <el-button link type="success" :disabled="draftPts.length < 3" @click="finishDraftZone">闭合并添加工位</el-button>
+              <el-button link type="warning" :disabled="!draftPts.length" @click="undoDraftPoint">撤销点</el-button>
+              <el-button link type="primary" :disabled="!draftPts.length" @click="clearDraft">清除草稿</el-button>
+            </template>
+            <el-button v-if="previewOpen && !camRunning" link type="danger" @click="closePreview">关闭预览</el-button>
+            <el-button link type="primary" :disabled="!sessionId" @click="exportCsv">导出事件</el-button>
+          </div>
+        </div>
+      </template>
       <div class="cam-stage">
         <video v-show="mode === 'local'" ref="camVideo" class="cam-media" muted playsinline autoplay />
         <img
@@ -333,14 +436,14 @@
         <el-table-column prop="staffName" label="人员" />
         <el-table-column prop="detail" label="说明" />
       </el-table>
-    </div>
+    </el-card>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
 import { modelApi, absenceApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
 
@@ -1908,7 +2011,47 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.cfg-card { margin-bottom: 12px; }
+.absence-page { display: flex; flex-direction: column; gap: 12px; }
+.cfg-card, .draw-card, .res-card { border-radius: 8px; }
+
+/* 卡片头：标题 + 状态 + 主操作 */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.card-head-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.card-head-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.card-title { font-size: 15px; font-weight: 650; color: #2c3e57; }
+.card-help { color: #a0aec0; cursor: help; font-size: 16px; }
+.card-help:hover { color: #409eff; }
+.help-pop { max-width: 340px; line-height: 1.6; }
+.help-pop p { margin: 0 0 6px; }
+.help-pop p:last-child { margin-bottom: 0; }
+
+/* 配置表单：分组 + 顶部标签 */
+.cfg-form :deep(.el-form-item) { margin-bottom: 10px; }
+.cfg-form :deep(.el-form-item__label) { padding-bottom: 4px; font-size: 12px; color: #7a8aa5; line-height: 1.4; }
+.cfg-form :deep(.el-select), .cfg-form :deep(.el-input) { width: 100%; }
+.cfg-section { margin-bottom: 6px; }
+.cfg-section-title {
+  font-size: 12px; font-weight: 600; color: #a5b1c5; letter-spacing: 2px;
+  margin-bottom: 6px; padding-left: 8px; border-left: 3px solid #409eff; line-height: 1.2;
+}
+.src-pick { display: flex; align-items: center; gap: 8px; width: 100%; }
+.src-pick .el-select { flex: 1; }
+.file-name {
+  flex: 1; min-width: 0; font-size: 13px; color: #606266;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.field-hint { font-size: 12px; color: #a5b1c5; line-height: 1.4; margin-top: 2px; }
+
+/* 高级参数折叠 */
+.adv-collapse { border: none; margin-top: 2px; }
+.adv-collapse :deep(.el-collapse-item__header) {
+  border: none; height: 36px; font-size: 13px; color: #606266; background: transparent;
+}
+.adv-collapse :deep(.el-collapse-item__wrap) { border: none; background: transparent; }
+.adv-collapse :deep(.el-collapse-item__content) { padding: 8px 0 0; }
+.adv-title { font-weight: 600; }
+.adv-sub { margin-left: 10px; font-size: 12px; color: #a5b1c5; }
+
 .hint-inline { margin-left: 8px; font-size: 12px; color: #909399; }
 .zone-list { margin: 8px 0 12px; padding: 8px 10px; background: #fafafa; border-radius: 6px; }
 .zone-list-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #303133; }
@@ -1923,8 +2066,7 @@ onBeforeUnmount(() => {
 .capture-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
 .frozen-tag { margin-left: 8px; vertical-align: middle; }
 .zone-fixed-tip { margin-bottom: 8px; }
-.preview-title, .res-title, .sub-title { font-weight: 600; margin-bottom: 8px; }
-.sub-title { font-size: 13px; color: #303133; }
+.sub-title { font-weight: 600; margin-bottom: 8px; font-size: 13px; color: #303133; }
 .player { width: 100%; max-height: 420px; background: #111; }
 .preview-stage { position: relative; display: inline-block; width: 100%; }
 .preview-stage .player { display: block; }
@@ -1944,7 +2086,6 @@ onBeforeUnmount(() => {
 .progress-box { padding: 12px 0; }
 .stats { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
 .evt-table { margin-top: 12px; }
-.cam-wrap { display: flex; flex-direction: column; gap: 12px; }
 .cam-stage {
   position: relative; background: #0b1220; border-radius: 8px; overflow: hidden;
   min-height: 420px; display: flex; align-items: center; justify-content: center;
