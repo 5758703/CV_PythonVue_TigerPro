@@ -13,6 +13,8 @@
 - **人员离岗检测**（目标追踪场景页签）：YOLO+ByteTrack 检人 → InsightFace/FAISS 识人，整帧/单工位/多工位模式，每工位独立名单与离岗计时/告警，事件 CSV 导出
 - **离岗镜头运动补偿**：手持/移动镜头视频下工位钉在画面内容上（背景光流全局仿射 + `refSec` 参考帧，`services/camera_motion.py`）；新增 `/api/ai/absence/motion-profile` 接口供前端画布同步补偿；工位被摇出画面（可见面积 <30%）自动按断流规则暂停计时
 - 离岗绘制工位交互：左视频预览 + 右冻结底图画布分离，左侧叠加层实时显示工位随真实桌位移动
+- YOLO 推理 **ONNX 优先加载**：权重目录存在同名 `.onnx`（如脑肿瘤 `best.pt`/`best.onnx`）时优先用 ONNX Runtime 推理，免去 472MB PyTorch 权重反序列化与 OpenVINO 重复导出尝试；`YOLO_PREFER_ONNX=0` 可关闭
+- 模型管理 **权重格式转换（pt → onnx）**：列表新增「转换」对话框，展示 pt/onnx 权重明细并支持分别下载；异步导出（imgsz / dynamic / half 可配，Ultralytics export + simplify），完成后检测自动走 ONNX Runtime；接口 `weight-info` / `convert-weight` / `convert-progress`、下载支持 `?ext=pt|onnx`（onnx → pt 因 ONNX 为冻结推理图不支持还原，界面已说明）
 - 社区协作文件：`CONTRIBUTING.md`、`GOVERNANCE.md`、`ROADMAP.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`THIRD_PARTY_NOTICES.md`
 - GitHub Issue / PR 模板、`CODEOWNERS`、标签说明与新手任务清单
 

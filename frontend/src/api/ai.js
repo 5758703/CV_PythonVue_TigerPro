@@ -15,11 +15,15 @@ export const modelApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
     }),
-  // 下载本地权重到浏览器（返回 Blob）
-  download: (id) =>
-    request.get(`/ai/model/${id}/download`, { responseType: 'blob' }),
+  // 下载本地权重到浏览器（返回 Blob）；ext 可选 'pt' | 'onnx'
+  download: (id, ext) =>
+    request.get(`/ai/model/${id}/download`, { responseType: 'blob', params: ext ? { ext } : undefined, timeout: 0 }),
   // 从 HuggingFace 来源拉取权重到服务器（下载耗时长，关闭超时）
   fetchWeight: (id) => request.post(`/ai/model/${id}/fetch`, null, { timeout: 0 }),
+  // 权重明细（pt/onnx 是否存在）与 pt→onnx 转换
+  weightInfo: (id) => request.get(`/ai/model/${id}/weight-info`),
+  convertWeight: (id, data) => request.post(`/ai/model/${id}/convert-weight`, data),
+  convertProgress: (id, jobId) => request.get(`/ai/model/${id}/convert-progress/${jobId}`),
   // 在线测试：上传图片做检测
   detect: (id, formData) =>
     request.post(`/ai/model/${id}/detect`, formData, {

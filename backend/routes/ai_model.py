@@ -252,18 +252,160 @@ def _abs_model_path(m):
     return p if os.path.exists(p) else None
 
 
+def _weight_variants(m):
+    """模型的 pt / onnx 权重文件绝对路径（互为兄弟文件）；均可为 None。"""
+    main = _abs_weight(m)
+    pt = onnx = None
+    if main:
+        ext = os.path.splitext(main)[1].lower()
+        if ext in (".pt", ".pth"):
+            pt = main
+        elif ext == ".onnx":
+            onnx = main
+        stem = os.path.splitext(main)[0]
+        if pt and os.path.isfile(stem + ".onnx"):
+            onnx = stem + ".onnx"
+        if onnx and pt is None:
+            for cand_ext in (".pt", ".pth"):
+                if os.path.isfile(stem + cand_ext):
+                    pt = stem + cand_ext
+                    break
+    return pt, onnx
+
+
 @ai_model_bp.get("/<int:mid>/download")
 @permission_required("ai:model:download")
 def download_weight(mid):
-    """下载本地权重文件到浏览器（仅单文件权重，目录型 transformers 模型不支持）。"""
+    """下载本地权重文件到浏览器（仅单文件权重，目录型 transformers 模型不支持）。
+
+    可选 ?ext=onnx|pt 指定下载哪种权重（默认主权重）。
+    """
     m = AiModel.query.get_or_404(mid)
-    abs_path = _abs_weight(m)
+    ext = (request.args.get("ext") or "").strip().lower()
+    if ext in ("pt", "onnx"):
+        pt, onnx = _weight_variants(m)
+        abs_path = pt if ext == "pt" else onnx
+        if abs_path is None:
+            return jsonify(code=400, message=f"该模型没有 .{ext} 权重文件"), 400
+    else:
+        abs_path = _abs_weight(m)
     if abs_path is None:
         if _abs_model_path(m):
             return jsonify(code=400, message="目录型模型(transformers)不支持单文件下载"), 400
         return jsonify(code=400, message="该模型暂无本地权重文件"), 400
     return send_file(abs_path, as_attachment=True,
                      download_name=os.path.basename(abs_path))
+
+
+@ai_model_bp.get("/<int:mid>/weight-info")
+@permission_required("ai:model:query")
+def weight_info(mid):
+    """权重文件明细：pt / onnx 是否存在、文件名与大小（供转换对话框展示）。"""
+    m = AiModel.query.get_or_404(mid)
+    pt, onnx = _weight_variants(m)
+
+    def _item(p):
+        if not p:
+            return None
+        try:
+            size = os.path.getsize(p)
+        except OSError:
+            size = 0
+        return {"name": os.path.basename(p), "size": size}
+
+    return jsonify(code=0, data={
+        "library": _detect_lib(m),
+        "pt": _item(pt),
+        "onnx": _item(onnx),
+    })
+
+
+_convert_jobs = {}
+_convert_jobs_lock = threading.Lock()
+
+
+def _convert_worker(job_id: str, pt_path: str, opts: dict):
+    """pt → onnx 导出线程：Ultralytics export（内部 eval + no_grad 冻结前向图）。"""
+    t0 = time.time()
+    try:
+        from inference import _disable_ultralytics_autoinstall
+        _disable_ultralytics_autoinstall()
+        from ultralytics import YOLO
+
+        model = YOLO(pt_path)
+        out = model.export(
+            format="onnx",
+            imgsz=int(opts.get("imgsz") or 640),
+            half=bool(opts.get("half")),
+            dynamic=bool(opts.get("dynamic")),
+            simplify=True,
+            device="cpu",
+            verbose=False,
+        )
+        out_path = str(out)
+        if not (out_path and os.path.isfile(out_path)):
+            raise RuntimeError("导出未生成 onnx 文件")
+        with _convert_jobs_lock:
+            j = _convert_jobs.get(job_id)
+            if j:
+                j.update({
+                    "status": "done",
+                    "output": os.path.basename(out_path),
+                    "outputSize": os.path.getsize(out_path),
+                    "elapsed": round(time.time() - t0, 1),
+                })
+    except Exception as e:  # noqa: BLE001
+        with _convert_jobs_lock:
+            j = _convert_jobs.get(job_id)
+            if j:
+                j.update({"status": "error", "error": str(e), "elapsed": round(time.time() - t0, 1)})
+
+
+@ai_model_bp.post("/<int:mid>/convert-weight")
+@permission_required("ai:model:edit")
+def convert_weight(mid):
+    """权重格式转换。当前支持 pt → onnx（Ultralytics export，输出与 pt 同目录同名 .onnx）。
+
+    onnx → pt 不支持：ONNX 是冻结的推理计算图，无法还原为可训练的 PyTorch checkpoint。
+    """
+    m = AiModel.query.get_or_404(mid)
+    data = request.get_json(silent=True) or {}
+    target = (data.get("target") or "onnx").strip().lower()
+    if target == "pt":
+        return jsonify(code=400, message="onnx → pt 不支持：ONNX 为冻结推理图，无法还原 PyTorch 训练权重；请使用原始 .pt"), 400
+    if target != "onnx":
+        return jsonify(code=400, message=f"不支持的目标格式：{target}"), 400
+    if _detect_lib(m) != "ultralytics":
+        return jsonify(code=400, message="仅 ultralytics（YOLO）模型支持 pt → onnx 转换"), 400
+    pt, onnx = _weight_variants(m)
+    if not pt:
+        return jsonify(code=400, message="该模型没有本地 .pt 权重，无法转换"), 400
+
+    job_id = uuid.uuid4().hex
+    with _convert_jobs_lock:
+        _convert_jobs[job_id] = {
+            "status": "running", "output": None, "outputSize": 0, "error": None, "elapsed": 0,
+            "existedBefore": bool(onnx),
+        }
+    dynamic = bool(data.get("dynamic"))
+    opts = {
+        "imgsz": data.get("imgsz") or 640,
+        # ONNX 导出 half 与 dynamic 互斥（ultralytics 限制），dynamic 时强制 FP32
+        "half": bool(data.get("half")) and not dynamic,
+        "dynamic": dynamic,
+    }
+    threading.Thread(target=_convert_worker, args=(job_id, pt, opts), daemon=True).start()
+    return jsonify(code=0, message="转换任务已启动", data={"jobId": job_id})
+
+
+@ai_model_bp.get("/<int:mid>/convert-progress/<job_id>")
+@permission_required("ai:model:query")
+def convert_progress(mid, job_id):
+    with _convert_jobs_lock:
+        j = _convert_jobs.get(job_id)
+    if j is None:
+        return jsonify(code=404, message="任务不存在"), 404
+    return jsonify(code=0, data=j)
 
 
 def _hub_of(url):

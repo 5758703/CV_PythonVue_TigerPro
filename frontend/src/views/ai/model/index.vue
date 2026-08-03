@@ -71,11 +71,12 @@
             <el-tag :type="row.status === '0' ? 'success' : 'info'">{{ row.status === "0" ? "启用" : "停用" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="320" fixed="right">
+        <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath" @click="openTest(row)">测试</el-button>
             <el-button v-if="row.filePath" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
             <el-button v-else-if="row.sourceUrl" v-permission="'ai:model:add'" link type="warning" :icon="Download" :loading="fetchingId === row.id" @click="fetchWeight(row)">拉取权重</el-button>
+            <el-button v-if="row.filePath && row.library === 'ultralytics'" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
             <el-button v-permission="'ai:model:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-permission="'ai:model:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
@@ -84,6 +85,72 @@
 
       <el-pagination class="pager" layout="total, prev, pager, next" :total="total" v-model:current-page="query.pageNum" v-model:page-size="query.pageSize" @current-change="load" />
     </el-card>
+
+    <!-- 权重格式转换 -->
+    <el-dialog v-model="convDialog" :title="`权重转换 · ${convModel.modelName}`" width="540px" @closed="stopConvTimer">
+      <div v-loading="convInfoLoading">
+        <div class="conv-row">
+          <span class="conv-label">PyTorch (.pt)</span>
+          <template v-if="convInfo.pt">
+            <el-tag type="success" size="small">{{ convInfo.pt.name }}</el-tag>
+            <span class="conv-size">{{ fmtSize(convInfo.pt.size) }}</span>
+            <el-button link type="primary" size="small" @click="downloadVariant('pt')">下载</el-button>
+          </template>
+          <el-tag v-else type="info" size="small">无</el-tag>
+        </div>
+        <div class="conv-row">
+          <span class="conv-label">ONNX (.onnx)</span>
+          <template v-if="convInfo.onnx">
+            <el-tag type="success" size="small">{{ convInfo.onnx.name }}</el-tag>
+            <span class="conv-size">{{ fmtSize(convInfo.onnx.size) }}</span>
+            <el-button link type="primary" size="small" @click="downloadVariant('onnx')">下载</el-button>
+          </template>
+          <el-tag v-else type="info" size="small">无</el-tag>
+        </div>
+
+        <el-divider content-position="left">pt → onnx 导出参数</el-divider>
+        <el-form label-width="130px" size="small" :disabled="convRunning" @submit.prevent>
+          <el-form-item label="输入尺寸 imgsz">
+            <el-input-number v-model="convOpts.imgsz" :min="320" :max="1280" :step="32" />
+          </el-form-item>
+          <el-form-item label="动态输入 dynamic">
+            <el-switch v-model="convOpts.dynamic" />
+            <span class="conv-hint">开启后支持任意分辨率输入，速度略降</span>
+          </el-form-item>
+          <el-form-item label="半精度 half">
+            <el-switch v-model="convOpts.half" :disabled="convOpts.dynamic" />
+            <span class="conv-hint">FP16 体积约减半（与 dynamic 互斥）</span>
+          </el-form-item>
+        </el-form>
+
+        <el-alert
+          v-if="convInfo.onnx && !convDone && !convRunning"
+          type="info" :closable="false" show-icon class="conv-alert"
+          title="已存在 onnx 权重，再次转换将覆盖导出"
+        />
+        <el-alert
+          v-if="!convInfo.pt && !convInfoLoading"
+          type="warning" :closable="false" show-icon class="conv-alert"
+          title="该模型只有 onnx 权重。onnx → pt 不支持：ONNX 是冻结的推理计算图，无法还原为可训练的 PyTorch 权重。"
+        />
+        <div v-if="convRunning" class="conv-running">
+          <el-progress :percentage="100" :indeterminate="true" :duration="2.5" :show-text="false" />
+          <div class="conv-hint">正在导出（{{ convElapsed }}s）… 大模型可能需要数分钟</div>
+        </div>
+        <el-alert v-if="convError" type="error" :closable="false" show-icon class="conv-alert" :title="convError" />
+        <el-alert
+          v-if="convDone"
+          type="success" :closable="false" show-icon class="conv-alert"
+          :title="`已生成 ${convOutput}（${fmtSize(convOutputSize)}）。检测/追踪将自动优先使用 ONNX Runtime 推理。`"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="convDialog = false">关闭</el-button>
+        <el-button type="primary" :disabled="!convInfo.pt" :loading="convRunning" @click="startConvert">
+          {{ convRunning ? '转换中…' : 'pt → onnx 转换' }}
+        </el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="dialog" :title="form.id ? '修改模型' : '新增模型'" width="560px" @closed="resetForm">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
@@ -225,7 +292,7 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Search, Refresh, Plus, Edit, Delete, UploadFilled, Download, VideoPlay, ZoomIn } from "@element-plus/icons-vue";
+import { Search, Refresh, Plus, Edit, Delete, UploadFilled, Download, VideoPlay, ZoomIn, Switch } from "@element-plus/icons-vue";
 
 import { modelApi } from "../../../api/ai";
 
@@ -488,6 +555,100 @@ const fetchWeight = async (row) => {
   }
 };
 
+// ---------------- 权重格式转换（pt → onnx）
+const convDialog = ref(false);
+const convInfoLoading = ref(false);
+const convInfo = reactive({ pt: null, onnx: null, library: "" });
+const convModel = reactive({ id: null, modelName: "" });
+const convOpts = reactive({ imgsz: 640, dynamic: false, half: false });
+const convRunning = ref(false);
+const convError = ref("");
+const convDone = ref(false);
+const convOutput = ref("");
+const convOutputSize = ref(0);
+const convElapsed = ref(0);
+let convTimer = null;
+
+const stopConvTimer = () => {
+  if (convTimer) clearInterval(convTimer);
+  convTimer = null;
+};
+
+const loadConvInfo = async () => {
+  convInfoLoading.value = true;
+  try {
+    const res = await modelApi.weightInfo(convModel.id);
+    convInfo.pt = res.data?.pt || null;
+    convInfo.onnx = res.data?.onnx || null;
+    convInfo.library = res.data?.library || "";
+  } finally {
+    convInfoLoading.value = false;
+  }
+};
+
+const openConvert = async (row) => {
+  convModel.id = row.id;
+  convModel.modelName = row.modelName;
+  convError.value = "";
+  convDone.value = false;
+  convRunning.value = false;
+  convElapsed.value = 0;
+  convDialog.value = true;
+  await loadConvInfo();
+};
+
+const startConvert = async () => {
+  convError.value = "";
+  convDone.value = false;
+  convRunning.value = true;
+  convElapsed.value = 0;
+  try {
+    const res = await modelApi.convertWeight(convModel.id, { target: "onnx", ...convOpts });
+    const jobId = res.data?.jobId;
+    if (!jobId) throw new Error("无 jobId");
+    convTimer = setInterval(async () => {
+      try {
+        const p = await modelApi.convertProgress(convModel.id, jobId);
+        const d = p.data || {};
+        convElapsed.value += 2;
+        if (d.status === "done") {
+          stopConvTimer();
+          convRunning.value = false;
+          convDone.value = true;
+          convOutput.value = d.output;
+          convOutputSize.value = d.outputSize || 0;
+          convElapsed.value = d.elapsed || convElapsed.value;
+          ElMessage.success("转换完成");
+          loadConvInfo();
+        } else if (d.status === "error") {
+          stopConvTimer();
+          convRunning.value = false;
+          convError.value = d.error || "转换失败";
+        }
+      } catch (e) {
+        stopConvTimer();
+        convRunning.value = false;
+        convError.value = e.message || "进度查询失败";
+      }
+    }, 2000);
+  } catch (e) {
+    convRunning.value = false;
+    convError.value = e.message || "启动失败";
+  }
+};
+
+const downloadVariant = async (ext) => {
+  const info = convInfo[ext];
+  if (!info) return;
+  const blob = await modelApi.download(convModel.id, ext);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = info.name;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 // ---------------- 在线测试
 const testDialog = ref(false);
 const detecting = ref(false);
@@ -661,6 +822,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onTResize);
   if (testImgSrc.value) URL.revokeObjectURL(testImgSrc.value);
+  stopConvTimer();
 });
 </script>
 
@@ -668,6 +830,12 @@ onBeforeUnmount(() => {
 .search-card {
   margin-bottom: 12px;
 }
+.conv-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.conv-label { width: 110px; font-size: 13px; color: #606266; flex: none; }
+.conv-size { font-size: 12px; color: #909399; }
+.conv-hint { margin-left: 10px; font-size: 12px; color: #a5b1c5; }
+.conv-alert { margin-top: 8px; }
+.conv-running { margin-top: 10px; }
 .toolbar {
   margin-bottom: 12px;
 }

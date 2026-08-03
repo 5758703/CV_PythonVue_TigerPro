@@ -1150,12 +1150,36 @@ def _yolo_predict_kwargs(conf=0.25, imgsz=None, **extra):
     return kw
 
 
+def _prefer_onnx() -> bool:
+    """是否优先使用同名 .onnx 权重（ONNX Runtime 推理，替代原生 PyTorch）。默认开。"""
+    return (os.getenv("YOLO_PREFER_ONNX") or "1").strip().lower() not in ("0", "false", "off")
+
+
+def _onnx_sibling(abs_path: str) -> str | None:
+    """.pt/.pth 权重的同目录 .onnx 兄弟文件：优先同名（best.pt → best.onnx），
+    否则目录内唯一 .onnx。找不到返回 None。"""
+    p = str(abs_path)
+    if not p.lower().endswith((".pt", ".pth")):
+        return None
+    stem, _ = os.path.splitext(p)
+    same = stem + ".onnx"
+    if os.path.isfile(same):
+        return same
+    try:
+        folder = os.path.dirname(p)
+        onnxs = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(".onnx")]
+    except OSError:
+        return None
+    return onnxs[0] if len(onnxs) == 1 else None
+
+
 def _get_model(abs_path):
     if _is_legacy_yolov5_weight(abs_path):
         return _load_legacy_yolov5_model(abs_path)
     mtime = os.path.getmtime(abs_path)
     backend, precision, imgsz = _yolo_infer_settings()
-    cache_key = (abs_path, backend, precision, imgsz, mtime)
+    prefer_onnx = _prefer_onnx()
+    cache_key = (abs_path, backend, precision, imgsz, mtime, prefer_onnx)
     with _lock:
         cached = _cache.get(cache_key)
         if cached and cached[0] == mtime:
@@ -1164,7 +1188,16 @@ def _get_model(abs_path):
         from ultralytics import YOLO  # 惰性导入
 
         model = None
-        use_ov = backend in ("auto", "openvino") and str(abs_path).lower().endswith((".pt", ".pth"))
+        # 1) 已有同名 .onnx：ONNX Runtime 加载（轻量、免导出、免 PyTorch 计算图）
+        if prefer_onnx and backend != "openvino":
+            onnx_path = _onnx_sibling(abs_path)
+            if onnx_path:
+                try:
+                    model = YOLO(onnx_path, task="detect")
+                except Exception:  # noqa: BLE001
+                    # onnx 损坏/算子不支持等：继续走 OpenVINO/PyTorch 原路径
+                    model = None
+        use_ov = model is None and backend in ("auto", "openvino") and str(abs_path).lower().endswith((".pt", ".pth"))
         if use_ov:
             try:
                 ov_src = _ensure_openvino_artifact(abs_path, precision=precision, imgsz=imgsz)
