@@ -981,7 +981,64 @@ def seed_ai_models():
     _bind_local_yoloe_seg_weight()
     _bind_local_yolo11s_ball_weight()
     _bind_vehicle_track_models()
+    _ensure_security_detector_models()
     return created
+
+
+# ── 安防检测器模型包：11 个本地 onnx（均内嵌 ultralytics 元数据，ONNX Runtime 推理）──
+_SECURITY_DETECTOR_SPECS = [
+    ("sec-fire-yolov8n", "烟火检测-轻量（YOLOv8n）", "sec-fire-yolov8n/fire_smoke_yolov8n.onnx", "v8n",
+     "烟火/烟雾检测（fire、smoke 2 类，640 输入，CPU 约 39ms）。安防检测器包·烟火 01。"),
+    ("sec-fire-forest-yolov8", "森林火灾检测（YOLOv8s）", "sec-fire-forest-yolov8/forest_fire_yolov8.onnx", "v8s",
+     "森林火灾 Fire/Smoke 2 类检测（640 输入）。安防检测器包·烟火 02。"),
+    ("sec-fire-collision-yolo11", "碰撞/灾害/烟火检测（YOLO11n·88类）", "sec-fire-collision-yolo11/collision_fire_yolo11.onnx", "11n",
+     "COCO80 + collision/deformed car/spinning car/debris/fire/smoke/flood/landslide 共 88 类（640 输入）。安防检测器包·烟火 03。"),
+    ("sec-ppe-yolo", "PPE 安全装备检测（YOLO）", "sec-ppe-yolo/ppe_yolo.onnx", "v8",
+     "工地 PPE 10 类：Hardhat/Mask/NO-Hardhat/NO-Mask/NO-Safety Vest/Person/Safety Cone/Safety Vest/machinery/vehicle。安防检测器包·安全帽 01。"),
+    ("sec-helmet-yolov8s", "安全帽/防护装备检测（YOLOv8s·18类）", "sec-helmet-yolov8s/helmet_yolov8s.onnx", "v8s",
+     "Helmet/No-Helmet/Vest/Gloves/Goggles/worker 等 18 类防护装备（640 输入）。安防检测器包·安全帽 02。"),
+    ("sec-fall-coco-yolov12m", "通用检测 COCO80（YOLOv12m·安防包）", "sec-fall-coco-yolov12m/coco_yolov12m.onnx", "v12m",
+     "原包命名「跌倒检测」，实测元数据为 COCO 80 类通用检测（无跌倒类别），可作高精度人形/通用检测（CPU 约 136ms）。安防检测器包 01。"),
+    ("sec-fall-yolo11n", "跌倒/行为检测（YOLO11n·7类）", "sec-fall-yolo11n/fall_behavior_yolo11n.onnx", "11n",
+     "行为 7 类：fall/sit/sleep/standing/Violence/violence 等，含跌倒类别（640 输入）。安防检测器包·跌倒 03。"),
+    ("sec-fight-nano", "打架检测-轻量（YOLO nano）", "sec-fight-nano/fight_yolo_nano.onnx", "nano",
+     "暴力行为 2 类：non_violence/violence（640 输入，CPU 约 25ms）。安防检测器包·打架 01。"),
+    ("sec-fight-small", "打架检测（YOLO small）", "sec-fight-small/fight_yolo_small.onnx", "small",
+     "暴力行为 2 类：non_violence/violence（640 输入，精度更高）。安防检测器包·打架 02。"),
+    ("sec-weapon-yolov8", "武器检测（YOLOv8·枪/刀）", "sec-weapon-yolov8/weapon_yolov8.onnx", "v8",
+     "武器 2 类：guns/knife（640 输入）。安防检测器包·武器 02。"),
+    ("sec-plate-yolov8", "车牌检测（YOLOv8n·安防包）", "sec-plate-yolov8/plate_yolov8.onnx", "v8n",
+     "license_plate 单类车牌检测（640 输入），可配合车辆追踪车牌 OCR。安防检测器包·车牌 01。"),
+]
+
+
+def _ensure_security_detector_models():
+    """安防检测器包：幂等登记 11 个模型并绑定本地 onnx 权重（缺权重则停用）。"""
+    base = os.path.dirname(os.path.abspath(__file__))
+    changed = False
+    for key, name, rel_file, ver, desc in _SECURITY_DETECTOR_SPECS:
+        rel = f"models/{rel_file}"
+        abs_p = os.path.join(base, "uploads", rel.replace("/", os.sep))
+        exists = os.path.isfile(abs_p)
+        size = os.path.getsize(abs_p) if exists else 0
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            m = AiModel(
+                model_key=key, model_name=name, category="安防检测",
+                task="object-detection", library="ultralytics", version=ver,
+                description=desc + " ONNX Runtime CPU 推理。",
+                status="0" if exists else "1",
+            )
+            db.session.add(m)
+            changed = True
+        if exists and (m.file_path != rel or m.file_size != size):
+            m.file_path = rel
+            m.file_size = size
+            m.status = "0"
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
 
 
 def _bind_vehicle_track_models():

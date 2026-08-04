@@ -14,6 +14,7 @@
 - **离岗镜头运动补偿**：手持/移动镜头视频下工位钉在画面内容上（背景光流全局仿射 + `refSec` 参考帧，`services/camera_motion.py`）；新增 `/api/ai/absence/motion-profile` 接口供前端画布同步补偿；工位被摇出画面（可见面积 <30%）自动按断流规则暂停计时
 - 离岗绘制工位交互：左视频预览 + 右冻结底图画布分离，左侧叠加层实时显示工位随真实桌位移动
 - YOLO 推理 **ONNX 优先加载**：权重目录存在同名 `.onnx`（如脑肿瘤 `best.pt`/`best.onnx`）时优先用 ONNX Runtime 推理，免去 472MB PyTorch 权重反序列化与 OpenVINO 重复导出尝试；`YOLO_PREFER_ONNX=0` 可关闭
+- 集成 **安防检测器模型包（11 个本地 ONNX）**：烟火×3（含 88 类碰撞/灾害扩展）、PPE/安全帽×2、跌倒/行为×2、打架×2、武器（枪/刀）、车牌，统一分类「安防检测」种子登记（`sec-*`，幂等绑定权重），全部经 ONNX Runtime CPU 推理，可在图片/视频/摄像头检测及告警规则中选用；原包「跌倒检测 YOLOv12m」实测为 COCO80 通用模型，已如实标注
 - 模型管理 **权重格式转换（pt → onnx）**：列表新增「转换」对话框，展示 pt/onnx 权重明细并支持分别下载；异步导出（imgsz / dynamic / half 可配，Ultralytics export + simplify），完成后检测自动走 ONNX Runtime；接口 `weight-info` / `convert-weight` / `convert-progress`、下载支持 `?ext=pt|onnx`（onnx → pt 因 ONNX 为冻结推理图不支持还原，界面已说明）
 - 社区协作文件：`CONTRIBUTING.md`、`GOVERNANCE.md`、`ROADMAP.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`THIRD_PARTY_NOTICES.md`
 - GitHub Issue / PR 模板、`CODEOWNERS`、标签说明与新手任务清单

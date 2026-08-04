@@ -83,7 +83,33 @@
         </el-table-column>
       </el-table>
 
-      <el-pagination class="pager" layout="total, prev, pager, next" :total="total" v-model:current-page="query.pageNum" v-model:page-size="query.pageSize" @current-change="load" />
+      <div class="pager-row">
+        <div class="page-size-custom">
+          每页
+          <el-input-number
+            v-model="query.pageSize"
+            :min="1"
+            :max="200"
+            :step="1"
+            step-strictly
+            size="small"
+            controls-position="right"
+            style="width: 92px"
+            @change="onPageSizeChange"
+          />
+          个
+        </div>
+        <el-pagination
+          class="pager"
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="total"
+          :page-sizes="[10, 12, 13, 15, 20, 30, 50, 100]"
+          v-model:current-page="query.pageNum"
+          v-model:page-size="query.pageSize"
+          @current-change="load"
+          @size-change="onPageSizeChange"
+        />
+      </div>
     </el-card>
 
     <!-- 权重格式转换 -->
@@ -305,7 +331,24 @@ const rows = ref([]);
 const total = ref(0);
 const categories = ref([]);
 const tasks = ref([]);
-const query = reactive({ pageNum: 1, pageSize: 10, modelName: "", category: "", task: "", source: "", orderBy: "", orderDir: "" });
+// 每页条数支持任意自定义（1-200），并记忆到本地
+const PAGE_SIZE_KEY = "model-list-page-size";
+const _savedPageSize = Math.floor(Number(localStorage.getItem(PAGE_SIZE_KEY)) || 0);
+const query = reactive({
+  pageNum: 1,
+  pageSize: _savedPageSize >= 1 && _savedPageSize <= 200 ? _savedPageSize : 10,
+  modelName: "", category: "", task: "", source: "", orderBy: "", orderDir: "",
+});
+
+const onPageSizeChange = (val) => {
+  const n = Math.max(1, Math.min(200, Math.floor(Number(val) || 10)));
+  query.pageSize = n;
+  query.pageNum = 1;
+  try {
+    localStorage.setItem(PAGE_SIZE_KEY, String(n));
+  } catch { /* 本地存储不可用时忽略 */ }
+  load();
+};
 
 const HUB_META = {
   huggingface: { label: "HuggingFace", color: "#ff9d00" },
@@ -830,6 +873,8 @@ onBeforeUnmount(() => {
 .search-card {
   margin-bottom: 12px;
 }
+.pager-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.page-size-custom { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #606266; }
 .conv-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .conv-label { width: 110px; font-size: 13px; color: #606266; flex: none; }
 .conv-size { font-size: 12px; color: #909399; }
@@ -840,7 +885,7 @@ onBeforeUnmount(() => {
   margin-bottom: 12px;
 }
 .pager {
-  margin-top: 14px;
+  margin-top: 0;
   justify-content: flex-end;
 }
 .file-hint {
