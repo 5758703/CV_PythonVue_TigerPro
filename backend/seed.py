@@ -982,7 +982,50 @@ def seed_ai_models():
     _bind_local_yolo11s_ball_weight()
     _bind_vehicle_track_models()
     _ensure_security_detector_models()
+    _ensure_fish_detector_model()
     return created
+
+
+def _ensure_fish_detector_model():
+    """鱼类检测（灰度水下）YOLO11n：幂等登记并绑定本地权重目录（pt + onnx，onnx 优先推理）。"""
+    key = "yolo11-fish-detector-grayscale"
+    rel = "models/yolo11-fish-detector-grayscale"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    m = AiModel.query.filter_by(model_key=key).first()
+    if not m:
+        m = AiModel(
+            model_key=key,
+            model_name="鱼类检测（灰度水下·YOLO11n）",
+            category="海洋-鱼类检测",
+            task="object-detection", library="ultralytics", version="11n",
+            source_url="https://huggingface.co/akridge/yolo11-fish-detector-grayscale#yolo11n_fish_trained.pt",
+            description="水下灰度影像鱼类检测（fish 单类，640 输入，YOLO11n）。"
+                        "目录含 pt 与 onnx 双权重，推理自动优先 ONNX Runtime。",
+            status="1",
+        )
+        db.session.add(m)
+    size = 0
+    if os.path.isdir(abs_dir):
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+    changed = False
+    if size > 0:
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed or m.id is None:
+        db.session.commit()
+    return changed
 
 
 # ── 安防检测器模型包：11 个本地 onnx（均内嵌 ultralytics 元数据，ONNX Runtime 推理）──
