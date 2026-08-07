@@ -3097,9 +3097,25 @@ def segment_image_mobilesam(abs_path, image_bytes, points=None, point_labels=Non
             "imageBase64": image_b64, "width": w, "height": h}
 
 
-def classify_image(model_dir, image_bytes, task="image-classification", top_k=5):
-    """transformers 图像分类，返回 results=[{label, score}] 降序 + top。"""
+def classify_image(model_dir, image_bytes, task="image-classification", top_k=5,
+                   *, library=None, precision="fp32", prefer_backend="auto"):
+    """图像分类：transformers（ViT 等）或 opencv-dnn（MobileNet V2 fp32/int8）。
+
+    返回 results=[{label, score}] 降序 + top；DNN 路径额外含 latencyMs/precision/backend。
+    """
+    lib = (library or "").strip().lower()
+    if lib in ("opencv-dnn", "opencv_dnn", "mobilenet", "dnn"):
+        from mobilenet_dnn import classify_mobilenet
+        return classify_mobilenet(
+            model_dir,
+            image_bytes,
+            top_k=top_k,
+            precision=precision,
+            prefer_backend=prefer_backend,
+        )
+
     from PIL import Image
+    t0 = time.perf_counter()
     arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
@@ -3108,7 +3124,14 @@ def classify_image(model_dir, image_bytes, task="image-classification", top_k=5)
     pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
     out = pipe(pil, top_k=top_k)
     results = [{"label": o["label"], "score": round(float(o["score"]), 4)} for o in out]
-    return {"results": results, "top": results[0] if results else None}
+    latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+    return {
+        "results": results,
+        "top": results[0] if results else None,
+        "latencyMs": latency_ms,
+        "precision": "fp32",
+        "backend": "transformers",
+    }
 
 
 # ------------------------------------------------------------ transformers 其它 NLP 任务

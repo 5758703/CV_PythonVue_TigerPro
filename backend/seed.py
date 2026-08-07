@@ -108,7 +108,7 @@ def _regroup_ai_menus():
     # (leaf_id, group_id, abs_path)
     moves = [
         (202, 230, "/ai/image"), (203, 230, "/ai/video"), (204, 230, "/ai/camera"),
-        (206, 230, "/ai/imgcls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
+        (206, 230, "/ai/imgcls"), (284, 230, "/ai/livecls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
         (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
         (274, 230, "/ai/face"),
         (276, 230, "/ai/alert"),
@@ -323,6 +323,10 @@ def seed_ai_menus():
     _ensure_ai_menu(206, 200, "图像分类", "C", "ai:imgcls:list",
                     path="imgcls", component="ai/imgcls/index", icon="PictureFilled",
                     order=6, grant_common=True)
+    _ensure_ai_menu(284, 230, "实时分类", "C", "ai:livecls:list",
+                    path="/ai/livecls", component="ai/livecls/index", icon="View",
+                    order=5, grant_common=True)
+    _ensure_ai_menu(2841, 284, "实时分类查询", "F", "ai:livecls:query", grant_common=True)
     _ensure_ai_menu(207, 200, "文本生成", "C", "ai:generate:list",
                     path="generate", component="ai/generate/index", icon="ChatDotRound",
                     order=7, grant_common=True)
@@ -600,6 +604,47 @@ def _bind_local_insightface():
     return any_changed
 
 
+def _bind_local_mobilenet_weight():
+    """若 uploads/models/mobilenet-v2 已含双 ONNX + labels，绑定 file_path（幂等）。"""
+    m = AiModel.query.filter_by(model_key="mobilenet-v2").first()
+    if not m:
+        return False
+    rel = "models/mobilenet-v2"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    try:
+        from mobilenet_dnn import assets_ready
+        ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
+    except Exception:  # noqa: BLE001
+        ready = False
+    changed = False
+    if ready:
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if size > 0 and m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    else:
+        # 无本地资产时保持可拉取；不强制停用（与 vit-base 一致，前端提示拉取）
+        if m.file_path and not os.path.exists(os.path.join(base, "uploads", (m.file_path or "").replace("/", os.sep))):
+            m.file_path = None
+            m.file_size = None
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
 def _purge_cosyvoice_models():
     """删除 CosyVoice 模型记录及本地权重（幂等）。"""
     keys = ("cosyvoice-300m-sft", "cosyvoice2-0.5b")
@@ -776,6 +821,21 @@ def seed_ai_models():
         source_url="https://huggingface.co/google/vit-base-patch16-224",
         description="Google ViT 图像分类(ImageNet 1000类)，transformers 引擎，用于图像分类页。", status="0",
     ))
+    # OpenCV DNN：MobileNet V2 fp32 + int8（ONNX Model Zoo）+ ImageNet 1000 标签
+    created |= _ensure_ai_model("mobilenet-v2", dict(
+        model_name="MobileNet V2（OpenCV DNN）", category="图像分类",
+        task="image-classification", library="opencv-dnn", version="v2",
+        source_url=(
+            "https://github.com/onnx/models/raw/main/validated/vision/classification/"
+            "mobilenet/model/mobilenetv2-12.onnx"
+        ),
+        description=(
+            "MobileNet V2 ImageNet-1000 分类（OpenCV DNN）。拉取后含 fp32/int8 双 ONNX "
+            "与 imagenet_classes.txt；用于图像分类页与摄像头实时分类页。"
+        ),
+        status="0",
+    ))
+    created |= _bind_local_mobilenet_weight()
     # NLP 任务示例（A 文本分类 / B 零样本·完形 / C 翻译·摘要 / D NER·QA）
     created |= _ensure_ai_model("bert-emotion", dict(
         model_name="BERT 情绪识别", category="文本分类",

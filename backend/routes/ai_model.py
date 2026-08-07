@@ -796,6 +796,20 @@ def _detect_model_path(m):
     return _abs_weight(m)
 
 
+def _fetch_mobilenet_dnn_weight(folder, sub):
+    """拉取 MobileNet V2 fp32 + int8 ONNX 与 ImageNet 1000 类标签。"""
+    from mobilenet_dnn import download_assets
+    _ensure_dir(folder)
+    download_assets(folder)
+    size = 0
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    return f"models/{sub}", size
+
+
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
@@ -805,7 +819,9 @@ def fetch_weight(mid):
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if lib == "mobilesam":
+        if lib in ("opencv-dnn", "opencv_dnn", "mobilenet"):
+            rel, size = _fetch_mobilenet_dnn_weight(folder, sub)
+        elif lib == "mobilesam":
             rel, size = _fetch_mobilesam_weight(folder, sub)
         elif lib == "rfdetr":
             rel, size = _fetch_rfdetr_weight(folder, sub, m.model_key)
@@ -887,7 +903,7 @@ def analyze_text(mid):
 @ai_model_bp.post("/<int:mid>/classify-image")
 @permission_required("ai:model:query")
 def classify_image_route(mid):
-    """图像分类在线测试（transformers，如 ViT/ResNet）。"""
+    """图像分类在线测试（transformers ViT，或 opencv-dnn MobileNet V2 fp32/int8）。"""
     m = AiModel.query.get_or_404(mid)
     path = _abs_model_path(m)
     if path is None:
@@ -900,10 +916,20 @@ def classify_image_route(mid):
         top_k = int(request.form.get("topK", 5))
     except (TypeError, ValueError):
         top_k = 5
+    precision = (request.form.get("precision") or "fp32").strip().lower()
+    prefer_backend = (request.form.get("backend") or "auto").strip().lower()
 
     try:
         from inference import classify_image
-        result = classify_image(path, file.read(), task=m.task or "image-classification", top_k=top_k)
+        result = classify_image(
+            path,
+            file.read(),
+            task=m.task or "image-classification",
+            top_k=top_k,
+            library=m.library,
+            precision=precision,
+            prefer_backend=prefer_backend,
+        )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"分类失败：{e}"), 500
     return jsonify(code=0, message="分类完成", data=result)

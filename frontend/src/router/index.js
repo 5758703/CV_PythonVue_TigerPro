@@ -23,6 +23,7 @@ const routes = [
       { path: 'ai/alert', name: 'aiAlert', component: () => import('../views/ai/alert/index.vue'), meta: { title: '检测告警' } },
       { path: 'ai/text', name: 'aiText', component: () => import('../views/ai/text/index.vue'), meta: { title: '文本分析' } },
       { path: 'ai/imgcls', name: 'aiImgcls', component: () => import('../views/ai/imgcls/index.vue'), meta: { title: '图像分类' } },
+      { path: 'ai/livecls', name: 'aiLivecls', component: () => import('../views/ai/livecls/index.vue'), meta: { title: '实时分类' } },
       { path: 'ai/ocr', name: 'aiOcr', component: () => import('../views/ai/ocr/index.vue'), meta: { title: '文字识别' } },
       { path: 'ai/paddleocr', name: 'aiPaddleOcr', component: () => import('../views/ai/paddleocr/index.vue'), meta: { title: 'PaddleOCR 识别' } },
       { path: 'ai/table', name: 'aiTable', component: () => import('../views/ai/table/index.vue'), meta: { title: '表格识别' } },

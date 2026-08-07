@@ -195,6 +195,7 @@
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="transformers（HF 模型目录）" value="transformers" />
+            <el-option label="opencv-dnn（MobileNet V2 ONNX）" value="opencv-dnn" />
             <el-option label="rfdetr（RF-DETR 目标检测/分割）" value="rfdetr" />
             <el-option label="mobilesam（MobileSAM 交互分割）" value="mobilesam" />
             <el-option label="rtmlib（RTMO/RTMPose ONNX）" value="rtmlib" />

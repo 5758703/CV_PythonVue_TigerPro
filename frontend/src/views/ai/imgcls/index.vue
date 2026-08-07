@@ -8,14 +8,20 @@
           </el-select>
         </el-form-item>
         <el-form-item label="分类模型">
-          <el-select v-model="modelId" placeholder="选择模型" style="width: 240px">
+          <el-select v-model="modelId" placeholder="选择模型" style="width: 280px">
             <el-option
               v-for="m in filteredModels"
               :key="m.id"
-              :label="`${m.modelName}（${m.category || '未分类'}）`"
+              :label="`${m.modelName}（${m.library || '未分类'}）`"
               :value="m.id"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="isDnn" label="精度">
+          <el-radio-group v-model="precision">
+            <el-radio-button value="fp32">FP32</el-radio-button>
+            <el-radio-button value="int8">INT8</el-radio-button>
+          </el-radio-group>
         </el-form-item>
         <el-form-item>
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick" accept="image/*">
@@ -36,7 +42,15 @@
         v-if="!modelOptions.length"
         type="warning"
         :closable="false"
-        title="暂无可用分类模型：请到「模型管理」新增 transformers 图像分类模型（如 ViT）并拉取权重。"
+        title="暂无可用分类模型：请到「模型管理」新增/拉取 transformers（ViT）或 opencv-dnn（MobileNet V2）图像分类模型。"
+      />
+      <el-alert
+        v-else-if="isDnn"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-top: 8px"
+        title="当前为 OpenCV DNN MobileNet：可切换 FP32 / INT8。实时摄像头预览请到「实时分类」页。"
       />
     </el-card>
 
@@ -56,9 +70,14 @@
         <div class="col-res">
           <template v-if="result">
             <el-alert :title="`Top-1：${result.top.label}（${(result.top.score * 100).toFixed(1)}%）`" type="success" :closable="false" />
+            <div v-if="result.latencyMs != null" class="meta-tags">
+              <el-tag size="small" effect="plain">耗时 {{ result.latencyMs }} ms</el-tag>
+              <el-tag v-if="result.precision" size="small" effect="plain">{{ String(result.precision).toUpperCase() }}</el-tag>
+              <el-tag v-if="result.backend" size="small" effect="plain">{{ result.backend }}</el-tag>
+            </div>
             <div class="scores">
-              <div v-for="r in result.results" :key="r.label" class="score-row">
-                <span class="score-label" :title="r.label">{{ r.label }}</span>
+              <div v-for="r in result.results" :key="r.label + (r.labelEn || '')" class="score-row">
+                <span class="score-label" :title="r.labelEn || r.label">{{ r.label }}</span>
                 <el-progress :percentage="+(r.score * 100).toFixed(1)" :stroke-width="14" class="score-bar" />
               </div>
             </div>
@@ -77,16 +96,24 @@ import { UploadFilled, MagicStick, Refresh } from '@element-plus/icons-vue'
 
 import { modelApi } from '../../../api/ai'
 import { useInferProgress } from '../../../composables/useInferProgress'
+import { loadImageClassificationModels, pickPreferredClsModel } from '../../../utils/clsModels'
 
 const modelOptions = ref([])
 const modelId = ref(null)
 const category = ref('')
+const precision = ref('fp32')
 const file = ref(null)
 const previewSrc = ref('')
 const result = ref(null)
 const imageInfo = ref(null)
 
 const { running: analyzing, percent, etaText, elapsedText, start, finish } = useInferProgress(modelId)
+
+const selectedModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value))
+const isDnn = computed(() => {
+  const lib = (selectedModel.value?.library || '').toLowerCase()
+  return lib === 'opencv-dnn' || lib === 'opencv_dnn' || lib === 'mobilenet' || /opencv|dnn|mobilenet/.test(lib)
+})
 
 const fmtSize = (bytes) => {
   if (!bytes) return '0 B'
@@ -107,11 +134,12 @@ const onCategoryChange = () => {
 }
 
 const loadModels = async () => {
-  const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  modelOptions.value = (res.data.rows || []).filter(
-    (m) => m.library === 'transformers' && m.task === 'image-classification' && m.filePath && m.status === '0'
-  )
-  if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
+  try {
+    modelOptions.value = await loadImageClassificationModels(modelApi)
+    modelId.value = pickPreferredClsModel(modelOptions.value, modelId.value)
+  } catch (_) {
+    modelOptions.value = []
+  }
 }
 
 const onPick = (uploadFile) => {
@@ -135,7 +163,11 @@ const analyze = async () => {
   try {
     const fd = new FormData()
     fd.append('file', file.value)
-    fd.append('topK', 5)
+    fd.append('topK', isDnn.value ? 3 : 5)
+    if (isDnn.value) {
+      fd.append('precision', precision.value)
+      fd.append('backend', 'auto')
+    }
     const res = await modelApi.classifyImage(modelId.value, fd)
     result.value = res.data
   } finally {
@@ -197,6 +229,12 @@ onBeforeUnmount(() => {
 .col-res {
   flex: 1 1 50%;
   min-width: 0;
+}
+.meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
 }
 .img-box {
   background: #f4f6fb;
