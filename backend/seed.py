@@ -604,6 +604,41 @@ def _bind_local_insightface():
     return any_changed
 
 
+def _bind_local_efficient_sam_weight():
+    """若 uploads/models/efficient-sam 已含 ONNX，绑定 file_path（幂等）。"""
+    m = AiModel.query.filter_by(model_key="efficient-sam").first()
+    if not m:
+        return False
+    rel = "models/efficient-sam"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    try:
+        from efficient_sam_dnn import assets_ready
+        ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
+    except Exception:  # noqa: BLE001
+        ready = False
+    changed = False
+    if ready:
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if size > 0 and m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
 def _bind_local_yunet_sface_weight():
     """若 uploads/models/opencv-yunet-sface 已含 YuNet+SFace，绑定 file_path（幂等）。"""
     m = AiModel.query.filter_by(model_key="opencv-yunet-sface").first()
@@ -840,6 +875,18 @@ def seed_ai_models():
         source_url="https://github.com/ChaoningZhang/MobileSAM",
         description="MobileSAM 轻量 SAM，支持点击/框选/全自动分割，CPU 可用。图像分割页。", status="0",
     ))
+    # OpenCV Zoo EfficientSAM-Ti（纯 DNN ONNX，点/框交互）
+    created |= _ensure_ai_model("efficient-sam", dict(
+        model_name="EfficientSAM-Ti（OpenCV）", category="交互分割",
+        task="interactive-segmentation", library="opencv-sam", version="2025april",
+        source_url="https://huggingface.co/opencv/image_segmentation_efficientsam",
+        description=(
+            "OpenCV Zoo EfficientSAM-Ti：点选/框选交互分割，cv2.dnn ONNX（无 PyTorch）。"
+            "推荐 2025april；最多 6 个 prompt 点；可选 int8。Apache-2.0。"
+        ),
+        status="0",
+    ))
+    created |= _bind_local_efficient_sam_weight()
     # Ultralytics YOLOE-26s 开放词汇实例分割（本地权重目录已预置）
     created |= _ensure_ai_model("yoloe-26s-seg", dict(
         model_name="YOLOE-26s 开放词汇分割", category="实例分割",

@@ -789,9 +789,13 @@ def _detect_lib(m):
 
 
 def _detect_model_path(m):
-    """目标检测模型本地路径（ultralytics/rfdetr 单文件，transformers 目录）。"""
+    """目标检测/分割模型本地路径。
+
+    transformers / opencv-sam / opencv-dnn 等目录型返回目录；其余挑单文件权重。
+    """
     lib = _detect_lib(m)
-    if lib == "transformers":
+    if lib in ("transformers", "opencv-sam", "efficientsam", "efficient-sam",
+               "opencv-dnn", "opencv_dnn", "opencv-face"):
         return _abs_model_path(m)
     return _abs_weight(m)
 
@@ -824,6 +828,20 @@ def _fetch_yunet_sface_weight(folder, sub):
     return f"models/{sub}", size
 
 
+def _fetch_efficient_sam_weight(folder, sub):
+    """拉取 OpenCV Zoo EfficientSAM-Ti ONNX（fp32 + 可选 int8）。"""
+    from efficient_sam_dnn import download_assets
+    _ensure_dir(folder)
+    download_assets(folder)
+    size = 0
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    return f"models/{sub}", size
+
+
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
@@ -833,7 +851,9 @@ def fetch_weight(mid):
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if lib in ("opencv-face", "yunet-sface", "yunet_sface"):
+        if lib in ("opencv-sam", "efficientsam", "efficient-sam"):
+            rel, size = _fetch_efficient_sam_weight(folder, sub)
+        elif lib in ("opencv-face", "yunet-sface", "yunet_sface"):
             rel, size = _fetch_yunet_sface_weight(folder, sub)
         elif lib in ("opencv-dnn", "opencv_dnn", "mobilenet"):
             rel, size = _fetch_mobilenet_dnn_weight(folder, sub)
@@ -1356,7 +1376,7 @@ def pose_route(mid):
 @ai_model_bp.post("/<int:mid>/segment")
 @permission_required("ai:model:query")
 def segment_route(mid):
-    """实例/交互分割：RF-DETR-Seg / Ultralytics(YOLOE) / MobileSAM。"""
+    """实例/交互分割：RF-DETR-Seg / Ultralytics(YOLOE) / MobileSAM / EfficientSAM。"""
     m = AiModel.query.get_or_404(mid)
     lib = _detect_lib(m)
     task = (m.task or "").lower()
@@ -1404,8 +1424,28 @@ def segment_route(mid):
             result = segment_image_mobilesam(
                 abs_path, file.read(), points=points, point_labels=point_labels,
                 box=box, mode=mode, draw=draw)
+        elif lib in ("opencv-sam", "efficientsam", "efficient-sam"):
+            import json
+            from inference import segment_image_efficientsam
+            points = point_labels = box = None
+            raw_pts = request.form.get("points")
+            raw_lbl = request.form.get("pointLabels")
+            raw_box = request.form.get("box")
+            if raw_pts:
+                points = json.loads(raw_pts)
+            if raw_lbl:
+                point_labels = json.loads(raw_lbl)
+            if raw_box:
+                box = json.loads(raw_box)
+            precision = (request.form.get("precision") or "fp32").strip().lower()
+            result = segment_image_efficientsam(
+                abs_path, file.read(), points=points, point_labels=point_labels,
+                box=box, draw=draw, precision=precision)
         else:
-            return jsonify(code=400, message="分割仅支持 rfdetr、ultralytics 或 mobilesam 引擎"), 400
+            return jsonify(
+                code=400,
+                message="分割仅支持 rfdetr、ultralytics、mobilesam 或 opencv-sam 引擎",
+            ), 400
     except ValueError as e:
         return jsonify(code=400, message=str(e)), 400
     except Exception as e:  # noqa: BLE001

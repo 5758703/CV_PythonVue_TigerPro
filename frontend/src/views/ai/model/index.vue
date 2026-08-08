@@ -198,6 +198,7 @@
             <el-option label="opencv-dnn（MobileNet V2 ONNX）" value="opencv-dnn" />
             <el-option label="rfdetr（RF-DETR 目标检测/分割）" value="rfdetr" />
             <el-option label="mobilesam（MobileSAM 交互分割）" value="mobilesam" />
+            <el-option label="opencv-sam（EfficientSAM）" value="opencv-sam" />
             <el-option label="rtmlib（RTMO/RTMPose ONNX）" value="rtmlib" />
             <el-option label="funasr（语音识别）" value="funasr" />
             <el-option label="funasr-nano（Fun-ASR-Nano）" value="funasr-nano" />
@@ -407,6 +408,7 @@ const LIB_DEFAULT_TASK = {
   ultralytics: "object-detection",
   rfdetr: "object-detection",
   mobilesam: "interactive-segmentation",
+  "opencv-sam": "interactive-segmentation",
   rtmlib: "pose-estimation",
   insightface: "face-recognition",
   "opencv-face": "face-recognition",

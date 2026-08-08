@@ -3097,6 +3097,50 @@ def segment_image_mobilesam(abs_path, image_bytes, points=None, point_labels=Non
             "imageBase64": image_b64, "width": w, "height": h}
 
 
+def segment_image_efficientsam(model_path, image_bytes, points=None, point_labels=None, box=None,
+                               draw=True, precision="fp32"):
+    """OpenCV EfficientSAM-Ti 交互分割（点/框），无 auto 模式。"""
+    from efficient_sam_dnn import infer_mask
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    h, w = img.shape[:2]
+    if not points and not box:
+        raise ValueError("EfficientSAM 请提供点击坐标 points 或框选 box（最多 6 个点含框角）")
+
+    mask, score, meta = infer_mask(
+        model_path, img, points=points, point_labels=point_labels, box=box, precision=precision)
+    ys, xs = np.where(mask)
+    if len(xs):
+        bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+    else:
+        bbox = [0.0, 0.0, 0.0, 0.0]
+    detections = [{
+        "className": "segment",
+        "classId": 0,
+        "confidence": round(float(score), 4),
+        "bbox": [round(v, 1) for v in bbox],
+        "maskBase64": _encode_mask_b64(mask),
+    }]
+    image_b64 = None
+    if draw:
+        plotted = _blend_mask_detections(img, detections)
+        ok, buf = cv2.imencode(".jpg", plotted)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+        "backend": meta.get("backend"),
+        "latencyMs": meta.get("latencyMs"),
+        "onnx": meta.get("onnx"),
+    }
+
+
 def classify_image(model_dir, image_bytes, task="image-classification", top_k=5,
                    *, library=None, precision="fp32", prefer_backend="auto"):
     """图像分类：transformers（ViT 等）或 opencv-dnn（MobileNet V2 fp32/int8）。

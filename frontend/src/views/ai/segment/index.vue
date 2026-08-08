@@ -4,6 +4,7 @@
       <el-tab-pane label="RF-DETR 实例分割" name="rfdetr" />
       <el-tab-pane label="YOLOE 开放词汇分割" name="ultralytics" />
       <el-tab-pane label="MobileSAM 交互分割" name="mobilesam" />
+      <el-tab-pane label="EfficientSAM（OpenCV）" name="efficientsam" />
     </el-tabs>
 
     <el-card shadow="never" class="cfg-card">
@@ -15,9 +16,9 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="模型">
-          <el-select v-model="modelId" placeholder="选择分割模型" style="width: 260px">
+          <el-select v-model="modelId" placeholder="选择分割模型" style="width: 320px" @change="onModelChange">
             <el-option v-for="m in filteredModels" :key="m.id"
-                       :label="`${m.modelName}（${m.category || '未分类'}）`" :value="m.id" />
+                       :label="`${m.modelName}（${m.library || m.modelKey || '未分类'}）`" :value="m.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="置信度">
@@ -37,13 +38,19 @@
             <el-radio-button value="auto">全自动</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics' || samMode === 'auto'">
+        <el-form-item v-if="engine === 'efficientsam'" label="精度">
+          <el-radio-group v-model="esamPrecision">
+            <el-radio-button value="fp32">FP32</el-radio-button>
+            <el-radio-button value="int8">INT8</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics' || (engine === 'mobilesam' && samMode === 'auto')">
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick"
                      :accept="isVideoMode ? 'video/*' : 'image/*'">
             <el-button :icon="UploadFilled">{{ pickLabel }}</el-button>
           </el-upload>
         </el-form-item>
-        <el-form-item v-if="engine === 'mobilesam' && samMode === 'prompt'">
+        <el-form-item v-if="isSamPrompt">
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPickSam" accept="image/*">
             <el-button :icon="UploadFilled">选择图片</el-button>
           </el-upload>
@@ -53,16 +60,19 @@
             开始分割
           </el-button>
           <el-button :icon="Refresh" @click="clearAll">清空</el-button>
-          <el-button v-if="engine === 'mobilesam' && samMode === 'prompt' && points.length" link type="warning"
-                     @click="clearPoints">清除标点</el-button>
+          <el-button v-if="isSamPrompt && (points.length || promptBox)" link type="warning"
+                     @click="clearPoints">清除标注</el-button>
         </el-form-item>
       </el-form>
-      <el-alert v-if="!filteredModels.length" type="warning" :closable="false" :title="emptyModelTitle" />
+      <el-alert v-if="emptyModelTitle" type="warning" :closable="false" :title="emptyModelTitle" />
       <p v-if="engine === 'ultralytics'" class="hint">
         YOLOE 支持文本提示类别（英文逗号分隔）。留空时使用 COCO 常用 80 类；自定义如 <code>person,hardhat,fire</code>。
       </p>
       <p v-if="engine === 'mobilesam' && samMode === 'prompt'" class="hint">
-        左键点击 = 前景点（保留区域），Shift+点击 = 背景点（排除区域），然后点「开始分割」。原图支持滚轮缩放与全屏。
+        左键 = 前景点，Shift+点击 = 背景点；按住拖拽可框选。然后点「开始分割」。
+      </p>
+      <p v-if="engine === 'efficientsam'" class="hint">
+        OpenCV EfficientSAM-Ti：左键前景 / Shift+点击背景 / 拖拽框选。最多 6 个 prompt 点（框占 2 个槽位）。无全自动模式。
       </p>
     </el-card>
 
@@ -100,7 +110,7 @@
             </div>
             <div v-if="running && !resultImg" class="panel-loading">
               <el-icon class="rotating" :size="32"><Loading /></el-icon>
-              <span>{{ isSamRunning ? `MobileSAM 分割中… ${samElapsedText}` : '分割中…' }}</span>
+              <span>{{ isSamRunning ? `${samEngineLabel} 分割中… ${samElapsedText}` : '分割中…' }}</span>
             </div>
             <div v-else-if="originImgUrl" ref="origViewport" class="zoom-viewport" @wheel.prevent="origZoom.onWheel">
               <div class="zoom-spacer" :style="origZoom.spacerStyle">
@@ -109,7 +119,11 @@
                     <img ref="imgEl" :src="originImgUrl" class="panel-img" draggable="false"
                          @load="onOrigLoad" />
                     <canvas v-if="isSamPrompt && !resultImg" ref="overlayEl" class="overlay-canvas"
-                            @click="onCanvasClick" />
+                            @click="onCanvasClick"
+                            @mousedown="onCanvasMouseDown"
+                            @mousemove="onCanvasMouseMove"
+                            @mouseup="onCanvasMouseUp"
+                            @mouseleave="onCanvasMouseUp" />
                   </div>
                 </div>
               </div>
@@ -215,10 +229,17 @@ import {
 } from '@element-plus/icons-vue'
 import { modelApi } from '../../../api/ai'
 import { useInferProgress } from '../../../composables/useInferProgress'
+import {
+  filterSegModelsByEngine,
+  loadSegmentationModels,
+  pickPreferredSegModel,
+  resolveSegEngine,
+} from '../../../utils/segModels'
 
 const engine = ref('rfdetr')
 const mode = ref('image')
 const samMode = ref('prompt')
+const esamPrecision = ref('fp32')
 const modelOptions = ref([])
 const modelId = ref(null)
 const conf = ref(0.25)
@@ -249,6 +270,10 @@ const resultVideoEl = ref(null)
 
 const points = ref([])
 const pointLabels = ref([])
+const promptBox = ref(null)
+let boxDragging = false
+let boxStart = null
+let suppressClick = false
 
 let originBlobUrl = null
 let resultBlobUrl = null
@@ -256,34 +281,34 @@ let pollTimer = null
 
 const isVideoMode = computed(() => (engine.value === 'rfdetr' || engine.value === 'ultralytics') && mode.value === 'video')
 const isImageMode = computed(() => !isVideoMode.value)
-const isSamPrompt = computed(() => engine.value === 'mobilesam' && samMode.value === 'prompt')
+const isInteractiveEngine = computed(() => engine.value === 'mobilesam' || engine.value === 'efficientsam')
+const isSamPrompt = computed(() =>
+  engine.value === 'efficientsam' || (engine.value === 'mobilesam' && samMode.value === 'prompt'))
 const hasContent = computed(() => !!(originImgUrl.value || previewUrl.value || resultImg.value || resultUrl.value))
-
-const filteredModels = computed(() => {
-  if (engine.value === 'rfdetr') {
-    return modelOptions.value.filter(
-      (m) => m.library === 'rfdetr' && m.task === 'instance-segmentation' && m.filePath && m.status === '0')
-  }
-  if (engine.value === 'ultralytics') {
-    return modelOptions.value.filter(
-      (m) => m.library === 'ultralytics' && m.task === 'instance-segmentation' && m.filePath && m.status === '0')
-  }
-  return modelOptions.value.filter(
-    (m) => m.library === 'mobilesam' && m.task === 'interactive-segmentation' && m.filePath && m.status === '0')
+const samEngineLabel = computed(() => (engine.value === 'efficientsam' ? 'EfficientSAM' : 'MobileSAM'))
+const maxPromptPoints = computed(() => {
+  if (engine.value !== 'efficientsam') return Infinity
+  return promptBox.value ? 4 : 6
 })
 
+/**
+ * 下拉始终展示全部可用分割模型（含 EfficientSAM），避免只停在 RF-DETR Tab 时找不到。
+ * 选中模型会通过 onModelChange 自动切换对应引擎 Tab。
+ */
+const filteredModels = computed(() => filterSegModelsByEngine(modelOptions.value, null))
+
 const emptyModelTitle = computed(() => {
-  if (engine.value === 'rfdetr') {
-    return '暂无 RF-DETR-Seg 模型：请到「模型管理」添加 task=instance-segmentation、library=rfdetr 并拉取权重。'
+  if (!modelOptions.value.length) {
+    return '暂无可用分割模型：请到「模型管理」拉取 RF-DETR / YOLOE / MobileSAM / efficient-sam（opencv-sam）。'
   }
-  if (engine.value === 'ultralytics') {
-    return '暂无 YOLOE / Ultralytics 分割模型：请确认种子 yoloe-26s-seg 已启用且本地权重存在。'
+  if (engine.value === 'efficientsam' && !filterSegModelsByEngine(modelOptions.value, 'efficientsam').length) {
+    return '暂无 EfficientSAM 模型：请到「模型管理」拉取 efficient-sam（library=opencv-sam）。若已拉取请硬刷新页面。'
   }
-  return '暂无 MobileSAM 模型：请到「模型管理」添加 task=interactive-segmentation、library=mobilesam 并拉取权重。'
+  return ''
 })
 
 const pickLabel = computed(() => {
-  if (engine.value === 'mobilesam') return '选择图片'
+  if (isInteractiveEngine.value) return '选择图片'
   return mode.value === 'image' ? '选择图片' : '选择视频'
 })
 
@@ -291,14 +316,17 @@ const canRun = computed(() => {
   if (!modelId.value) return false
   if (engine.value === 'mobilesam') {
     if (samMode.value === 'auto') return !!file.value
-    return !!samFile.value && points.value.length > 0
+    return !!samFile.value && (points.value.length > 0 || !!promptBox.value)
+  }
+  if (engine.value === 'efficientsam') {
+    return !!samFile.value && (points.value.length > 0 || !!promptBox.value)
   }
   return !!file.value
 })
 
 const samInfer = useInferProgress(modelId)
 
-const isSamRunning = computed(() => running.value && engine.value === 'mobilesam')
+const isSamRunning = computed(() => running.value && isInteractiveEngine.value)
 const showProgressBar = computed(() => isVideoMode.value || isSamRunning.value)
 const videoPercent = computed(() => (total.value ? Math.min(100, Math.floor((processed.value / total.value) * 100)) : 0))
 const progressPercent = computed(() => (isVideoMode.value ? videoPercent.value : samInfer.percent.value))
@@ -306,8 +334,8 @@ const samElapsedText = computed(() => samInfer.elapsedText.value)
 const progressTitle = computed(() => {
   if (isVideoMode.value) return `视频分割中… ${processed.value}/${total.value || '?'} 帧`
   if (isSamRunning.value) {
-    const modeLabel = samMode.value === 'auto' ? '全自动' : '交互'
-    return `MobileSAM ${modeLabel}分割中… 预计剩余 ${samInfer.etaText.value}`
+    const modeLabel = engine.value === 'mobilesam' && samMode.value === 'auto' ? '全自动' : '交互'
+    return `${samEngineLabel.value} ${modeLabel}分割中… 预计剩余 ${samInfer.etaText.value}`
   }
   return '分割中…'
 })
@@ -400,6 +428,12 @@ const drawPoints = () => {
   if (!cv) return
   const ctx = cv.getContext('2d')
   ctx.clearRect(0, 0, cv.width, cv.height)
+  if (promptBox.value) {
+    const [x1, y1, x2, y2] = promptBox.value
+    ctx.strokeStyle = '#409eff'
+    ctx.lineWidth = 2
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
+  }
   points.value.forEach((p, i) => {
     const lbl = pointLabels.value[i]
     ctx.beginPath()
@@ -412,11 +446,56 @@ const drawPoints = () => {
   })
 }
 
-const onCanvasClick = (e) => {
-  if (!isSamPrompt.value || resultImg.value) return
+const canvasToImageXY = (e) => {
   const cv = overlayEl.value
   const scale = cv.width / cv.clientWidth
-  points.value.push([Math.round(e.offsetX * scale), Math.round(e.offsetY * scale)])
+  return [Math.round(e.offsetX * scale), Math.round(e.offsetY * scale)]
+}
+
+const onCanvasMouseDown = (e) => {
+  if (!isSamPrompt.value || resultImg.value || e.shiftKey) return
+  boxDragging = true
+  boxStart = canvasToImageXY(e)
+  suppressClick = false
+}
+
+const onCanvasMouseMove = (e) => {
+  if (!boxDragging || !boxStart) return
+  const [x2, y2] = canvasToImageXY(e)
+  const [x1, y1] = boxStart
+  if (Math.abs(x2 - x1) + Math.abs(y2 - y1) > 6) suppressClick = true
+  promptBox.value = [
+    Math.min(x1, x2), Math.min(y1, y2),
+    Math.max(x1, x2), Math.max(y1, y2),
+  ]
+  drawPoints()
+}
+
+const onCanvasMouseUp = () => {
+  if (!boxDragging) return
+  boxDragging = false
+  boxStart = null
+  if (promptBox.value) {
+    const [x1, y1, x2, y2] = promptBox.value
+    if (Math.abs(x2 - x1) < 4 || Math.abs(y2 - y1) < 4) promptBox.value = null
+  }
+  drawPoints()
+}
+
+const onCanvasClick = (e) => {
+  if (!isSamPrompt.value || resultImg.value) return
+  if (suppressClick) {
+    suppressClick = false
+    return
+  }
+  if (points.value.length >= maxPromptPoints.value) {
+    ElMessage.warning(engine.value === 'efficientsam'
+      ? `EfficientSAM 最多 ${maxPromptPoints.value} 个点（含框时更少）`
+      : '标注点已达上限')
+    return
+  }
+  const xy = canvasToImageXY(e)
+  points.value.push(xy)
   pointLabels.value.push(e.shiftKey ? 0 : 1)
   drawPoints()
 }
@@ -424,6 +503,9 @@ const onCanvasClick = (e) => {
 const clearPoints = () => {
   points.value = []
   pointLabels.value = []
+  promptBox.value = null
+  boxDragging = false
+  boxStart = null
   drawPoints()
 }
 
@@ -437,10 +519,8 @@ const enterVideoFs = (which) => {
 
 const loadModels = async () => {
   try {
-    const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-    modelOptions.value = res.data.rows || []
-    const list = filteredModels.value
-    if (list.length && !list.find((m) => m.id === modelId.value)) modelId.value = list[0]?.id || null
+    modelOptions.value = await loadSegmentationModels(modelApi)
+    modelId.value = pickPreferredSegModel(modelOptions.value, engine.value, modelId.value)
   } catch {
     ElMessage.error('加载模型列表失败')
   }
@@ -448,7 +528,17 @@ const loadModels = async () => {
 
 const onEngineChange = () => {
   clearAll()
-  modelId.value = filteredModels.value[0]?.id || null
+  modelId.value = pickPreferredSegModel(modelOptions.value, engine.value, null)
+}
+
+const onModelChange = (id) => {
+  const m = modelOptions.value.find((x) => x.id === id)
+  const next = resolveSegEngine(m)
+  if (next && next !== engine.value) {
+    engine.value = next
+    clearAll()
+    modelId.value = id
+  }
 }
 
 const onPick = (uploadFile) => {
@@ -483,6 +573,7 @@ const onPickSam = (uploadFile) => {
   resultImg.value = ''
   points.value = []
   pointLabels.value = []
+  promptBox.value = null
   setOriginImgUrl(raw)
 }
 
@@ -492,7 +583,7 @@ const run = async () => {
 }
 
 const runImage = async () => {
-  const isSam = engine.value === 'mobilesam'
+  const isSam = isInteractiveEngine.value
   running.value = true
   resultImg.value = ''
   detections.value = []
@@ -510,7 +601,14 @@ const runImage = async () => {
       if (samMode.value === 'prompt') {
         fd.append('points', JSON.stringify(points.value))
         fd.append('pointLabels', JSON.stringify(pointLabels.value))
+        if (promptBox.value) fd.append('box', JSON.stringify(promptBox.value))
       }
+    }
+    if (engine.value === 'efficientsam') {
+      fd.append('points', JSON.stringify(points.value))
+      fd.append('pointLabels', JSON.stringify(pointLabels.value))
+      if (promptBox.value) fd.append('box', JSON.stringify(promptBox.value))
+      fd.append('precision', esamPrecision.value)
     }
     const res = await modelApi.segment(modelId.value, fd)
     const d = res.data
@@ -586,6 +684,9 @@ const clearAll = () => {
   segCount.value = 0
   points.value = []
   pointLabels.value = []
+  promptBox.value = null
+  boxDragging = false
+  boxStart = null
   clearVideoOut()
   revokeOriginImg()
   if (previewUrl.value) { URL.revokeObjectURL(previewUrl.value); previewUrl.value = '' }
