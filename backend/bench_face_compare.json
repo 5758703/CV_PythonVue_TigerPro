@@ -1,0 +1,28 @@
+{
+  "opencv-yunet-sface": {
+    "faces": 1,
+    "dim": 128,
+    "avgMs": 111.48,
+    "p50Ms": 109.69,
+    "detMs": 66.98,
+    "featMs": 75.06,
+    "sizeMB": 37.13
+  },
+  "insightface-buffalo-s": {
+    "faces": 1,
+    "dim": 512,
+    "avgMs": 328.81,
+    "p50Ms": 285.0,
+    "detMs": 381.14,
+    "featMs": 0.0,
+    "sizeMB": 158.41
+  },
+  "insightface-buffalo-l": {
+    "faces": 1,
+    "dim": 512,
+    "avgMs": 450.68,
+    "p50Ms": 446.87,
+    "detMs": 441.82,
+    "sizeMB": 325.46
+  }
+}

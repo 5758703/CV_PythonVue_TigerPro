@@ -505,7 +505,7 @@ def match_persons_on_frame(
             crop = _upper_body_crop(img, item.get("bbox") or [0, 0, 0, 0])
             if crop is not None:
                 try:
-                    faces, _ = extract_face_embeddings(
+                    faces, _, _meta = extract_face_embeddings(
                         face_root, face_pack, _encode_jpeg(crop), det_thresh=det_thresh,
                     )
                     if faces:

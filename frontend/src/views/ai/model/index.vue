@@ -208,6 +208,7 @@
             <el-option label="rapidocr（PaddleOCR onnx）" value="rapidocr" />
             <el-option label="rapidtable（表格结构 ONNX）" value="rapidtable" />
             <el-option label="insightface（人脸识别）" value="insightface" />
+            <el-option label="opencv-face（YuNet+SFace）" value="opencv-face" />
             <el-option label="linly（数字人）" value="linly" />
           </el-select>
         </el-form-item>
@@ -408,6 +409,7 @@ const LIB_DEFAULT_TASK = {
   mobilesam: "interactive-segmentation",
   rtmlib: "pose-estimation",
   insightface: "face-recognition",
+  "opencv-face": "face-recognition",
   "funasr": "automatic-speech-recognition",
   "funasr-nano": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",

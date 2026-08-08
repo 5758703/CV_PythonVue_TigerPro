@@ -38,21 +38,41 @@ def _pack_name(m: AiModel) -> str:
 
 
 def _resolve_face_model(mid: int):
+    """解析人脸模型，返回 (m, root, pack, library) 或 (None, err)。"""
     m = AiModel.query.get(mid)
     if m is None:
         return None, "模型不存在"
-    if (m.library or "").lower() != "insightface":
-        return None, "请选择 library=insightface 的人脸识别模型"
+    lib = (m.library or "").strip().lower()
     if (m.task or "") != "face-recognition":
         return None, "请选择 task=face-recognition 的模型"
     if m.status != "0":
         return None, "模型已停用"
-    root = _insightface_root()
-    pack = _pack_name(m)
-    pack_dir = os.path.join(root, "models", pack)
-    if not os.path.isdir(pack_dir):
-        return None, f"模型包未就绪（{pack}），请先在模型管理页拉取权重"
-    return (m, root, pack), None
+
+    if lib == "insightface":
+        root = _insightface_root()
+        pack = _pack_name(m)
+        pack_dir = os.path.join(root, "models", pack)
+        if not os.path.isdir(pack_dir):
+            return None, f"模型包未就绪（{pack}），请先在模型管理页拉取权重"
+        return (m, root, pack, "insightface"), None
+
+    if lib in ("opencv-face", "opencv", "yunet-sface", "yunet_sface"):
+        if not m.file_path:
+            return None, "OpenCV 人脸模型未就绪，请先在模型管理页拉取权重"
+        root = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+        if not os.path.isdir(root) and not os.path.isfile(root):
+            return None, f"权重目录不存在：{m.file_path}"
+        try:
+            from yunet_sface import assets_ready, resolve_model_dir
+            d = resolve_model_dir(root)
+            if not assets_ready(d):
+                return None, "YuNet/SFace ONNX 未完整，请重新拉取"
+            root = d
+        except Exception as e:  # noqa: BLE001
+            return None, f"OpenCV 人脸模型检查失败：{e}"
+        return (m, root, "", "opencv-face"), None
+
+    return None, "请选择 library=insightface 或 opencv-face 的人脸识别模型"
 
 
 def _save_enroll_image(person_id: int, file_storage) -> str | None:
@@ -150,7 +170,7 @@ def enroll(pid):
     resolved, err = _resolve_face_model(mid)
     if err:
         return jsonify(code=400, message=err), 400
-    m, root, pack = resolved
+    m, root, pack, library = resolved
 
     files = request.files.getlist("files") or []
     if not files:
@@ -169,7 +189,8 @@ def enroll(pid):
             continue
         raw = f.read()
         f.stream.seek(0)
-        faces, _img = extract_face_embeddings(root, pack, raw)
+        faces, _img, _meta = extract_face_embeddings(
+            root, pack, raw, library=library)
         if not faces:
             return jsonify(code=400, message=f"图片未检测到人脸：{f.filename}"), 400
         # 多脸时取检测分最高的一张
@@ -224,7 +245,7 @@ def recognize():
     resolved, err = _resolve_face_model(mid)
     if err:
         return jsonify(code=400, message=err), 400
-    m, root, pack = resolved
+    m, root, pack, library = resolved
 
     try:
         threshold = float(request.form.get("threshold", 0.4))
@@ -247,6 +268,7 @@ def recognize():
             threshold=threshold,
             det_thresh=det_thresh,
             draw=draw,
+            library=library,
         )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"识别失败：{e}"), 500

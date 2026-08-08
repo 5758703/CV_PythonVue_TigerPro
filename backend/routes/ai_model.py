@@ -810,6 +810,20 @@ def _fetch_mobilenet_dnn_weight(folder, sub):
     return f"models/{sub}", size
 
 
+def _fetch_yunet_sface_weight(folder, sub):
+    """拉取 OpenCV Zoo YuNet + SFace ONNX 到模型目录。"""
+    from yunet_sface import download_assets
+    _ensure_dir(folder)
+    download_assets(folder)
+    size = 0
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    return f"models/{sub}", size
+
+
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
@@ -819,7 +833,9 @@ def fetch_weight(mid):
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if lib in ("opencv-dnn", "opencv_dnn", "mobilenet"):
+        if lib in ("opencv-face", "yunet-sface", "yunet_sface"):
+            rel, size = _fetch_yunet_sface_weight(folder, sub)
+        elif lib in ("opencv-dnn", "opencv_dnn", "mobilenet"):
             rel, size = _fetch_mobilenet_dnn_weight(folder, sub)
         elif lib == "mobilesam":
             rel, size = _fetch_mobilesam_weight(folder, sub)

@@ -60,10 +60,11 @@ def run_face_recognize(*, model_id: int, image_bytes: bytes,
     resolved, err = _resolve_face_model(model_id)
     if err:
         raise ValueError(err)
-    m, root, pack = resolved
+    m, root, pack, library = resolved
     return recognize_faces(
         root, pack, m.model_key, image_bytes,
         threshold=threshold, det_thresh=det_thresh, draw=draw,
+        library=library,
     )
 
 

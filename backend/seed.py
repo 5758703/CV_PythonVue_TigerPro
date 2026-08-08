@@ -604,6 +604,41 @@ def _bind_local_insightface():
     return any_changed
 
 
+def _bind_local_yunet_sface_weight():
+    """若 uploads/models/opencv-yunet-sface 已含 YuNet+SFace，绑定 file_path（幂等）。"""
+    m = AiModel.query.filter_by(model_key="opencv-yunet-sface").first()
+    if not m:
+        return False
+    rel = "models/opencv-yunet-sface"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    try:
+        from yunet_sface import assets_ready
+        ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
+    except Exception:  # noqa: BLE001
+        ready = False
+    changed = False
+    if ready:
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if size > 0 and m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
 def _bind_local_mobilenet_weight():
     """若 uploads/models/mobilenet-v2 已含双 ONNX + labels，绑定 file_path（幂等）。"""
     m = AiModel.query.filter_by(model_key="mobilenet-v2").first()
@@ -1035,6 +1070,19 @@ def seed_ai_models():
         description="InsightFace buffalo_l（高精度）：SCRFD + ResNet50 ArcFace。"
                     "建议 GPU/CUDA EP；许可与隐私合规同上。", status="0",
     ))
+    # OpenCV Zoo：YuNet 检测 + SFace 识别（轻量，原生 FaceDetectorYN / FaceRecognizerSF）
+    created |= _ensure_ai_model("opencv-yunet-sface", dict(
+        model_name="OpenCV YuNet+SFace", category="人脸识别",
+        task="face-recognition", library="opencv-face", version="2023mar+2021dec",
+        source_url="https://huggingface.co/opencv/face_detection_yunet",
+        description=(
+            "OpenCV Model Zoo：YuNet(face_detection_yunet_2023mar.onnx) 人脸检测 "
+            "+ SFace(face_recognition_sface_2021dec.onnx) 特征识别。"
+            "与 InsightFace 特征空间不兼容，须用同一模型重新登记底库。"
+        ),
+        status="0",
+    ))
+    created |= _bind_local_yunet_sface_weight()
     _bind_local_brain_tumor_weight()
     _bind_local_rocket_detect_weight()
     _bind_local_insightface()

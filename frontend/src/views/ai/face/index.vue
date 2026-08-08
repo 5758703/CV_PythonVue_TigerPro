@@ -5,7 +5,7 @@
       :closable="false"
       show-icon
       class="notice"
-      title="合规提示：人脸生物特征属敏感个人信息。请仅在取得授权的场景使用，控制留存期限；InsightFace 模型许可请自行评估商业用途。"
+      title="合规提示：人脸生物特征属敏感个人信息。请仅在取得授权的场景使用。支持 InsightFace（buffalo）与 OpenCV YuNet+SFace；不同模型特征空间不互通，切换后须重新登记底库。"
     />
 
     <el-tabs v-model="tab" class="tabs">
@@ -22,7 +22,7 @@
               <el-option
                 v-for="m in modelOptions"
                 :key="m.id"
-                :label="`${m.modelName}（${m.version || m.modelKey}）`"
+                :label="`${m.modelName}（${m.library || ''} · ${m.version || m.modelKey}）`"
                 :value="m.id"
               />
             </el-select>
@@ -276,7 +276,7 @@
             <el-option
               v-for="m in modelOptions"
               :key="m.id"
-              :label="`${m.modelName}（${m.version || m.modelKey}）`"
+              :label="`${m.modelName}（${m.library || ''} · ${m.version || m.modelKey}）`"
               :value="m.id"
             />
           </el-select>
@@ -470,13 +470,20 @@ const cameraLabel = (c) => {
   return `${c.name}（${kind}）`
 }
 
+const FACE_LIBS = new Set(['insightface', 'opencv-face', 'opencv', 'yunet-sface', 'yunet_sface'])
+
 const loadModels = async () => {
-  const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
+  const res = await modelApi.list({ pageNum: 1, pageSize: 200, task: 'face-recognition' })
   modelOptions.value = (res.data.rows || []).filter(
-    (m) => m.task === 'face-recognition' && m.library === 'insightface' && m.filePath && m.status === '0'
+    (m) => FACE_LIBS.has((m.library || '').toLowerCase()) && m.filePath && m.status === '0',
   )
-  if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
-  if (modelOptions.value.length && !enrollModelId.value) enrollModelId.value = modelOptions.value[0].id
+  if (modelOptions.value.length && !modelId.value) {
+    const ov = modelOptions.value.find((m) => /opencv|yunet/i.test(m.library || ''))
+    modelId.value = ov?.id || modelOptions.value[0].id
+  }
+  if (modelOptions.value.length && !enrollModelId.value) {
+    enrollModelId.value = modelId.value || modelOptions.value[0].id
+  }
 }
 
 const enumCams = async () => {

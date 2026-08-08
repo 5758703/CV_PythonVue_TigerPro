@@ -4331,15 +4331,30 @@ def _decode_bgr(image_bytes):
     return img
 
 
-def extract_face_embeddings(root_dir, pack_name, image_bytes, det_thresh=0.5):
-    """Extract face embeddings (L2-normalized) from image bytes."""
+def extract_face_embeddings(root_dir, pack_name, image_bytes, det_thresh=0.5,
+                            *, library="insightface"):
+    """Extract face embeddings (L2-normalized) from image bytes.
+
+    library=insightface：SCRFD + ArcFace（root/pack）
+    library=opencv-face / opencv：YuNet + SFace（root_dir 为模型目录）
+    返回 (faces, img[, meta]) —— meta 仅 opencv 路径附带耗时；为兼容旧调用统一返回三元组时
+    使用 recognize / enroll 侧解构。
+    """
     from services.face_gallery import l2_normalize
 
-    app = _get_face_app(root_dir, pack_name)
     img = _decode_bgr(image_bytes)
-    faces = app.get(img)
+    lib = (library or "insightface").strip().lower()
+    if lib in ("opencv-face", "opencv", "yunet-sface", "yunet_sface"):
+        from yunet_sface import extract_embeddings
+        faces, meta = extract_embeddings(root_dir, img, det_thresh=float(det_thresh))
+        return faces, img, meta
+
+    app = _get_face_app(root_dir, pack_name)
+    t0 = time.perf_counter()
+    faces_raw = app.get(img)
+    elapsed = (time.perf_counter() - t0) * 1000.0
     out = []
-    for f in faces or []:
+    for f in faces_raw or []:
         if float(getattr(f, "det_score", 1.0)) < float(det_thresh):
             continue
         emb = l2_normalize(np.asarray(f.embedding, dtype=np.float32))
@@ -4349,7 +4364,14 @@ def extract_face_embeddings(root_dir, pack_name, image_bytes, det_thresh=0.5):
             "bbox": bbox,
             "detScore": round(float(f.det_score), 4),
         })
-    return out, img
+    meta = {
+        "detMs": round(elapsed, 2),
+        "featMs": 0.0,
+        "backend": "insightface",
+        "dim": int(out[0]["embedding"].size) if out else 0,
+        "pack": pack_name,
+    }
+    return out, img, meta
 
 
 def recognize_faces(
@@ -4360,12 +4382,14 @@ def recognize_faces(
     threshold=0.4,
     det_thresh=0.5,
     draw=False,
+    *,
+    library="insightface",
 ):
     """1:N recognize; returns detections with bbox/name/score/matched."""
     from services.face_gallery import match_embedding
 
-    faces, img = extract_face_embeddings(
-        root_dir, pack_name, image_bytes, det_thresh=det_thresh)
+    faces, img, meta = extract_face_embeddings(
+        root_dir, pack_name, image_bytes, det_thresh=det_thresh, library=library)
     h, w = img.shape[:2]
     detections = []
     for face in faces:
@@ -4405,6 +4429,12 @@ def recognize_faces(
         "height": h,
         "imageBase64": image_b64,
         "threshold": float(threshold),
-        "providers": _face_providers(),
+        "providers": _face_providers() if (library or "").lower() == "insightface" else ["opencv-dnn"],
+        "backend": (meta or {}).get("backend") or library,
+        "timing": {
+            "detMs": (meta or {}).get("detMs"),
+            "featMs": (meta or {}).get("featMs"),
+        },
+        "embedDim": (meta or {}).get("dim"),
     }
 
