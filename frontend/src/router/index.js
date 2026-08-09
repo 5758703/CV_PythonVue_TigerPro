@@ -18,6 +18,7 @@ const routes = [
       { path: 'ai/track', name: 'aiTrack', component: () => import('../views/ai/track/index.vue'), meta: { title: '目标追踪' } },
       { path: 'ai/pose', name: 'aiPose', component: () => import('../views/ai/pose/index.vue'), meta: { title: '姿态估计' } },
       { path: 'ai/segment', name: 'aiSegment', component: () => import('../views/ai/segment/index.vue'), meta: { title: '图像分割' } },
+      { path: 'ai/inpaint', name: 'aiInpaint', component: () => import('../views/ai/inpaint/index.vue'), meta: { title: '图像修复' } },
       { path: 'ai/camera', name: 'aiCamera', component: () => import('../views/ai/camera/index.vue'), meta: { title: '摄像头实时检测' } },
       { path: 'ai/face', name: 'aiFace', component: () => import('../views/ai/face/index.vue'), meta: { title: '人脸识别' } },
       { path: 'ai/alert', name: 'aiAlert', component: () => import('../views/ai/alert/index.vue'), meta: { title: '检测告警' } },

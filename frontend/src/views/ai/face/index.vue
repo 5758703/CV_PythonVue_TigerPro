@@ -37,9 +37,10 @@
             >
               <el-option label="本地摄像头" value="local" />
               <el-option label="网络摄像头" value="network" />
+              <el-option label="本地视频" value="file" />
             </el-select>
           </el-form-item>
-          <el-form-item label="摄像头">
+          <el-form-item v-if="videoSource !== 'file'" label="摄像头">
             <el-select
               v-if="videoSource === 'local'"
               v-model="deviceId"
@@ -55,7 +56,7 @@
                 :value="d.deviceId"
               />
             </el-select>
-            <template v-else>
+            <template v-else-if="videoSource === 'network'">
               <el-select
                 v-model="cameraId"
                 placeholder="选择网络摄像头"
@@ -83,6 +84,27 @@
               </el-button>
             </template>
           </el-form-item>
+          <el-form-item v-else label="视频文件">
+            <el-upload
+              :show-file-list="false"
+              accept="video/*"
+              :disabled="running || imageMode"
+              :auto-upload="false"
+              :on-change="onPickLocalVideo"
+            >
+              <el-button :disabled="running || imageMode">{{ videoFileName || '选择本地视频' }}</el-button>
+            </el-upload>
+            <el-button
+              v-if="videoFileUrl"
+              link
+              type="danger"
+              :disabled="running"
+              style="margin-left: 4px"
+              @click="clearLocalVideo"
+            >
+              清除
+            </el-button>
+          </el-form-item>
           <el-form-item label="相似度阈值">
             <el-slider v-model="threshold" :min="0.2" :max="0.8" :step="0.05" style="width: 140px" />
           </el-form-item>
@@ -95,7 +117,7 @@
               v-if="!running && !imageMode"
               type="primary"
               :icon="VideoCamera"
-              :disabled="!modelId || (videoSource === 'network' && !cameraId)"
+              :disabled="!modelId || (videoSource === 'network' && !cameraId) || (videoSource === 'file' && !videoFileUrl)"
               @click="start"
             >
               开始识别
@@ -135,13 +157,20 @@
           class="net-cam-tip"
           title="暂无可用网络摄像头：请先到「摄像头管理」添加并启用（支持 RTSP / 文件 / 设备）。"
         />
+        <el-alert
+          v-else-if="videoSource === 'file' && !videoFileUrl"
+          type="info"
+          :closable="false"
+          class="net-cam-tip"
+          title="请先选择本地视频文件，再点「开始识别」。YuNet+SFace 模型会叠加五色关键点。"
+        />
       </el-card>
 
       <el-card shadow="never">
         <div class="live-grid">
           <div class="stage">
             <video
-              v-show="localPreview && videoSource === 'local' && !imageMode"
+              v-show="localPreview && (videoSource === 'local' || videoSource === 'file') && !imageMode"
               ref="videoEl"
               class="cam-video"
               autoplay
@@ -403,7 +432,9 @@ const threshold = ref(0.4)
 const skipFrames = ref(2)
 const devices = ref([])
 const deviceId = ref('')
-const videoSource = ref('local') // local | network
+const videoSource = ref('local') // local | network | file
+const videoFileUrl = ref('')
+const videoFileName = ref('')
 const localPreview = ref(false)
 const modelWarming = ref(false)
 const inferPending = ref(false)
@@ -442,7 +473,8 @@ let inferSeq = 0
 let loopTimer = null
 
 const COLORS = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#9254de', '#13c2c2']
-
+/** YuNet 5 点：右眼 / 左眼 / 鼻尖 / 右嘴角 / 左嘴角 */
+const LM_COLORS = ['#409eff', '#f56c6c', '#67c23a', '#e040fb', '#e6a23c']
 const galleryQuery = ref('')
 const persons = ref([])
 const galleryLoading = ref(false)
@@ -527,7 +559,51 @@ const onVideoSourceChange = async () => {
   clearImageResult()
   localPreview.value = false
   if (videoSource.value === 'network') await loadManagedCameras()
-  else await enumCams()
+  else if (videoSource.value === 'local') await enumCams()
+  // 切到本地视频且已选文件时，显示预览静止帧（不自动开识别）
+  else if (videoSource.value === 'file' && videoFileUrl.value && videoEl.value) {
+    localPreview.value = true
+    await nextTick()
+    videoEl.value.srcObject = null
+    videoEl.value.src = videoFileUrl.value
+    videoEl.value.loop = true
+    videoEl.value.muted = true
+  }
+}
+
+const clearLocalVideo = () => {
+  if (running.value) stop()
+  if (videoFileUrl.value) {
+    URL.revokeObjectURL(videoFileUrl.value)
+    videoFileUrl.value = ''
+  }
+  videoFileName.value = ''
+  if (videoEl.value && !stream) {
+    videoEl.value.removeAttribute('src')
+    videoEl.value.load?.()
+  }
+}
+
+const onPickLocalVideo = async (uploadFile) => {
+  const raw = uploadFile.raw || uploadFile
+  if (!raw || !(raw.type || '').startsWith('video/')) {
+    ElMessage.error('请选择视频文件')
+    return
+  }
+  if (running.value) stop()
+  clearImageResult()
+  if (videoFileUrl.value) URL.revokeObjectURL(videoFileUrl.value)
+  videoFileUrl.value = URL.createObjectURL(raw)
+  videoFileName.value = raw.name || '本地视频'
+  localPreview.value = true
+  await nextTick()
+  if (videoEl.value) {
+    videoEl.value.srcObject = null
+    videoEl.value.src = videoFileUrl.value
+    videoEl.value.loop = true
+    videoEl.value.muted = true
+  }
+  ElMessage.success(`已选择：${videoFileName.value}`)
 }
 
 const onEnrollSourceChange = async () => {
@@ -722,7 +798,10 @@ const start = async () => {
       stream.getTracks().forEach((t) => t.stop())
       stream = null
     }
-    if (videoEl.value) videoEl.value.srcObject = null
+    if (videoEl.value) {
+      videoEl.value.srcObject = null
+      videoEl.value.removeAttribute('src')
+    }
 
     running.value = true
     streamReady = false
@@ -744,6 +823,40 @@ const start = async () => {
       img.removeAttribute('src')
       running.value = false
       streamReady = false
+      return
+    }
+  } else if (videoSource.value === 'file') {
+    if (!videoFileUrl.value) {
+      ElMessage.warning('请先选择本地视频文件')
+      return
+    }
+    if (streamEl.value) streamEl.value.removeAttribute('src')
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop())
+      stream = null
+    }
+    localPreview.value = true
+    await nextTick()
+    const video = videoEl.value
+    if (!video) {
+      localPreview.value = false
+      ElMessage.error('预览组件未就绪')
+      return
+    }
+    video.srcObject = null
+    video.src = videoFileUrl.value
+    video.loop = true
+    video.muted = true
+    try {
+      await video.play()
+    } catch (_) {
+      /* 仍可等 loadeddata */
+    }
+    try {
+      await waitForVideoReady(video)
+    } catch (_) {
+      ElMessage.error('本地视频尚未就绪，请换一个文件重试')
+      stop()
       return
     }
   } else {
@@ -770,6 +883,8 @@ const start = async () => {
       ElMessage.error('预览组件未就绪')
       return
     }
+    video.removeAttribute('src')
+    video.loop = false
     video.srcObject = stream
     try {
       await video.play()
@@ -890,7 +1005,14 @@ const loop = () => {
       const tracked = list.map((d) => {
         const prev = lastDets.find((p) => iou(p.bbox, d.bbox) > 0.3)
         if (prev && !d.matched && prev.matched) {
-          return { ...d, name: prev.name, matched: prev.matched, score: prev.score, personId: prev.personId }
+          return {
+            ...d,
+            name: prev.name,
+            matched: prev.matched,
+            score: prev.score,
+            personId: prev.personId,
+            landmarks: d.landmarks || prev.landmarks,
+          }
         }
         return d
       })
@@ -969,6 +1091,23 @@ const drawBoxes = (list) => {
     ctx.fillRect(x1, Math.max(0, y1 - 18), tw, 18)
     ctx.fillStyle = '#fff'
     ctx.fillText(label, x1 + 4, Math.max(0, y1 - 17))
+    // YuNet 等：后端有 landmarks 时画五色关键点（右眼蓝 / 左眼红 / 鼻绿 / 右嘴品红 / 左嘴黄）
+    if (Array.isArray(d.landmarks) && d.landmarks.length) {
+      d.landmarks.slice(0, 5).forEach((pt, i) => {
+        if (!pt || pt.length < 2) return
+        const px = Number(pt[0])
+        const py = Number(pt[1])
+        if (!Number.isFinite(px) || !Number.isFinite(py)) return
+        ctx.beginPath()
+        ctx.fillStyle = LM_COLORS[i] || '#fff'
+        ctx.arc(px, py, 3.5, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)'
+        ctx.lineWidth = 1
+        ctx.stroke()
+      })
+      ctx.lineWidth = 2
+    }
   })
 }
 
@@ -1054,7 +1193,18 @@ const stop = () => {
     stream.getTracks().forEach((t) => t.stop())
     stream = null
   }
-  if (videoEl.value) videoEl.value.srcObject = null
+  if (videoEl.value) {
+    videoEl.value.pause?.()
+    videoEl.value.srcObject = null
+    // 本地视频保留 object URL，停止后可再次开始；仅清 srcObject
+    if (videoSource.value !== 'file') {
+      videoEl.value.removeAttribute('src')
+      videoEl.value.loop = false
+    } else if (videoFileUrl.value) {
+      videoEl.value.src = videoFileUrl.value
+      videoEl.value.loop = true
+    }
+  }
   if (streamEl.value) {
     streamEl.value.removeAttribute('src')
     streamEl.value.removeAttribute('srcset')
@@ -1314,6 +1464,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   stop()
+  clearLocalVideo()
   clearImageResult()
   stopEnrollCam()
 })

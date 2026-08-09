@@ -113,6 +113,7 @@ def _regroup_ai_menus():
         (274, 230, "/ai/face"),
         (276, 230, "/ai/alert"),
         (278, 230, "/ai/table"),
+        (286, 230, "/ai/inpaint"),
         # 280/282 已并入目标追踪场景
         (280, 230, "/ai/track"),
         (282, 230, "/ai/track"),
@@ -416,6 +417,11 @@ def seed_ai_menus():
                     path="/ai/segment", component="ai/segment/index", icon="Crop",
                     order=12, grant_common=True)
     _ensure_ai_menu(2721, 272, "图像分割查询", "F", "ai:segment:query", grant_common=True)
+    # 图像修复 LaMa（视觉识别 230 下）
+    _ensure_ai_menu(286, 230, "图像修复", "C", "ai:inpaint:list",
+                    path="/ai/inpaint", component="ai/inpaint/index", icon="Brush",
+                    order=12, grant_common=True)
+    _ensure_ai_menu(2861, 286, "图像修复查询", "F", "ai:inpaint:query", grant_common=True)
     # 人脸识别（视觉识别 230 下）
     _ensure_ai_menu(274, 230, "人脸识别", "C", "ai:face:list",
                     path="/ai/face", component="ai/face/index", icon="User",
@@ -614,6 +620,41 @@ def _bind_local_efficient_sam_weight():
     abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
     try:
         from efficient_sam_dnn import assets_ready
+        ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
+    except Exception:  # noqa: BLE001
+        ready = False
+    changed = False
+    if ready:
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if size > 0 and m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def _bind_local_lama_weight():
+    """若 uploads/models/inpainting-lama 已含 ONNX，绑定 file_path（幂等）。"""
+    m = AiModel.query.filter_by(model_key="inpainting-lama").first()
+    if not m:
+        return False
+    rel = "models/inpainting-lama"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    try:
+        from lama_dnn import assets_ready
         ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
     except Exception:  # noqa: BLE001
         ready = False
@@ -887,6 +928,18 @@ def seed_ai_models():
         status="0",
     ))
     created |= _bind_local_efficient_sam_weight()
+    # OpenCV Zoo LaMa 图像修复（DNN ONNX）
+    created |= _ensure_ai_model("inpainting-lama", dict(
+        model_name="LaMa 图像修复（OpenCV）", category="图像修复",
+        task="image-inpainting", library="opencv-lama", version="2025jan",
+        source_url="https://huggingface.co/opencv/inpainting_lama",
+        description=(
+            "OpenCV Zoo LaMa：涂抹遮罩区域后进行图像修复/补全，cv2.dnn ONNX（失败回退 ORT）。"
+            "权重约 88MB；输入 512；Apache-2.0。"
+        ),
+        status="0",
+    ))
+    created |= _bind_local_lama_weight()
     # Ultralytics YOLOE-26s 开放词汇实例分割（本地权重目录已预置）
     created |= _ensure_ai_model("yoloe-26s-seg", dict(
         model_name="YOLOE-26s 开放词汇分割", category="实例分割",

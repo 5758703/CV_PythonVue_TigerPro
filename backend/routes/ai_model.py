@@ -795,7 +795,7 @@ def _detect_model_path(m):
     """
     lib = _detect_lib(m)
     if lib in ("transformers", "opencv-sam", "efficientsam", "efficient-sam",
-               "opencv-dnn", "opencv_dnn", "opencv-face"):
+               "opencv-dnn", "opencv_dnn", "opencv-face", "opencv-lama", "lama", "inpainting"):
         return _abs_model_path(m)
     return _abs_weight(m)
 
@@ -842,6 +842,20 @@ def _fetch_efficient_sam_weight(folder, sub):
     return f"models/{sub}", size
 
 
+def _fetch_lama_weight(folder, sub):
+    """拉取 OpenCV Zoo LaMa 图像修复 ONNX。"""
+    from lama_dnn import download_assets
+    _ensure_dir(folder)
+    download_assets(folder)
+    size = 0
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    return f"models/{sub}", size
+
+
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
@@ -853,6 +867,8 @@ def fetch_weight(mid):
     try:
         if lib in ("opencv-sam", "efficientsam", "efficient-sam"):
             rel, size = _fetch_efficient_sam_weight(folder, sub)
+        elif lib in ("opencv-lama", "lama", "inpainting", "opencv-inpaint"):
+            rel, size = _fetch_lama_weight(folder, sub)
         elif lib in ("opencv-face", "yunet-sface", "yunet_sface"):
             rel, size = _fetch_yunet_sface_weight(folder, sub)
         elif lib in ("opencv-dnn", "opencv_dnn", "mobilenet"):
@@ -969,6 +985,44 @@ def classify_image_route(mid):
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"分类失败：{e}"), 500
     return jsonify(code=0, message="分类完成", data=result)
+
+
+@ai_model_bp.post("/<int:mid>/inpaint")
+@permission_required("ai:model:query")
+def inpaint_route(mid):
+    """图像修复（OpenCV Zoo LaMa）：上传原图 + 遮罩（白/非零=待修复区域）。"""
+    m = AiModel.query.get_or_404(mid)
+    lib = (m.library or "").strip().lower()
+    if lib not in ("opencv-lama", "lama", "inpainting", "opencv-inpaint"):
+        return jsonify(code=400, message="该接口仅支持 opencv-lama（LaMa）模型"), 400
+    path = _abs_model_path(m)
+    if path is None:
+        return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
+
+    file = request.files.get("file")
+    mask = request.files.get("mask")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到图片"), 400
+    if mask is None or not mask.filename:
+        return jsonify(code=400, message="未接收到遮罩：请涂抹待修复区域后提交"), 400
+
+    try:
+        dilate_px = int(request.form.get("dilatePx", 0) or 0)
+    except (TypeError, ValueError):
+        dilate_px = 0
+    # 兼容：expandMask=1/true 且未传像素时，默认外扩 12
+    expand_flag = (request.form.get("expandMask") or "").strip().lower()
+    if dilate_px <= 0 and expand_flag in ("1", "true", "yes", "on"):
+        dilate_px = 12
+
+    try:
+        from inference import inpaint_image_lama
+        result = inpaint_image_lama(path, file.read(), mask.read(), dilate_px=dilate_px)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+    except Exception as e:  # noqa: BLE001
+        return jsonify(code=500, message=f"修复失败：{e}"), 500
+    return jsonify(code=0, message="修复完成", data=result)
 
 
 @ai_model_bp.post("/<int:mid>/ocr")

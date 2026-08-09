@@ -199,6 +199,7 @@
             <el-option label="rfdetr（RF-DETR 目标检测/分割）" value="rfdetr" />
             <el-option label="mobilesam（MobileSAM 交互分割）" value="mobilesam" />
             <el-option label="opencv-sam（EfficientSAM）" value="opencv-sam" />
+            <el-option label="opencv-lama（LaMa 图像修复）" value="opencv-lama" />
             <el-option label="rtmlib（RTMO/RTMPose ONNX）" value="rtmlib" />
             <el-option label="funasr（语音识别）" value="funasr" />
             <el-option label="funasr-nano（Fun-ASR-Nano）" value="funasr-nano" />
@@ -218,6 +219,7 @@
             <el-option label="目标检测 object-detection" value="object-detection" />
             <el-option label="实例分割 instance-segmentation" value="instance-segmentation" />
             <el-option label="交互分割 interactive-segmentation" value="interactive-segmentation" />
+            <el-option label="图像修复 image-inpainting" value="image-inpainting" />
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
             <el-option label="人脸识别 face-recognition" value="face-recognition" />
             <el-option label="图像分类 image-classification" value="image-classification" />
@@ -382,6 +384,7 @@ const TASK_LABELS = {
   "object-detection": "目标检测",
   "instance-segmentation": "实例分割",
   "interactive-segmentation": "交互分割",
+  "image-inpainting": "图像修复",
   "pose-estimation": "姿态估计",
   "face-recognition": "人脸识别",
   "image-classification": "图像分类",
@@ -409,6 +412,7 @@ const LIB_DEFAULT_TASK = {
   rfdetr: "object-detection",
   mobilesam: "interactive-segmentation",
   "opencv-sam": "interactive-segmentation",
+  "opencv-lama": "image-inpainting",
   rtmlib: "pose-estimation",
   insightface: "face-recognition",
   "opencv-face": "face-recognition",
@@ -797,6 +801,7 @@ const TASK_PAGE = {
   "image-classification": { path: "/ai/imgcls", label: "图像分类" },
   "instance-segmentation": { path: "/ai/segment", label: "图像分割" },
   "interactive-segmentation": { path: "/ai/segment", label: "图像分割" },
+  "image-inpainting": { path: "/ai/inpaint", label: "图像修复" },
   "pose-estimation": { path: "/ai/pose", label: "姿态估计" },
   "automatic-speech-recognition": { path: "/ai/asr", label: "语音识别" },
   "text-to-speech": { path: "/ai/tts", label: "文本转语音" },

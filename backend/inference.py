@@ -3141,6 +3141,73 @@ def segment_image_efficientsam(model_path, image_bytes, points=None, point_label
     }
 
 
+def inpaint_image_lama(model_path, image_bytes, mask_bytes, dilate_px=0):
+    """OpenCV Zoo LaMa 图像修复：image + 遮罩（白=待修）→ 修复图。
+
+    dilate_px>0 时对外扩遮罩后再推理（罩住毛发/软边）。
+    """
+    import base64
+
+    from lama_dnn import inpaint as lama_inpaint
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    marr = np.frombuffer(mask_bytes, np.uint8)
+    mask = cv2.imdecode(marr, cv2.IMREAD_UNCHANGED)
+    if mask is None:
+        raise ValueError("无法解析遮罩图")
+    # 前端涂抹 PNG 常为 RGBA 且 alpha 全为 255；不可把 alpha 当遮罩，否则整图被当成待修区→全黑
+    if mask.ndim == 3:
+        if mask.shape[2] == 4:
+            rgb = mask[:, :, :3]
+            alpha = mask[:, :, 3]
+            rgb_any = int(np.count_nonzero(np.max(rgb, axis=2) > 16))
+            alpha_var = float(np.std(alpha))
+            # alpha 有明显变化时才用 alpha；否则用 RGB 亮度（白=待修）
+            if alpha_var > 8.0 and rgb_any == 0:
+                mask = alpha
+            else:
+                mask = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
+        else:
+            mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+
+    try:
+        dilate_px = int(dilate_px or 0)
+    except (TypeError, ValueError):
+        dilate_px = 0
+
+    result, meta = lama_inpaint(model_path, img, mask, dilate_px=dilate_px)
+    expanded = meta.pop("expandedMask", None)
+    ok, buf = cv2.imencode(".jpg", result, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+    # 预览用实际参与推理的遮罩（含外扩）
+    overlay = img.copy()
+    m_rs = expanded if expanded is not None else mask
+    if m_rs.shape[:2] != img.shape[:2]:
+        m_rs = cv2.resize(m_rs, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+    m_bin = m_rs > 0
+    overlay[m_bin] = (
+        0.35 * overlay[m_bin].astype(np.float32) + 0.65 * np.array([0, 0, 255], dtype=np.float32)
+    ).astype(np.uint8)
+    ok2, buf2 = cv2.imencode(".jpg", overlay, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    mask_preview_b64 = base64.b64encode(buf2.tobytes()).decode() if ok2 else None
+    return {
+        "imageBase64": image_b64,
+        "maskPreviewBase64": mask_preview_b64,
+        "width": meta.get("width"),
+        "height": meta.get("height"),
+        "backend": meta.get("backend"),
+        "latencyMs": meta.get("latencyMs"),
+        "onnx": meta.get("onnx"),
+        "maskPixels": meta.get("maskPixels"),
+        "maskPixelsBefore": meta.get("maskPixelsBefore"),
+        "dilatePx": meta.get("dilatePx", 0),
+        "inputSize": meta.get("inputSize"),
+    }
+
+
 def classify_image(model_dir, image_bytes, task="image-classification", top_k=5,
                    *, library=None, precision="fp32", prefer_backend="auto"):
     """图像分类：transformers（ViT 等）或 opencv-dnn（MobileNet V2 fp32/int8）。
@@ -4438,7 +4505,7 @@ def recognize_faces(
     detections = []
     for face in faces:
         m = match_embedding(face["embedding"], model_key, threshold=threshold)
-        detections.append({
+        det = {
             "className": m["name"],
             "classId": m["personId"] if m["personId"] is not None else -1,
             "personId": m["personId"],
@@ -4448,11 +4515,28 @@ def recognize_faces(
             "matched": m["matched"],
             "detScore": face["detScore"],
             "bbox": face["bbox"],
-        })
+        }
+        # YuNet：5 点 [x0,y0,...,x4,y4] → [[x,y]*5]，供前端分色绘制
+        lm = face.get("landmarks")
+        if lm is not None:
+            flat = [float(v) for v in lm]
+            if len(flat) >= 10:
+                det["landmarks"] = [[round(flat[i], 1), round(flat[i + 1], 1)] for i in range(0, 10, 2)]
+            elif len(flat) == 5 and isinstance(lm[0], (list, tuple)):
+                det["landmarks"] = [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in lm[:5]]
+        detections.append(det)
 
     image_b64 = None
     if draw and detections:
         vis = img.copy()
+        # YuNet 五点：右眼/左眼/鼻尖/右嘴角/左嘴角（与 OpenCV Zoo 一致）
+        lm_colors_bgr = [
+            (255, 0, 0),      # 右眼蓝
+            (0, 0, 255),      # 左眼红
+            (0, 200, 0),      # 鼻尖绿
+            (255, 0, 255),    # 右嘴品红
+            (0, 220, 255),    # 左嘴黄
+        ]
         for d in detections:
             x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
             color = (0, 200, 80) if d["matched"] else (0, 165, 255)
@@ -4462,6 +4546,10 @@ def recognize_faces(
                 vis, label, (x1, max(0, y1 - 8)),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA,
             )
+            pts = d.get("landmarks") or []
+            for i, pt in enumerate(pts[:5]):
+                px, py = int(pt[0]), int(pt[1])
+                cv2.circle(vis, (px, py), 3, lm_colors_bgr[i], -1, lineType=cv2.LINE_AA)
         ok, buf = cv2.imencode(".jpg", vis)
         if ok:
             image_b64 = base64.b64encode(buf.tobytes()).decode("ascii")

@@ -87,6 +87,12 @@ export const modelApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0
     }),
+  // 图像修复（OpenCV LaMa：原图 + 遮罩）
+  inpaint: (id, formData) =>
+    request.post(`/ai/model/${id}/inpaint`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0
+    }),
   // 文字识别 OCR（GOT-OCR2）
   ocr: (id, formData) =>
     request.post(`/ai/model/${id}/ocr`, formData, {
