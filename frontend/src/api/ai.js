@@ -353,6 +353,35 @@ export const faceApi = {
     }),
 }
 
+// ---------------- 行人重识别（Youtu ReID 外观 + 可选混合人脸）
+export const reidApi = {
+  listPersons: (params) => request.get('/ai/reid/persons', { params }),
+  getPerson: (id) => request.get(`/ai/reid/persons/${id}`),
+  addPerson: (data) => request.post('/ai/reid/persons', data),
+  updatePerson: (id, data) => request.put(`/ai/reid/persons/${id}`, data),
+  removePerson: (id) => request.delete(`/ai/reid/persons/${id}`),
+  enroll: (id, formData) =>
+    request.post(`/ai/reid/persons/${id}/enroll`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  recognize: (formData) =>
+    request.post('/ai/reid/recognize', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  search: (formData) =>
+    request.post('/ai/reid/search', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  searchVideo: (formData) =>
+    request.post('/ai/reid/search-video', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+}
+
 // ---------------- 检测告警
 export const alertApi = {
   listRules: () => request.get('/alerts/rules'),

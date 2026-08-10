@@ -21,6 +21,7 @@ const routes = [
       { path: 'ai/inpaint', name: 'aiInpaint', component: () => import('../views/ai/inpaint/index.vue'), meta: { title: '图像修复' } },
       { path: 'ai/camera', name: 'aiCamera', component: () => import('../views/ai/camera/index.vue'), meta: { title: '摄像头实时检测' } },
       { path: 'ai/face', name: 'aiFace', component: () => import('../views/ai/face/index.vue'), meta: { title: '人脸识别' } },
+      { path: 'ai/reid', name: 'aiReid', component: () => import('../views/ai/reid/index.vue'), meta: { title: '行人重识别' } },
       { path: 'ai/alert', name: 'aiAlert', component: () => import('../views/ai/alert/index.vue'), meta: { title: '检测告警' } },
       { path: 'ai/text', name: 'aiText', component: () => import('../views/ai/text/index.vue'), meta: { title: '文本分析' } },
       { path: 'ai/imgcls', name: 'aiImgcls', component: () => import('../views/ai/imgcls/index.vue'), meta: { title: '图像分类' } },

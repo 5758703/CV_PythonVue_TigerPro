@@ -11,3 +11,12 @@
 | [CHANGELOG.md](../../CHANGELOG.md) | 版本变更 |
 | [good-first-issues.md](./good-first-issues.md) | 8 条新手任务文案 |
 | [LABELS.md](../../.github/LABELS.md) | Issue 标签定义 |
+
+## 功能文档（近期）
+
+| 文档 | 说明 |
+|------|------|
+| [行人重识别](../person-reid.md) | Youtu ReID、独立底库与混合人脸 |
+| [人脸识别](../face-recognition.md) | InsightFace + YuNet+SFace |
+| [OpenCV Zoo 轻量视觉](../opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet 等 |
+| 更多见根目录 [README 文档表](../../README.md#文档) | |

@@ -136,7 +136,8 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 - 权限分类：
   - 功能权限 — 菜单(M目录/C菜单)、按钮(F，前端 `v-permission`)、API 接口(A，后端校验)
   - 数据权限 — 角色 `data_scope`：1 仅本人 / 2 本部门 / 3 本部门及下级 / 4 全部
-- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace 底库 1:N）** / **表格识别（YOLO+RapidOCR+SLANet）** / **目标追踪（含车辆追踪、人员离岗检测场景；离岗支持多工位与移动镜头运动补偿）** 等
+- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace + OpenCV YuNet+SFace）** / **行人重识别（Youtu ReID）** / **图像修复（LaMa）** / **表格识别（YOLO+RapidOCR+SLANet）** / **目标追踪（含车辆追踪、人员离岗检测场景；离岗支持多工位与移动镜头运动补偿）** 等
+- OpenCV Zoo 轻量能力：YuNet+SFace、Youtu Person ReID、EfficientSAM、LaMa、MobileNet V2（DNN + ORT 回退）
 - **安防检测模型包（11 个本地 ONNX）**：烟火 / 森林火灾 / 灾害扩展、PPE 与安全帽、跌倒与行为、打架、武器、车牌等，种子分类「安防检测」（`sec-*`），ONNX Runtime CPU 推理，可挂图片/视频/摄像头检测与告警规则
 - **模型权重转换（pt → onnx）**：模型管理支持异步导出（imgsz / dynamic / half），同目录存在 `.onnx` 时检测优先走 ONNX Runtime（`YOLO_PREFER_ONNX=0` 可关闭）；列表支持自定义每页条数（1–200）并本地记忆
 - 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**
@@ -192,6 +193,8 @@ python app.py            # http://127.0.0.1:5001 （启动自动建表 + 灌种�
 | 部门 | `/api/system/dept` | 树 + CRUD |
 | 岗位 | `/api/system/job` | CRUD |
 | 菜单 | `/api/system/menu` | 树 + CRUD |
+| 人脸 | `/api/ai/face` | 底库 CRUD / enroll / recognize |
+| 行人重识别 | `/api/ai/reid` | 底库 CRUD / enroll / recognize / search / search-video |
 | 健康 | `GET /api/health` | 健康检查 |
 
 功能权限装饰器 `@permission_required("system:user:add")`；数据权限 `apply_user_data_scope()` 按角色 data_scope 过滤。
@@ -221,8 +224,10 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 | [姿态估计模型选型说明](docs/姿态估计模型选型说明.md) | 平台 7 款姿态模型对比；含羽毛球页六模型速查 |
 | [数据标注质量检测与格式转换](docs/数据标注质量检测与格式转换.md) | 质量检测指标解读、五类格式转换与训前检查清单 |
 | [TigerAI平台模型框架与类型汇总](docs/TigerAI平台模型框架与类型汇总.md) | 推理框架 / 任务类型 / 种子模型与工作台对照（含配图位） |
-| [人脸识别模块](docs/face-recognition.md) | InsightFace 1:N、底库登记、API、阈值/隔帧与许可隐私说明 |
-| [人脸识别功能汇总](docs/人脸识别功能汇总.md) | 框架/模型对比、本项目选型、底库与实时识别、API、配图占位 |
+| [人脸识别模块](docs/face-recognition.md) | InsightFace + YuNet+SFace、本地视频、五色关键点、底库与 API |
+| [人脸识别功能汇总](docs/人脸识别功能汇总.md) | 选型对照与本项目落地摘要 |
+| [行人重识别](docs/person-reid.md) | Youtu ReID、独立底库/权限、混合人脸、检测器优先级、API |
+| [OpenCV Zoo 轻量视觉](docs/opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet / 与人脸·行人索引 |
 | [表格识别功能汇总](docs/表格识别功能汇总.md) | YOLO 检表 → RapidOCR → SLANet_plus；模型、API、前端与代码位置 |
 | [目标追踪-场景分类说明](docs/目标追踪-场景分类说明.md) | 通用追踪 / 车辆追踪 / 人员离岗三场景架构、权限路由与扩展方式 |
 | [人员离岗检测-功能说明](docs/人员离岗检测-功能说明.md) | 多工位离岗规则、镜头运动补偿（移动镜头工位锚定）、API 与验收 |

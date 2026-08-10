@@ -795,7 +795,8 @@ def _detect_model_path(m):
     """
     lib = _detect_lib(m)
     if lib in ("transformers", "opencv-sam", "efficientsam", "efficient-sam",
-               "opencv-dnn", "opencv_dnn", "opencv-face", "opencv-lama", "lama", "inpainting"):
+               "opencv-dnn", "opencv_dnn", "opencv-face", "opencv-lama", "lama", "inpainting",
+               "opencv-reid", "youtu-reid", "youtureid", "person-reid"):
         return _abs_model_path(m)
     return _abs_weight(m)
 
@@ -856,6 +857,20 @@ def _fetch_lama_weight(folder, sub):
     return f"models/{sub}", size
 
 
+def _fetch_person_reid_weight(folder, sub):
+    """拉取 OpenCV Zoo Youtu Person ReID ONNX。"""
+    from person_reid_dnn import download_assets
+    _ensure_dir(folder)
+    download_assets(folder)
+    size = 0
+    for root, _dirs, files in os.walk(folder):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    return f"models/{sub}", size
+
+
 @ai_model_bp.post("/<int:mid>/fetch")
 @permission_required("ai:model:add")
 def fetch_weight(mid):
@@ -869,6 +884,8 @@ def fetch_weight(mid):
             rel, size = _fetch_efficient_sam_weight(folder, sub)
         elif lib in ("opencv-lama", "lama", "inpainting", "opencv-inpaint"):
             rel, size = _fetch_lama_weight(folder, sub)
+        elif lib in ("opencv-reid", "youtu-reid", "youtureid", "person-reid"):
+            rel, size = _fetch_person_reid_weight(folder, sub)
         elif lib in ("opencv-face", "yunet-sface", "yunet_sface"):
             rel, size = _fetch_yunet_sface_weight(folder, sub)
         elif lib in ("opencv-dnn", "opencv_dnn", "mobilenet"):

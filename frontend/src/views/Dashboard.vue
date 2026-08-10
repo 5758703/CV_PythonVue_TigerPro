@@ -182,6 +182,11 @@ const sceneCards = [
     to: { path: "/ai/face" },
   },
   {
+    title: "行人重识别",
+    desc: "Youtu 外观检索 · 框旁像谁/未知 · 可混合人脸",
+    to: { path: "/ai/reid" },
+  },
+  {
     title: "检测告警",
     desc: "烟火 / 聚集 / PPE / 越线入侵 · 规则引擎与事件",
     to: { path: "/ai/alert" },

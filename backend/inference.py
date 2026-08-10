@@ -4570,3 +4570,366 @@ def recognize_faces(
         "embedDim": (meta or {}).get("dim"),
     }
 
+
+# ---------------------------------------------------------------------------
+# OpenCV Youtu Person ReID（外观特征）+ 可选近距人脸融合
+# ---------------------------------------------------------------------------
+
+def _decode_bgr(image_bytes: bytes):
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    return img
+
+
+def _crop_person(img, bbox, pad_ratio: float = 0.05):
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)
+    px, py = bw * pad_ratio, bh * pad_ratio
+    x1 = max(0, int(x1 - px))
+    y1 = max(0, int(y1 - py))
+    x2 = min(w, int(x2 + px))
+    y2 = min(h, int(y2 + py))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return img[y1:y2, x1:x2].copy()
+
+
+def _face_in_person_usable(face_bbox, person_bbox, min_face_h: float = 48.0, min_frac: float = 0.10):
+    """近距正脸启发式：脸高够大且占行人框高度一定比例。"""
+    fx1, fy1, fx2, fy2 = [float(v) for v in face_bbox]
+    px1, py1, px2, py2 = [float(v) for v in person_bbox]
+    fh = max(0.0, fy2 - fy1)
+    ph = max(1.0, py2 - py1)
+    if fh < float(min_face_h):
+        return False
+    # 脸中心应落在行人框内（允许少量越界）
+    cx, cy = (fx1 + fx2) * 0.5, (fy1 + fy2) * 0.5
+    if not (px1 - 8 <= cx <= px2 + 8 and py1 - 8 <= cy <= py2 + 8):
+        return False
+    return (fh / ph) >= float(min_frac)
+
+
+def _detect_persons_yolo(det_abs_path: str, img, conf: float = 0.35):
+    """返回 person 检测列表 [{bbox, confidence, classId}]。"""
+    model = _get_model(det_abs_path)
+    results = model.predict(img, **_yolo_predict_kwargs(conf=conf, classes=[0]))
+    r = results[0]
+    out = []
+    if r.boxes is None:
+        return out
+    for b in r.boxes:
+        cls_id = int(b.cls[0])
+        if cls_id != 0:
+            continue
+        xyxy = [round(float(v), 1) for v in b.xyxy[0].tolist()]
+        out.append({
+            "bbox": xyxy,
+            "confidence": round(float(b.conf[0]), 4),
+            "classId": cls_id,
+            "className": "person",
+        })
+    return out
+
+
+def extract_reid_embedding(reid_root: str, image_bytes: bytes, *, full_body: bool = True):
+    """从整图或已裁剪图提取外观特征。返回 (emb, img, meta)。"""
+    from person_reid_dnn import extract_feature
+    from services.reid_gallery import l2_normalize
+
+    img = _decode_bgr(image_bytes)
+    feat, meta = extract_feature(reid_root, img)
+    emb = l2_normalize(np.asarray(feat, dtype=np.float32))
+    meta = dict(meta or {})
+    meta["fullBody"] = bool(full_body)
+    return emb, img, meta
+
+
+def recognize_persons(
+    reid_root: str,
+    reid_model_key: str,
+    image_bytes: bytes,
+    *,
+    det_abs_path: str | None = None,
+    threshold: float = 0.45,
+    det_conf: float = 0.35,
+    draw: bool = True,
+    # 混合：近距正脸用人脸，远距/背影用外观
+    hybrid: bool = False,
+    face_root: str | None = None,
+    face_pack: str = "",
+    face_library: str = "opencv-face",
+    face_model_key: str | None = None,
+    face_threshold: float = 0.4,
+    face_min_h: float = 48.0,
+):
+    """行人检测 → ReID 1:N；可选与人脸融合。
+
+    返回 detections（含 name/matched/modality=face|appearance）。
+    """
+    from person_reid_dnn import extract_feature
+    from services.reid_gallery import l2_normalize, match_embedding
+
+    img = _decode_bgr(image_bytes)
+    h, w = img.shape[:2]
+
+    persons = []
+    if det_abs_path:
+        persons = _detect_persons_yolo(det_abs_path, img, conf=det_conf)
+    if not persons:
+        # 无检测器或未检出：整图当一人
+        persons = [{
+            "bbox": [0.0, 0.0, float(w), float(h)],
+            "confidence": 1.0,
+            "classId": 0,
+            "className": "person",
+        }]
+
+    face_list = []
+    if hybrid and face_root and face_model_key:
+        try:
+            faces, _fim, _fmeta = extract_face_embeddings(
+                face_root, face_pack, image_bytes,
+                det_thresh=0.5, library=face_library,
+            )
+            face_list = faces or []
+        except Exception:  # noqa: BLE001
+            face_list = []
+
+    detections = []
+    for p in persons:
+        bbox = p["bbox"]
+        det = {
+            "className": "person",
+            "classId": 0,
+            "confidence": p.get("confidence", 0),
+            "detScore": p.get("confidence", 0),
+            "bbox": bbox,
+            "personId": None,
+            "name": "未知",
+            "score": 0.0,
+            "matched": False,
+            "modality": "appearance",
+            "facePersonId": None,
+        }
+
+        used_face = False
+        if face_list:
+            # 选落在该行人框内、尺寸最大的脸
+            best_face = None
+            best_area = -1.0
+            for f in face_list:
+                fb = f.get("bbox") or []
+                if len(fb) < 4:
+                    continue
+                if not _face_in_person_usable(fb, bbox, min_face_h=face_min_h):
+                    continue
+                area = max(0.0, float(fb[2]) - float(fb[0])) * max(0.0, float(fb[3]) - float(fb[1]))
+                if area > best_area:
+                    best_area = area
+                    best_face = f
+            if best_face is not None:
+                from services.face_gallery import match_embedding as match_face
+                fm = match_face(best_face["embedding"], face_model_key, threshold=face_threshold)
+                if fm.get("matched"):
+                    det.update({
+                        "personId": None,
+                        "facePersonId": fm.get("personId"),
+                        "name": fm.get("name") or "未知",
+                        "score": fm.get("score", 0),
+                        "matched": True,
+                        "modality": "face",
+                        "faceBbox": best_face.get("bbox"),
+                    })
+                    used_face = True
+
+        if not used_face:
+            crop = _crop_person(img, bbox)
+            if crop is not None and crop.size > 0:
+                try:
+                    feat, _meta = extract_feature(reid_root, crop)
+                    emb = l2_normalize(np.asarray(feat, dtype=np.float32))
+                    m = match_embedding(emb, reid_model_key, threshold=threshold)
+                    det.update({
+                        "personId": m.get("personId"),
+                        "facePersonId": m.get("facePersonId"),
+                        "name": m.get("name") or "未知",
+                        "score": m.get("score", 0),
+                        "matched": bool(m.get("matched")),
+                        "modality": "appearance",
+                    })
+                except Exception:  # noqa: BLE001
+                    pass
+        detections.append(det)
+
+    image_b64 = None
+    if draw and detections:
+        vis = img.copy()
+        for d in detections:
+            x1, y1, x2, y2 = [int(v) for v in d["bbox"]]
+            matched = bool(d.get("matched"))
+            mod = d.get("modality") or "appearance"
+            if matched and mod == "face":
+                color = (80, 180, 0)  # 人脸命中：绿
+            elif matched:
+                color = (255, 140, 0)  # 外观命中：橙
+            else:
+                color = (0, 165, 255)  # 未知：橙黄
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+            label = f"{d.get('name') or '未知'}"
+            if matched:
+                label += f" {(float(d.get('score') or 0) * 100):.0f}%"
+            tag = "脸" if mod == "face" and matched else ("外观" if matched else "未知")
+            label = f"[{tag}] {label}"
+            cv2.putText(
+                vis, label, (x1, max(0, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA,
+            )
+        ok, buf = cv2.imencode(".jpg", vis)
+        if ok:
+            image_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "width": w,
+        "height": h,
+        "imageBase64": image_b64,
+        "threshold": float(threshold),
+        "hybrid": bool(hybrid),
+        "backend": "youtu-reid",
+    }
+
+
+def search_reid_gallery(
+    reid_root: str,
+    reid_model_key: str,
+    query_bytes: bytes,
+    *,
+    topk: int = 5,
+    det_abs_path: str | None = None,
+    det_conf: float = 0.35,
+):
+    """指定行人图在底库中检索 Top-K。"""
+    from person_reid_dnn import extract_feature
+    from services.reid_gallery import l2_normalize, topk_match
+
+    img = _decode_bgr(query_bytes)
+    crop = img
+    query_bbox = [0.0, 0.0, float(img.shape[1]), float(img.shape[0])]
+    if det_abs_path:
+        persons = _detect_persons_yolo(det_abs_path, img, conf=det_conf)
+        if persons:
+            best = max(persons, key=lambda x: (x["bbox"][2] - x["bbox"][0]) * (x["bbox"][3] - x["bbox"][1]))
+            query_bbox = best["bbox"]
+            c = _crop_person(img, query_bbox)
+            if c is not None:
+                crop = c
+    feat, meta = extract_feature(reid_root, crop)
+    emb = l2_normalize(np.asarray(feat, dtype=np.float32))
+    hits = topk_match(emb, reid_model_key, topk=topk)
+    return {
+        "matches": hits,
+        "count": len(hits),
+        "queryBbox": query_bbox,
+        "embedDim": int(emb.size),
+        "backend": (meta or {}).get("backend"),
+    }
+
+
+def search_reid_in_video(
+    reid_root: str,
+    reid_model_key: str,
+    query_bytes: bytes,
+    video_path: str,
+    *,
+    threshold: float = 0.45,
+    topk: int = 20,
+    sample_fps: float = 1.0,
+    max_frames: int = 120,
+    det_abs_path: str | None = None,
+    det_conf: float = 0.35,
+):
+    """指定行人图在录像片段中检索相似出现。"""
+    from person_reid_dnn import extract_feature
+    from services.reid_gallery import l2_normalize
+
+    q = search_reid_gallery(
+        reid_root, reid_model_key, query_bytes,
+        topk=1, det_abs_path=det_abs_path, det_conf=det_conf,
+    )
+    # 直接用 query embedding
+    img_q = _decode_bgr(query_bytes)
+    crop_q = img_q
+    if det_abs_path:
+        persons = _detect_persons_yolo(det_abs_path, img_q, conf=det_conf)
+        if persons:
+            best = max(persons, key=lambda x: (x["bbox"][2] - x["bbox"][0]) * (x["bbox"][3] - x["bbox"][1]))
+            c = _crop_person(img_q, best["bbox"])
+            if c is not None:
+                crop_q = c
+    feat_q, _ = extract_feature(reid_root, crop_q)
+    q_emb = l2_normalize(np.asarray(feat_q, dtype=np.float32))
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频")
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+    step = max(1, int(round(fps / max(0.1, float(sample_fps)))))
+    hits = []
+    frame_idx = 0
+    sampled = 0
+    while sampled < int(max_frames):
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if frame_idx % step != 0:
+            frame_idx += 1
+            continue
+        sampled += 1
+        t_sec = frame_idx / max(fps, 1e-6)
+        persons = []
+        if det_abs_path:
+            persons = _detect_persons_yolo(det_abs_path, frame, conf=det_conf)
+        else:
+            persons = [{
+                "bbox": [0.0, 0.0, float(frame.shape[1]), float(frame.shape[0])],
+                "confidence": 1.0,
+            }]
+        for p in persons:
+            crop = _crop_person(frame, p["bbox"])
+            if crop is None:
+                continue
+            try:
+                feat, _ = extract_feature(reid_root, crop)
+                emb = l2_normalize(np.asarray(feat, dtype=np.float32))
+                score = float(np.dot(q_emb, emb))
+            except Exception:  # noqa: BLE001
+                continue
+            if score < float(threshold):
+                continue
+            # 可选：若命中底库也带上名字
+            from services.reid_gallery import match_embedding
+            m = match_embedding(emb, reid_model_key, threshold=threshold)
+            hits.append({
+                "frameIndex": frame_idx,
+                "timeSec": round(t_sec, 2),
+                "bbox": p["bbox"],
+                "score": round(score, 4),
+                "matched": bool(m.get("matched")),
+                "name": m.get("name") if m.get("matched") else "未知",
+                "personId": m.get("personId"),
+            })
+        frame_idx += 1
+    cap.release()
+    hits.sort(key=lambda x: -x["score"])
+    return {
+        "hits": hits[: int(topk)],
+        "count": min(len(hits), int(topk)),
+        "sampledFrames": sampled,
+        "galleryHint": q.get("matches") or [],
+        "threshold": float(threshold),
+    }
+

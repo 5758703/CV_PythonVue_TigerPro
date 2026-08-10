@@ -211,6 +211,8 @@
             <el-option label="rapidtable（表格结构 ONNX）" value="rapidtable" />
             <el-option label="insightface（人脸识别）" value="insightface" />
             <el-option label="opencv-face（YuNet+SFace）" value="opencv-face" />
+            <el-option label="opencv-reid（Youtu 行人重识别）" value="opencv-reid" />
+            <el-option label="opencv-lama（图像修复）" value="opencv-lama" />
             <el-option label="linly（数字人）" value="linly" />
           </el-select>
         </el-form-item>
@@ -222,6 +224,7 @@
             <el-option label="图像修复 image-inpainting" value="image-inpainting" />
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
             <el-option label="人脸识别 face-recognition" value="face-recognition" />
+            <el-option label="行人重识别 person-reid" value="person-reid" />
             <el-option label="图像分类 image-classification" value="image-classification" />
             <el-option label="文字识别 OCR" value="ocr" />
             <el-option label="文本检测 text-detection" value="text-detection" />
@@ -387,6 +390,7 @@ const TASK_LABELS = {
   "image-inpainting": "图像修复",
   "pose-estimation": "姿态估计",
   "face-recognition": "人脸识别",
+  "person-reid": "行人重识别",
   "image-classification": "图像分类",
   "ocr": "OCR(端到端)",
   "text-detection": "文本检测",
@@ -416,6 +420,7 @@ const LIB_DEFAULT_TASK = {
   rtmlib: "pose-estimation",
   insightface: "face-recognition",
   "opencv-face": "face-recognition",
+  "opencv-reid": "person-reid",
   "funasr": "automatic-speech-recognition",
   "funasr-nano": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",
@@ -810,6 +815,8 @@ const TASK_PAGE = {
   "text-detection": { path: "/ai/paddleocr", label: "PaddleOCR 识别" },
   "text-recognition": { path: "/ai/paddleocr", label: "PaddleOCR 识别" },
   "table-structure": { path: "/ai/table", label: "表格识别" },
+  "face-recognition": { path: "/ai/face", label: "人脸识别" },
+  "person-reid": { path: "/ai/reid", label: "行人重识别" },
 };
 
 const openTest = (row) => {

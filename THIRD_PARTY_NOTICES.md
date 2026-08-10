@@ -50,6 +50,11 @@
 | `detr-resnet-50` | [facebook/detr-resnet-50](https://huggingface.co/facebook/detr-resnet-50) | 目标检测 | Apache-2.0 | [HF `license: apache-2.0`](https://huggingface.co/facebook/detr-resnet-50) | COCO。 |
 | `vit-base` | [google/vit-base-patch16-224](https://huggingface.co/google/vit-base-patch16-224) | 图像分类 | Apache-2.0 | [HF `license: apache-2.0`](https://huggingface.co/google/vit-base-patch16-224) | ImageNet。 |
 | `insightface-buffalo-s` / `insightface-buffalo-l` | [buffalo_s.zip](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_s.zip) / [buffalo_l.zip](https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip) | 人脸识别 | **代码 MIT；权重默认非商用研究** | [InsightFace License](https://github.com/deepinsight/insightface#license) · 商用联系 [recognition-oss-pack@insightface.ai](mailto:recognition-oss-pack@insightface.ai) | **特殊条款。** 含标注数据训练的模型默认仅研究；商用须另洽。人脸数据须隐私合规。 |
+| `opencv-yunet-sface` | [opencv/face_detection_yunet](https://huggingface.co/opencv/face_detection_yunet) + [face_recognition_sface](https://huggingface.co/opencv/face_recognition_sface) | 人脸检测+识别 | **Apache-2.0**（OpenCV Zoo） | [YuNet 卡](https://huggingface.co/opencv/face_detection_yunet) · [SFace 卡](https://huggingface.co/opencv/face_recognition_sface) · [Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0) | 与 InsightFace 特征不互通；人脸数据须隐私合规。 |
+| `opencv-person-reid-youtu` | [opencv/person_reid_youtureid](https://huggingface.co/opencv/person_reid_youtureid) | 行人重识别 | **Apache-2.0**（Zoo README） | [HF 模型卡](https://huggingface.co/opencv/person_reid_youtureid) · [Zoo LICENSE](https://github.com/opencv/opencv_zoo/blob/main/models/person_reid_youtureid/LICENSE) | 外观特征；联用 YOLO 检测时注意 Ultralytics **AGPL** 传导。 |
+| `efficient-sam` | [opencv/image_segmentation_efficientsam](https://huggingface.co/opencv/image_segmentation_efficientsam) | 交互分割 | **Apache-2.0** | [HF 模型卡](https://huggingface.co/opencv/image_segmentation_efficientsam) | OpenCV DNN ONNX。 |
+| `inpainting-lama` | [opencv/inpainting_lama](https://huggingface.co/opencv/inpainting_lama) | 图像修复 | **Apache-2.0** | [HF 模型卡](https://huggingface.co/opencv/inpainting_lama) | DNN 失败可走 ORT。 |
+| `mobilenet-v2` | [onnx/models MobileNet](https://github.com/onnx/models/tree/main/validated/vision/classification/mobilenet) | 图像分类 | 以 onnx/models 声明为准（常见 Apache-2.0） | [onnx/models](https://github.com/onnx/models) | ImageNet-1000；INT8 可能走 ORT。 |
 | `yoloe-26s-seg` | [ultralytics assets yoloe-26s-seg.pt](https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26s-seg.pt) | 开放词汇分割 | **AGPL-3.0**（Ultralytics 栈） | [Ultralytics LICENSE](https://github.com/ultralytics/ultralytics/blob/main/LICENSE) · [企业选项](https://www.ultralytics.com/license) | 官方权重/栈按 AGPL。 |
 
 ### 2.2 检测 / 车牌 / 文档 OCR·表格（已补链）
@@ -116,6 +121,7 @@
 |------|------|
 | 训练集（用户自备） | **贡献者不得上传含隐私的未授权数据**；自训权重许可取决于数据授权 + 基座模型许可。 |
 | 人脸底库图片与 embedding | **用户数据**，不在开源分发范围内；部署方需满足隐私与合规。 |
+| 行人 ReID 底库图片与 embedding | **用户数据**；外观特征亦可能关联个人，须授权使用。 |
 | Roboflow Universe 等第三方数据集/托管模型 | 除模型卡外，遵守平台与数据集条款。 |
 
 ---

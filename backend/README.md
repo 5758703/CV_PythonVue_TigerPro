@@ -24,6 +24,7 @@ Flask 应用 :5001
    ├─ app.py          应用工厂 + 轻量迁移(_migrate) + 启动入口
    └─ inference.py    多引擎推理层（惰性加载，按需导入）
         ├─ ultralytics YOLO        目标检测（图片/视频/摄像头）
+        ├─ OpenCV Zoo DNN          YuNet+SFace / Youtu ReID / LaMa / EfficientSAM / MobileNet（见 docs/）
         ├─ transformers            文本分类/零样本/完形/翻译/摘要/生成/NER/QA/图像分类/DETR/MMS-TTS
         ├─ funasr / funasr_onnx    语音识别（SenseVoice / 量化 onnx）
         ├─ sherpa-onnx             MeloTTS 中英混合语音合成

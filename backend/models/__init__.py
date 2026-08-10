@@ -242,6 +242,7 @@ from .ai_model import AiModel  # noqa: E402  AI 检测模型
 from .camera import Camera  # noqa: E402  摄像头
 from .training import TrainingDataset, TrainingJob  # noqa: E402  模型训练
 from .face import FacePerson, FaceEmbedding  # noqa: E402  人脸底库
+from .reid import ReidPerson, ReidEmbedding  # noqa: E402  行人重识别底库
 from .alert import AlertRule, AlertEvent  # noqa: E402  检测告警
 from .open_app import OpenApp, OpenApiKey, OpenApiCallLog  # noqa: E402  开放平台
 from .open_job import OpenJob  # noqa: E402  开放异步任务
@@ -251,6 +252,7 @@ __all__ = [
     "User", "Role", "Dept", "Job", "Menu", "AiModel", "Camera",
     "TrainingDataset", "TrainingJob",
     "FacePerson", "FaceEmbedding",
+    "ReidPerson", "ReidEmbedding",
     "AlertRule", "AlertEvent",
     "OpenApp", "OpenApiKey", "OpenApiCallLog", "OpenJob",
     "user_role", "user_dept", "user_post", "role_menu", "user_menu",

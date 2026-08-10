@@ -111,6 +111,7 @@ def _regroup_ai_menus():
         (206, 230, "/ai/imgcls"), (284, 230, "/ai/livecls"), (213, 230, "/ai/track"), (214, 230, "/ai/pose"),
         (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
         (274, 230, "/ai/face"),
+        (288, 230, "/ai/reid"),
         (276, 230, "/ai/alert"),
         (278, 230, "/ai/table"),
         (286, 230, "/ai/inpaint"),
@@ -430,6 +431,14 @@ def seed_ai_menus():
     _ensure_ai_menu(2742, 274, "人脸底库新增", "F", "ai:face:add")
     _ensure_ai_menu(2743, 274, "人脸底库修改", "F", "ai:face:edit")
     _ensure_ai_menu(2744, 274, "人脸底库删除", "F", "ai:face:remove")
+    # 行人重识别（视觉识别 230 下）
+    _ensure_ai_menu(288, 230, "行人重识别", "C", "ai:reid:list",
+                    path="/ai/reid", component="ai/reid/index", icon="Avatar",
+                    order=13, grant_common=True)
+    _ensure_ai_menu(2881, 288, "行人重识别查询", "F", "ai:reid:query", grant_common=True)
+    _ensure_ai_menu(2882, 288, "行人底库新增", "F", "ai:reid:add")
+    _ensure_ai_menu(2883, 288, "行人底库修改", "F", "ai:reid:edit")
+    _ensure_ai_menu(2884, 288, "行人底库删除", "F", "ai:reid:remove")
     # 检测告警（视觉识别 230 下）
     _ensure_ai_menu(276, 230, "检测告警", "C", "ai:alert:list",
                     path="/ai/alert", component="ai/alert/index", icon="Bell",
@@ -690,6 +699,41 @@ def _bind_local_yunet_sface_weight():
     abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
     try:
         from yunet_sface import assets_ready
+        ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
+    except Exception:  # noqa: BLE001
+        ready = False
+    changed = False
+    if ready:
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if size > 0 and m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def _bind_local_person_reid_weight():
+    """若 uploads/models/opencv-person-reid-youtu 已含 ONNX，绑定 file_path（幂等）。"""
+    m = AiModel.query.filter_by(model_key="opencv-person-reid-youtu").first()
+    if not m:
+        return False
+    rel = "models/opencv-person-reid-youtu"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    try:
+        from person_reid_dnn import assets_ready
         ready = assets_ready(abs_dir) if os.path.isdir(abs_dir) else False
     except Exception:  # noqa: BLE001
         ready = False
@@ -1183,6 +1227,19 @@ def seed_ai_models():
         status="0",
     ))
     created |= _bind_local_yunet_sface_weight()
+    # OpenCV Zoo：腾讯优图行人重识别（外观 768-d）
+    created |= _ensure_ai_model("opencv-person-reid-youtu", dict(
+        model_name="OpenCV Youtu Person ReID", category="行人重识别",
+        task="person-reid", library="opencv-reid", version="2021nov",
+        source_url="https://huggingface.co/opencv/person_reid_youtureid",
+        description=(
+            "OpenCV Model Zoo / 腾讯优图：person_reid_youtu_2021nov.onnx 行人外观特征（768维）。"
+            "需配合 YOLO 行人检测裁剪；与人脸特征空间不互通，使用独立行人底库。"
+            "远距/背影用外观，近距正脸可混合人脸识别。"
+        ),
+        status="0",
+    ))
+    created |= _bind_local_person_reid_weight()
     _bind_local_brain_tumor_weight()
     _bind_local_rocket_detect_weight()
     _bind_local_insightface()
