@@ -23,6 +23,8 @@ mobile-sam @ git+https://gitcode.com/ChaoningZhang/MobileSAM.git
 # RTMO 姿态估计（rtmlib + onnxruntime，羽毛球分析等）
 rtmlib>=0.0.15
 onnxruntime>=1.17.0
+# 说明：安防包等 YOLO ONNX 若为 opset 20，旧 ORT 会拒载；推理层会自动降到 opset 19。
+# 建议保持 onnxruntime≥1.17；仍报 opset 时重启后端即可触发降级写回。
 # 模型管理「pt→onnx 转换」（ultralytics export 依赖）
 onnx>=1.16.0
 timm==1.0.27

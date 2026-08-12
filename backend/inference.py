@@ -1188,10 +1188,23 @@ def _get_model(abs_path):
         from ultralytics import YOLO  # 惰性导入
 
         model = None
+        load_path = abs_path
+        # 直接指向 .onnx：先降级过高 opset，避免旧 ORT 拒载（安防包多为 opset 20）
+        if str(abs_path).lower().endswith(".onnx"):
+            try:
+                from onnx_compat import ensure_compatible_onnx
+                load_path = ensure_compatible_onnx(abs_path)
+            except Exception:  # noqa: BLE001
+                load_path = abs_path
         # 1) 已有同名 .onnx：ONNX Runtime 加载（轻量、免导出、免 PyTorch 计算图）
         if prefer_onnx and backend != "openvino":
             onnx_path = _onnx_sibling(abs_path)
             if onnx_path:
+                try:
+                    from onnx_compat import ensure_compatible_onnx
+                    onnx_path = ensure_compatible_onnx(onnx_path)
+                except Exception:  # noqa: BLE001
+                    pass
                 try:
                     model = YOLO(onnx_path, task="detect")
                 except Exception:  # noqa: BLE001
@@ -1212,7 +1225,28 @@ def _get_model(abs_path):
                 # auto：回退 PyTorch .pt（脑肿瘤等大权重首次 OV 导出易失败或命名不符）
                 model = None
         if model is None:
-            model = YOLO(abs_path)
+            try:
+                model = YOLO(load_path, task="detect") if str(load_path).lower().endswith(".onnx") else YOLO(load_path)
+            except Exception as e:  # noqa: BLE001
+                # 若入口是 onnx 且仍失败，尝试同目录 .pt
+                from onnx_compat import is_opset_compat_error
+                pt_fallback = None
+                if str(abs_path).lower().endswith(".onnx"):
+                    stem = os.path.splitext(abs_path)[0]
+                    for ext in (".pt", ".pth"):
+                        cand = stem + ext
+                        if os.path.isfile(cand):
+                            pt_fallback = cand
+                            break
+                if pt_fallback:
+                    model = YOLO(pt_fallback)
+                elif is_opset_compat_error(e):
+                    raise RuntimeError(
+                        f"ONNX 加载失败（opset 与当前 onnxruntime 不兼容）：{e}。"
+                        "请升级 onnxruntime，或重新导出为 opset≤19 的 ONNX。"
+                    ) from e
+                else:
+                    raise
         _cache[cache_key] = (mtime, model)
         _cache[abs_path] = (mtime, model)
         return model

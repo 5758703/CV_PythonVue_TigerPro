@@ -436,6 +436,11 @@ def seed_ai_menus():
                     path="/ai/reid", component="ai/reid/index", icon="Avatar",
                     order=13, grant_common=True)
     _ensure_ai_menu(2881, 288, "行人重识别查询", "F", "ai:reid:query", grant_common=True)
+    # 手势识别（手部 21 关键点 + 数手指）
+    _ensure_ai_menu(290, 230, "手势识别", "C", "ai:handpose:list",
+                    path="/ai/handpose", component="ai/handpose/index", icon="Pointer",
+                    order=15, grant_common=True)
+    _ensure_ai_menu(2901, 290, "手势识别查询", "F", "ai:handpose:query", grant_common=True)
     _ensure_ai_menu(2882, 288, "行人底库新增", "F", "ai:reid:add")
     _ensure_ai_menu(2883, 288, "行人底库修改", "F", "ai:reid:edit")
     _ensure_ai_menu(2884, 288, "行人底库删除", "F", "ai:reid:remove")
@@ -1248,7 +1253,49 @@ def seed_ai_models():
     _bind_vehicle_track_models()
     _ensure_security_detector_models()
     _ensure_fish_detector_model()
+    _ensure_handpose_model()
     return created
+
+
+def _ensure_handpose_model():
+    """手势识别双模型（OpenCV Zoo MediaPipe 手掌检测 + 21 关键点）：幂等登记并绑定目录。"""
+    key = "opencv-handpose-mediapipe"
+    rel = "models/opencv-handpose-mediapipe"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    m = AiModel.query.filter_by(model_key=key).first()
+    if not m:
+        m = AiModel(
+            model_key=key,
+            model_name="手部关键点估计（MediaPipe·OpenCV）",
+            category="手势识别",
+            task="pose-estimation", library="opencv-dnn", version="2023feb",
+            source_url="https://huggingface.co/opencv/handpose_estimation_mediapipe",
+            description="OpenCV Zoo 双模型：MP-PalmDet 手掌检测（192）+ MP-HandPose 21 关键点（224），"
+                        "cv2.dnn CPU 推理；支撑「手势识别」页数手指/动态数字案例。",
+            status="1",
+        )
+        db.session.add(m)
+    size = 0
+    if os.path.isdir(abs_dir):
+        for f in os.listdir(abs_dir):
+            fp = os.path.join(abs_dir, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    changed = False
+    if size > 0:
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed or m.id is None:
+        db.session.commit()
+    return changed
 
 
 def _ensure_fish_detector_model():
@@ -1327,6 +1374,13 @@ def _ensure_security_detector_models():
     for key, name, rel_file, ver, desc in _SECURITY_DETECTOR_SPECS:
         rel = f"models/{rel_file}"
         abs_p = os.path.join(base, "uploads", rel.replace("/", os.sep))
+        # opset 20 在部分 ORT 环境无法加载：启动时降到 ≤19
+        if os.path.isfile(abs_p) and abs_p.lower().endswith(".onnx"):
+            try:
+                from onnx_compat import ensure_compatible_onnx
+                ensure_compatible_onnx(abs_p)
+            except Exception:  # noqa: BLE001
+                pass
         exists = os.path.isfile(abs_p)
         size = os.path.getsize(abs_p) if exists else 0
         m = AiModel.query.filter_by(model_key=key).first()

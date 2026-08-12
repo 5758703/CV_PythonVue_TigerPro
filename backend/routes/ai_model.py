@@ -339,12 +339,19 @@ def _convert_worker(job_id: str, pt_path: str, opts: dict):
             half=bool(opts.get("half")),
             dynamic=bool(opts.get("dynamic")),
             simplify=True,
+            opset=int(opts.get("opset") or 12),
             device="cpu",
             verbose=False,
         )
         out_path = str(out)
         if not (out_path and os.path.isfile(out_path)):
             raise RuntimeError("导出未生成 onnx 文件")
+        # 再保险：若导出仍高于 19，降级一次以兼容旧 ORT
+        try:
+            from onnx_compat import ensure_compatible_onnx
+            out_path = ensure_compatible_onnx(out_path)
+        except Exception:  # noqa: BLE001
+            pass
         with _convert_jobs_lock:
             j = _convert_jobs.get(job_id)
             if j:

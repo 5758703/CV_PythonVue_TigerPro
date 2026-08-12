@@ -226,6 +226,15 @@ export const absenceApi = {
     request.post('/ai/absence/export-events', { sessionId }),
 }
 
+// ---------------- 手势识别（手部 21 关键点 + 数手指）
+export const handposeApi = {
+  estimate: (formData) =>
+    request.post('/ai/handpose/estimate', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+}
+
 // ---------------- 羽毛球视频分析
 export const badmintonApi = {
   extractFrame: (formData) =>
