@@ -35,9 +35,46 @@ def test_metrics_lying_trunk_angle_near_ninety():
 
 def test_metrics_low_confidence_marks_invalid():
     m = keypoint_metrics(_kp(conf=0.1), 640, 480)
-    assert m["valid"] == {"trunk": False, "hip": False, "ankle": False, "nose": False}
+    assert m["valid"] == {
+        "trunk": False, "hip": False, "ankle": False, "nose": False, "torso": False,
+    }
     assert m["trunkAngle"] is None
     assert m["bodyHeight"] is None
+    assert m["torsoLength"] is None
+
+
+def test_metrics_torso_length_is_shoulder_hip_euclidean_distance():
+    """torsoLength = 肩中点->髋中点的欧氏距离；默认站立姿态肩(320,120)、髋(320,260)
+    纵向对齐，等价于纵坐标差 140.0，用来对照验算欧氏公式没有被写成纵坐标差。
+    """
+    m = keypoint_metrics(_kp(), 640, 480)
+    assert m["valid"]["torso"] is True
+    assert m["torsoLength"] == 140.0
+
+    # 肩髋既有横向也有纵向偏移，欧氏距离与纵坐标差必须不同，验证真是欧氏距离
+    kp = _kp({5: [260.0, 120.0, 0.9], 6: [300.0, 120.0, 0.9],
+              11: [305.0, 260.0, 0.9], 12: [335.0, 260.0, 0.9]})
+    m2 = keypoint_metrics(kp, 640, 480)
+    shoulder_mid = (280.0, 120.0)
+    hip_mid = (320.0, 260.0)
+    import math as _math
+    expected = _math.hypot(shoulder_mid[0] - hip_mid[0], shoulder_mid[1] - hip_mid[1])
+    assert abs(m2["torsoLength"] - expected) < 1e-9
+    assert abs(expected - 140.0) > 1.0  # 确认横向偏移确实拉开了欧氏距离与纵坐标差
+
+
+def test_metrics_torso_length_none_when_shoulder_or_hip_unavailable():
+    # 肩不可用（置信度过低）
+    kp_no_shoulder = _kp({5: [300.0, 120.0, 0.05], 6: [340.0, 120.0, 0.05]})
+    m1 = keypoint_metrics(kp_no_shoulder, 640, 480)
+    assert m1["valid"]["torso"] is False
+    assert m1["torsoLength"] is None
+
+    # 髋不可用（置信度过低）
+    kp_no_hip = _kp({11: [305.0, 260.0, 0.05], 12: [335.0, 260.0, 0.05]})
+    m2 = keypoint_metrics(kp_no_hip, 640, 480)
+    assert m2["valid"]["torso"] is False
+    assert m2["torsoLength"] is None
 
 
 def test_build_person_detections_bbox_within_frame():

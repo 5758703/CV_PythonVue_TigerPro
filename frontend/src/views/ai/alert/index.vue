@@ -279,11 +279,11 @@
             </div>
           </el-form-item>
           <el-form-item label="身高比阈值">
-            <el-input-number v-model="editCfg.height_ratio" :min="0.1" :max="0.95" :step="0.05" :precision="2" />
+            <el-input-number v-model="editCfg.body_torso_ratio" :min="0.5" :max="3.0" :step="0.1" :precision="2" />
             <el-switch v-model="editCfg.w_height" active-text="启用" style="margin-left: 12px" />
             <div class="cfg-help">
-              <p>当前「肩到踝」高度 ÷ 该目标站立时的基线高度，<strong>低于</strong>阈值计分。</p>
-              <p>基线取最近若干帧的最大值，且只在非跌倒姿态更新，避免倒地后基线被拉低。</p>
+              <p>「肩→踝纵向跨度」÷「躯干长（肩中点到髋中点的距离）」，<strong>低于</strong>阈值计分。</p>
+              <p>躯干长取自本帧、是人体自身尺度，不依赖历史帧或构图。站立时该比值约 2.3~2.6，卧倒时骤降至约 0.6。</p>
             </div>
           </el-form-item>
           <el-form-item label="头部高度阈值">
@@ -291,7 +291,7 @@
             <el-switch v-model="editCfg.w_head" active-text="启用" style="margin-left: 12px" />
             <div class="cfg-help">
               <p>鼻子纵坐标 ÷ 画面高度，<strong>高于</strong>阈值计分（值越大越靠近画面底部）。</p>
-              <p>对「平躺在地」特别有效；若摄像头俯角很大可适当调低。</p>
+              <p>仅适用于房间广角俯视构图，<strong>默认关闭</strong>；人物特写或低机位构图下该指标可能反向（实测卧倒 0.44、站立 0.72），装了广角俯视摄像头的管理员可手动打开。</p>
             </div>
           </el-form-item>
           <el-form-item label="判定得分">
@@ -304,12 +304,6 @@
             <el-slider v-model="editCfg.kp_min_conf" :min="0.05" :max="0.9" :step="0.05" show-input />
             <div class="cfg-help">
               <p>低于此分的关键点视为不可用，依赖它的指标<strong>跳过</strong>（不加分也不判负），用于遮挡场景防误报。</p>
-            </div>
-          </el-form-item>
-          <el-form-item label="基线窗口(帧)">
-            <el-input-number v-model="editCfg.stand_baseline_window" :min="3" :max="300" :step="10" />
-            <div class="cfg-help">
-              <p>站立高度基线的滑窗长度。太短会让久躺者的基线被拉低而漏报，建议 60~120。</p>
             </div>
           </el-form-item>
           <el-form-item label="目标保留(帧)">
@@ -467,15 +461,14 @@ const editCfg = reactive({
   video_min_count: 3,
   trunk_angle_deg: 60,
   centroid_speed: 0.5,
-  height_ratio: 0.5,
+  body_torso_ratio: 1.5,
   head_y_ratio: 0.75,
   w_trunk: true,
   w_speed: true,
   w_height: true,
-  w_head: true,
+  w_head: false,
   min_score: 2,
   kp_min_conf: 0.3,
-  stand_baseline_window: 90,
   track_max_age: 15,
   consecutive_frames: 2,
   cooldown_sec: 30,
@@ -543,7 +536,7 @@ const ruleThreshold = (row) => {
     return `未匹配底库 · 连续${c.consecutive_frames ?? 2}帧 · 冷却${c.cooldown_sec ?? 60}s`
   }
   if (row.ruleType === 'fall_detection') {
-    return `躯干>${c.trunk_angle_deg ?? 60}° · 速度>${c.centroid_speed ?? 0.5} · 身高比<${c.height_ratio ?? 0.5} · 得分≥${c.min_score ?? 2}`
+    return `躯干>${c.trunk_angle_deg ?? 60}° · 速度>${c.centroid_speed ?? 0.5} · 身高比<${c.body_torso_ratio ?? 1.5} · 得分≥${c.min_score ?? 2}`
   }
   return '-'
 }
@@ -637,16 +630,15 @@ const openEdit = (row) => {
   editCfg.cooldown_sec = Number(c.cooldown_sec ?? (DEFAULT_COOLDOWN[row.ruleType] ?? 30))
   editCfg.trunk_angle_deg = Number(c.trunk_angle_deg ?? 60)
   editCfg.centroid_speed = Number(c.centroid_speed ?? 0.5)
-  editCfg.height_ratio = Number(c.height_ratio ?? 0.5)
+  editCfg.body_torso_ratio = Number(c.body_torso_ratio ?? 1.5)
   editCfg.head_y_ratio = Number(c.head_y_ratio ?? 0.75)
   editCfg.min_score = Number(c.min_score ?? 2)
   editCfg.kp_min_conf = Number(c.kp_min_conf ?? 0.3)
-  editCfg.stand_baseline_window = Number(c.stand_baseline_window ?? 90)
   editCfg.track_max_age = Number(c.track_max_age ?? 15)
   editCfg.w_trunk = Number(c.weights?.trunk ?? 1) > 0
   editCfg.w_speed = Number(c.weights?.speed ?? 1) > 0
   editCfg.w_height = Number(c.weights?.height ?? 1) > 0
-  editCfg.w_head = Number(c.weights?.head ?? 1) > 0
+  editCfg.w_head = Number(c.weights?.head ?? 0) > 0
   editCfg.title_template = c.title_template || ''
   editCfg.message_template = c.message_template || ''
 
@@ -737,11 +729,10 @@ const saveEdit = async () => {
     } else if (editForm.ruleType === 'fall_detection') {
       config.trunk_angle_deg = editCfg.trunk_angle_deg
       config.centroid_speed = editCfg.centroid_speed
-      config.height_ratio = editCfg.height_ratio
+      config.body_torso_ratio = editCfg.body_torso_ratio
       config.head_y_ratio = editCfg.head_y_ratio
       config.min_score = editCfg.min_score
       config.kp_min_conf = editCfg.kp_min_conf
-      config.stand_baseline_window = editCfg.stand_baseline_window
       config.track_max_age = editCfg.track_max_age
       config.weights = {
         trunk: editCfg.w_trunk ? 1 : 0,

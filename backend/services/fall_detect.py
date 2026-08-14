@@ -60,6 +60,7 @@ def keypoint_metrics(kp, width=None, height=None, kp_min_conf: float = 0.3) -> d
         trunk_angle = abs(math.degrees(math.atan2(dx, -dy)))
 
     body_height = abs(shoulder[1] - ankle[1]) if (shoulder and ankle) else None
+    torso_length = math.hypot(shoulder[0] - hip[0], shoulder[1] - hip[1]) if (shoulder and hip) else None
 
     return {
         "trunkAngle": trunk_angle,
@@ -68,11 +69,13 @@ def keypoint_metrics(kp, width=None, height=None, kp_min_conf: float = 0.3) -> d
         "ankleY": ankle[1] if ankle else None,
         "noseY": nose[1] if nose else None,
         "bodyHeight": body_height,
+        "torsoLength": torso_length,
         "valid": {
             "trunk": trunk_angle is not None,
             "hip": hip is not None,
             "ankle": ankle is not None,
             "nose": nose is not None,
+            "torso": torso_length is not None,
         },
     }
 

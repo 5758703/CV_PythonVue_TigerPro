@@ -207,12 +207,11 @@ def _fall_rule(cfg=None, rid=90):
     base = {
         "trunk_angle_deg": 60,
         "centroid_speed": 0.5,
-        "height_ratio": 0.5,
+        "body_torso_ratio": 1.5,
         "head_y_ratio": 0.75,
         "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 1},
         "min_score": 2,
         "kp_min_conf": 0.3,
-        "stand_baseline_window": 90,
         "track_max_age": 15,
         "consecutive_frames": 2,
         "cooldown_sec": 0,
@@ -313,20 +312,23 @@ def _bending_det(track_id=1, hip_y=260.0, theta_deg=65.0, conf=0.9):
 def test_fall_slow_bend_only_trunk_indicator_does_not_trigger():
     """四指标全开、min_score=2 时，仅躯干角越阈的缓慢弯腰不得触发——这是对抗
     「老人主动弯腰/躺下」误报的核心防线，必须验证是「只有一个指标命中」而不是
-    「凑分不够」才不触发。四指标算术验算（hip_y=260, theta=65°, frame 640x480）：
+    「凑分不够」才不触发。四指标算术验算（hip_y=260, theta=65°, frame 640x480，
+    躯干长固定 140，身高比 = bodyHeight / torsoLength，均取自本帧，无需历史基线）：
       trunk：dx=140*sin65°≈126.9，dy=-140*cos65°≈-59.16，
              trunkAngle=atan2(126.9,59.16)=65° > 60° 阈值 → 命中(+1)
       speed：髋部三帧站立后本帧仍在 hip_y=260，位移为 0 → v=0 < 0.5 阈值 → 不命中
       height：肩y=260-59.16=200.84，踝y=260+180=440，bodyHeight=|200.84-440|=239.16；
-             基线（3 帧站立）body_height=320；ratio=239.16/320≈0.747，
-             未低于 0.5 阈值 → 不命中
+             torsoLength 由构造保证恒为躯干长 140（肩→髋欧氏距离）；
+             ratio=239.16/140≈1.708，未低于 body_torso_ratio 阈值 1.5 → 不命中
       head：鼻y=260-200*cos65°≈175.48，head_ratio=175.48/480≈0.366，
             未高于 0.75 阈值 → 不命中
       总分=1（仅 trunk）< min_score(2) → 不触发
     """
     reset_runtime("fall2b")
     rule = _fall_rule({"consecutive_frames": 1})
-    # 前三帧站立：建立身高比基线（body_height=320）
+    # 前三帧站立：只用于把 okFrames 推过冷启动门控的 3 帧门槛（新身高比指标
+    # 本帧即可用，不再需要基线），避免冷启动门控本身干扰本测试要验证的目标
+    # （凑分不够 vs 只有一个指标命中）。
     for i in range(3):
         assert _eval(rule, [_standing_det()], "fall2b", 100.0 + i * 0.1, f"bend{i}") == []
     out = _eval(rule, [_bending_det()], "fall2b", 100.3, "bend3")
@@ -516,6 +518,95 @@ def test_fall_cold_start_gate_exempts_speed_weight_disabled():
     reset_runtime()
 
 
+def _photo_lying_det(track_id=1, conf=0.9):
+    """贴近根因实测的卧倒单帧几何：躯干角≈83.3°，bodyHeight/torsoLength≈0.63
+    （对应根因表格 fall-images.jpg 实测：躯干角 83.3°，肩踝纵向跨度/躯干长 0.63）。
+    躯干长固定 140（欧氏距离，由 dx/dy 构造保证），bodyHeight 按 0.63*torsoLength
+    直接反推 ankle_y，使 ratio 精确等于 0.63，不依赖任何历史帧。
+    """
+    hip_x, hip_y = 320.0, 260.0
+    theta = math.radians(83.3)
+    trunk_len = 140.0
+    dx = trunk_len * math.sin(theta)
+    dy = -trunk_len * math.cos(theta)
+    shoulder_x, shoulder_y = hip_x + dx, hip_y + dy
+    ankle_y = shoulder_y + 0.63 * trunk_len
+    ankle_x = hip_x + dx * 1.3
+    kp = [[hip_x, hip_y, conf] for _ in range(17)]
+    kp[0] = [shoulder_x + 20.0, shoulder_y - 5.0, conf]
+    kp[5] = [shoulder_x - 15.0, shoulder_y, conf]
+    kp[6] = [shoulder_x + 15.0, shoulder_y, conf]
+    kp[11] = [hip_x - 15.0, hip_y, conf]
+    kp[12] = [hip_x + 15.0, hip_y, conf]
+    kp[15] = [ankle_x - 15.0, ankle_y, conf]
+    kp[16] = [ankle_x + 15.0, ankle_y, conf]
+    return {"className": "person", "confidence": conf, "trackId": track_id,
+            "bbox": [200.0, 200.0, 500.0, 480.0], "keypoints": kp}
+
+
+def _photo_standing_det(track_id=1, conf=0.9):
+    """贴近根因实测的站立单帧几何：躯干角≈1°，bodyHeight/torsoLength≈2.5
+    （对应根因表格 person.png 实测：躯干角 0~3°，比值 2.28~2.58）。"""
+    hip_x, hip_y = 320.0, 260.0
+    theta = math.radians(1.0)
+    trunk_len = 140.0
+    dx = trunk_len * math.sin(theta)
+    dy = -trunk_len * math.cos(theta)
+    shoulder_x, shoulder_y = hip_x + dx, hip_y + dy
+    ankle_y = shoulder_y + 2.5 * trunk_len
+    ankle_x = hip_x + dx * 1.3
+    kp = [[hip_x, hip_y, conf] for _ in range(17)]
+    kp[0] = [shoulder_x, shoulder_y - 40.0, conf]
+    kp[5] = [shoulder_x - 15.0, shoulder_y, conf]
+    kp[6] = [shoulder_x + 15.0, shoulder_y, conf]
+    kp[11] = [hip_x - 15.0, hip_y, conf]
+    kp[12] = [hip_x + 15.0, hip_y, conf]
+    kp[15] = [ankle_x - 15.0, ankle_y, conf]
+    kp[16] = [ankle_x + 15.0, ankle_y, conf]
+    return {"className": "person", "confidence": conf, "trackId": track_id,
+            "bbox": [280.0, 80.0, 360.0, 480.0], "keypoints": kp}
+
+
+def test_fall_image_mode_single_frame_lying_triggers_regression():
+    """根因回归测试：老人跌倒照片「疑似跌倒 0」的直接对应场景——图片模式下
+    单帧、无上一帧（速度指标不可用）、无历史（新身高比不需要历史，但仍验证
+    「无历史也能判」）、头部高度权重为 0（裁定 2：默认关闭，不参与计分）。
+    躯干角 83.3°>60° 命中 + 身高比 0.63<1.5 命中，两指标共 2 分 = min_score，
+    在图片模式下（豁免冷启动门控）应当当帧即触发。这是本次修复要解决的
+    根本问题：旧实现里 speed 恒不参与、height 需要 3 帧基线恒不参与，只剩
+    trunk+head 两指标且 head 是构图依赖量，导致该场景判不出跌倒。
+    """
+    reset_runtime("fall_regress_img")
+    rule = _fall_rule({
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 0},
+        "consecutive_frames": 1,
+    }, rid=110)
+    out = _eval(rule, [_photo_lying_det()], "fall_regress_img", 100.0, "regress0",
+                source_type="image")
+    assert len(out) == 1
+    fallen = out[0]["detail"]["fallen"][0]
+    assert fallen["indicators"]["trunk"] > 60
+    assert fallen["indicators"]["height"] < 1.5
+    assert "head" not in fallen["indicators"]  # 权重为 0，不参与计分
+    assert "speed" not in fallen["indicators"]  # 无上一帧，指标不可用
+    reset_runtime()
+
+
+def test_fall_image_mode_single_frame_standing_does_not_trigger():
+    """同样条件下站立单帧不应触发：身高比 2.5 远高于 1.5 阈值，躯干角≈1°
+    远低于 60° 阈值，两指标都不命中，验证新身高比指标不会对正常站立姿态
+    产生误报（与回归测试互为对照）。"""
+    reset_runtime("fall_regress_img2")
+    rule = _fall_rule({
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 0},
+        "consecutive_frames": 1,
+    }, rid=111)
+    out = _eval(rule, [_photo_standing_det()], "fall_regress_img2", 100.0, "regress0",
+                source_type="image")
+    assert out == []
+    reset_runtime()
+
+
 def test_fall_config_clamps_min_score_track_age_and_weights():
     """PUT /api/ai/alert/rules/:id 可直传 config，绕过前端 el-input-number 的 :min
     校验；min_score=0 会让站立当帧即判跌倒，track_max_age=0 会让跟踪永远建立不起来，
@@ -543,6 +634,22 @@ def test_fall_config_clamps_kp_min_conf():
     assert fall_config({"kp_min_conf": -0.5})["kp_min_conf"] > 0
 
 
+def test_fall_config_body_torso_ratio_default_and_clamp():
+    """身高比阈值改名为 body_torso_ratio 后：默认值 1.5（不再是旧键 height_ratio
+    的 0.5——语义已从「/历史基线」换成「/本帧躯干长」，量纲不同，默认值必须
+    跟着变，否则旧默认值 0.5 会让新指标（站立 2.3~2.6，卧倒 0.6）恒不命中，
+    比现在更隐蔽地失效）。同时验证服务端下限兜底（<=0 的阈值会让指标恒不命中）。
+    """
+    from services.alert_engine import fall_config
+
+    assert fall_config({})["body_torso_ratio"] == 1.5
+    assert fall_config({"body_torso_ratio": 0})["body_torso_ratio"] >= 0.1
+    assert fall_config({"body_torso_ratio": -1})["body_torso_ratio"] >= 0.1
+    # 旧键 height_ratio 不再被解析：即便配置里还残留旧键（老库升级场景），
+    # 也不应该影响 body_torso_ratio 的解析结果（各用各的键，互不干扰）
+    assert fall_config({"height_ratio": 0.05})["body_torso_ratio"] == 1.5
+
+
 def test_fall_default_consecutive_frames_is_eight_when_config_missing_key():
     """引擎兜底的 default_consec 分支：config 缺 consecutive_frames 时，fall_detection
     应回落到 8（与 seed 默认值、前端一致），而不是与其它规则共用的 2（M-5）。
@@ -552,9 +659,9 @@ def test_fall_default_consecutive_frames_is_eight_when_config_missing_key():
     """
     reset_runtime("fall_m5")
     cfg = {
-        "trunk_angle_deg": 60, "centroid_speed": 0.5, "height_ratio": 0.5,
+        "trunk_angle_deg": 60, "centroid_speed": 0.5, "body_torso_ratio": 1.5,
         "head_y_ratio": 0.75, "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 1},
-        "min_score": 2, "kp_min_conf": 0.3, "stand_baseline_window": 90,
+        "min_score": 2, "kp_min_conf": 0.3,
         "track_max_age": 15, "cooldown_sec": 0,
     }  # 故意不含 consecutive_frames，走引擎兜底默认值分支
     rule = _rule("fall-detection", "fall_detection", cfg, rid=103)
@@ -568,23 +675,27 @@ def test_fall_default_consecutive_frames_is_eight_when_config_missing_key():
 
 
 def test_reset_runtime_clears_fall_tracker():
+    """身高比改为单帧量后不再需要基线，"height" 键只要肩/髋/踝关键点齐全就会
+    出现（详见 test_fall_detections_returns_synthetic_box），不再是本测试能验证
+    的东西。reset_runtime 仍需要验证的是：它把该 track 的冷启动状态
+    （okFrames/since）也一并清零，使其重新回到「真正冷启动」——用「建立
+    okFrames>=3 后触发」vs「reset 后单帧卧地不再触发」这一对行为差异来验证，
+    这正是删除 standHist 后 okFrames 需要保留的等价语义（见冷启动门控测试）。
+    """
     reset_tracker()
     reset_runtime("fall10")
     rule = _fall_rule({"consecutive_frames": 1}, rid=101)
-    # 前三帧站立：建立站立高度基线（长度 >= 3）
+    # 前三帧站立：把 okFrames 推过冷启动门控的 3 帧门槛
     for i in range(3):
         _eval(rule, [_standing_det()], "fall10", 100.0 + i * 0.1, f"h{i}")
-    # 前置断言：卧地帧因基线已建立，身高比指标应参与计分（有 "height" 键）
+    # okFrames>=3 后卧地：冷启动门控放行，正常触发
     out_before = _eval(rule, [_lying_det()], "fall10", 100.3, "h_before")
     assert len(out_before) == 1
-    assert "height" in out_before[0]["detail"]["fallen"][0]["indicators"]
-    # 复位跟踪器与基线
+
+    # 复位跟踪器与运行时状态：okFrames 应清零，冷启动门控重新生效
     reset_runtime("fall10")
-    # 复位后基线清空且是本次跌倒状态的首次判定：先给一帧站立（seed 髋部位置，
-    # 不足以建立基线，standHist 长度仍 < 3），再给一帧快速下坠（真实速度证据，
-    # 满足冷启动门控），验证身高比指标因基线未建立而不参与计分（无 "height" 键）
-    _eval(rule, [_standing_det()], "fall10", 100.35, "h_seed")
-    out = _eval(rule, [_lying_det()], "fall10", 100.4, "h_after")
-    assert len(out) == 1
-    assert "height" not in out[0]["detail"]["fallen"][0]["indicators"]
+    # 复位后立刻给一帧卧地（无历史 okFrames、无上一帧速度证据）：
+    # 冷启动门控应再次拦截，不触发——证明 reset 确实清空了 okFrames/since
+    out_after = _eval(rule, [_lying_det()], "fall10", 100.35, "h_after")
+    assert out_after == []
     reset_runtime()

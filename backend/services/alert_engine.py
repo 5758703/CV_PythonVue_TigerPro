@@ -555,13 +555,12 @@ def _eval_unmatched_face(rule, cfg: dict, detections: list[dict]) -> dict | None
 _FALL_THRESHOLD_DEFAULTS = {
     "trunk_angle_deg": 60.0,
     "centroid_speed": 0.5,
-    "height_ratio": 0.5,
+    "body_torso_ratio": 1.5,
     "head_y_ratio": 0.75,
     "min_score": 2.0,
     "kp_min_conf": 0.3,
 }
 _FALL_INT_DEFAULTS = {
-    "stand_baseline_window": 90,
     "track_max_age": 15,
 }
 _FALL_WEIGHT_KEYS = ("trunk", "speed", "height", "head")
@@ -593,7 +592,10 @@ def fall_config(cfg: dict) -> dict:
         except (TypeError, ValueError):
             weights[k] = 1.0
     out["weights"] = {k: max(0.0, v) for k, v in weights.items()}
-    out["stand_baseline_window"] = max(3, out["stand_baseline_window"])
+    # body_torso_ratio 是「肩踝纵向跨度 / 躯干长（肩到髋欧氏距离）」的比值型指标，
+    # 分母 torsoLength 恒为正，但 <=0 的阈值会让指标恒不命中（ratio 不可能小于
+    # 非正数）；同样只能靠直传 config 绕过前端 :min，这里补一道下限兜底。
+    out["body_torso_ratio"] = max(0.1, out["body_torso_ratio"])
     # min_score=0 会让任何一帧都判定跌倒（哪怕站立），track_max_age=0 会让目标每帧
     # 都被当作新出现（跟踪永远建立不起来）；负权重会对该指标反向减分。三者都只能
     # 通过 PUT /api/ai/alert/rules/:id 直传 config 绕过前端 el-input-number 的 :min
@@ -641,7 +643,6 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
     conf = fall_config(cfg)
     weights = conf["weights"]
     total_weight = sum(weights.values()) or 1.0
-    window = conf["stand_baseline_window"]
 
     with _lock:
         st = _runtime.setdefault(
@@ -665,7 +666,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 continue
             live.add(tid)
             m = keypoint_metrics(kp, None, fh, conf["kp_min_conf"])
-            tr = tracks.setdefault(tid, {"hip": None, "standHist": [], "since": None, "miss": 0})
+            tr = tracks.setdefault(tid, {"hip": None, "since": None, "miss": 0, "okFrames": 0})
             tr["miss"] = 0
 
             score = 0.0
@@ -689,24 +690,17 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                         speed_hit = True
                 tr["hip"] = (now, m["hipY"])
 
-            # 指标 3：身高比（当前躯干高度 / 站立基线）
-            # 本块只算比值/计分，不直接写基线——基线是否可信取决于本帧
-            # 综合判定结果（见下方 not-fallen 分支），而非本指标单独的态度。
-            pending_stand_h = None
+            # 指标 3：身高比（肩踝纵向跨度 / 躯干长，均取自同一帧，不依赖历史）
+            # 躯干长 = 肩中点->髋中点欧氏距离，是人体自身尺度，不受构图影响；
+            # 站立时肩踝跨度远大于躯干长（约 2.3~2.6），卧倒时骤降（约 0.6）。
             if weights["height"]:
                 body_h = m["bodyHeight"]  # 关键点置信度不足时为 None，直接跳过，不用 bbox 顶替
-                if body_h:
-                    hist = tr["standHist"]
-                    base = max(hist) if len(hist) >= 3 else None
-                    if base:
-                        ratio = body_h / base
-                        indicators["height"] = round(ratio, 4)
-                        if ratio < conf["height_ratio"]:
-                            score += weights["height"]
-                        else:
-                            pending_stand_h = body_h  # 疑似站立，待整体判定确认后再计入基线
-                    else:
-                        pending_stand_h = body_h  # 基线冷启动：先暂存，同样待整体判定确认
+                torso = m["torsoLength"]
+                if body_h and torso and torso > 0:
+                    ratio = body_h / torso
+                    indicators["height"] = round(ratio, 4)
+                    if ratio < conf["body_torso_ratio"]:
+                        score += weights["height"]
 
             # 指标 4：头部离地高度
             if weights["head"] and m["valid"]["nose"] and fh:
@@ -716,23 +710,23 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                     score += weights["head"]
 
             if score >= conf["min_score"]:
-                # 冷启动自锁防护：该 track 的站立基线尚未建立（< 3 帧非跌倒历史，
-                # 身高比指标本就还不可用）且这是本次跌倒状态的首次判定（since 为空）
+                # 冷启动自锁防护：该 track 观察到的「非跌倒」帧数尚不足 3
+                # （okFrames < 3）且这是本次跌倒状态的首次判定（since 为空）
                 # 时，要求质心速度指标本帧确实越阈（真实下坠证据），否则不判定。
                 # 目的：避免「一直保持同一姿态」的目标（如坐在低矮沙发上、躯干角
                 # 恰好越阈）被误判为跌倒后，因为「一直被判定为跌倒」永远拿不到
-                # 非跌倒帧、基线永远建不起来，从而每次冷却后重复触发（误报自锁）。
+                # 非跌倒帧、okFrames 永远长不到 3，从而每次冷却后重复触发（误报自锁）。
                 # 只在「首次触发」这一帧把关：一旦 since 已置位（事件已经开始），
                 # 后续卧地不动、无下坠的帧不再受此门控约束，否则真实跌倒也会被拦截。
                 #
                 # 两处豁免（都不套用门控，直接按 score 判定）：
                 # 1. source_type == "image"：图片模式每次检测都是独立单帧、无
                 #    连续流意义下的误报自锁风险（routes/fall.py 每次 /detect 前
-                #    都会 reset-runtime 该 sourceKey，since/standHist 恒为空，
+                #    都会 reset-runtime 该 sourceKey，since/okFrames 恒为空/0，
                 #    若仍套用门控会导致图片模式恒判定不触发——见回归修复记录）。
                 # 2. weights["speed"] <= 0：管理员已关闭速度指标，speed_hit 永远
                 #    无法为 True，再拿它当准入条件会让该 track 永久无法首次触发。
-                cold_start = tr["since"] is None and len(tr["standHist"]) < 3
+                cold_start = tr["since"] is None and tr["okFrames"] < 3
                 gate_applies = cold_start and source_type != "image" and weights["speed"] > 0
                 if gate_applies and not speed_hit:
                     tr["since"] = None
@@ -749,12 +743,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 })
             else:
                 tr["since"] = None
-                # 仅整体判定为「非跌倒」时才把本帧身高计入站立基线，避免倒地污染
-                if pending_stand_h is not None:
-                    hist = tr["standHist"]
-                    hist.append(pending_stand_h)
-                    if len(hist) > window:
-                        del hist[:-window]
+                tr["okFrames"] += 1
 
         for tid in list(tracks):
             if tid in live:
