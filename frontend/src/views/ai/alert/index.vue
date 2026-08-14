@@ -254,6 +254,71 @@
             </div>
           </el-form-item>
         </template>
+        <template v-else-if="editForm.ruleType === 'fall_detection'">
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            class="cfg-help-banner"
+            title="四个指标各自越线得 1 分（可单独关闭），总分达到「判定得分」即视为当帧跌倒；再经连续帧与冷却后记事件。请在「跌倒检测」页选择姿态模型并启用本规则。"
+          />
+          <el-form-item label="躯干角阈值(°)">
+            <el-input-number v-model="editCfg.trunk_angle_deg" :min="10" :max="90" :step="5" />
+            <el-switch v-model="editCfg.w_trunk" active-text="启用" style="margin-left: 12px" />
+            <div class="cfg-help">
+              <p>肩部中点与髋部中点连线相对<strong>垂直方向</strong>的夹角。站立接近 0°，平躺接近 90°。</p>
+              <p>越小越灵敏（弯腰也可能中招）；建议 55~70。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="质心速度阈值">
+            <el-input-number v-model="editCfg.centroid_speed" :min="0.1" :max="3" :step="0.1" :precision="2" />
+            <el-switch v-model="editCfg.w_speed" active-text="启用" style="margin-left: 12px" />
+            <div class="cfg-help">
+              <p>髋部中点每秒下降的距离，单位是<strong>画面高度的倍数</strong>。0.5 表示每秒下降半个画面高。</p>
+              <p>这是区分「摔倒」与「主动躺下」的关键指标，不建议关闭。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="身高比阈值">
+            <el-input-number v-model="editCfg.height_ratio" :min="0.1" :max="0.95" :step="0.05" :precision="2" />
+            <el-switch v-model="editCfg.w_height" active-text="启用" style="margin-left: 12px" />
+            <div class="cfg-help">
+              <p>当前「肩到踝」高度 ÷ 该目标站立时的基线高度，<strong>低于</strong>阈值计分。</p>
+              <p>基线取最近若干帧的最大值，且只在非跌倒姿态更新，避免倒地后基线被拉低。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="头部高度阈值">
+            <el-input-number v-model="editCfg.head_y_ratio" :min="0.3" :max="0.99" :step="0.05" :precision="2" />
+            <el-switch v-model="editCfg.w_head" active-text="启用" style="margin-left: 12px" />
+            <div class="cfg-help">
+              <p>鼻子纵坐标 ÷ 画面高度，<strong>高于</strong>阈值计分（值越大越靠近画面底部）。</p>
+              <p>对「平躺在地」特别有效；若摄像头俯角很大可适当调低。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="判定得分">
+            <el-input-number v-model="editCfg.min_score" :min="1" :max="4" />
+            <div class="cfg-help">
+              <p>需同时满足几个指标才判定为跌倒。设 1 极易误报，设 4 极易漏报，建议 2。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="关键点置信度下限">
+            <el-slider v-model="editCfg.kp_min_conf" :min="0.05" :max="0.9" :step="0.05" show-input />
+            <div class="cfg-help">
+              <p>低于此分的关键点视为不可用，依赖它的指标<strong>跳过</strong>（不加分也不判负），用于遮挡场景防误报。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="基线窗口(帧)">
+            <el-input-number v-model="editCfg.stand_baseline_window" :min="3" :max="300" :step="10" />
+            <div class="cfg-help">
+              <p>站立高度基线的滑窗长度。太短会让久躺者的基线被拉低而漏报，建议 60~120。</p>
+            </div>
+          </el-form-item>
+          <el-form-item label="目标保留(帧)">
+            <el-input-number v-model="editCfg.track_max_age" :min="1" :max="120" />
+            <div class="cfg-help">
+              <p>目标连续丢失超过这么多帧后释放其 ID 与历史。短暂遮挡建议 10~30。</p>
+            </div>
+          </el-form-item>
+        </template>
         <el-form-item label="连续帧数">
           <el-input-number v-model="editCfg.consecutive_frames" :min="1" :max="30" />
           <div class="cfg-help">
@@ -400,6 +465,18 @@ const editCfg = reactive({
   min_confidence: 0.3,
   min_count: 4,
   video_min_count: 3,
+  trunk_angle_deg: 60,
+  centroid_speed: 0.5,
+  height_ratio: 0.5,
+  head_y_ratio: 0.75,
+  w_trunk: true,
+  w_speed: true,
+  w_height: true,
+  w_head: true,
+  min_score: 2,
+  kp_min_conf: 0.3,
+  stand_baseline_window: 90,
+  track_max_age: 15,
   consecutive_frames: 2,
   cooldown_sec: 30,
   title_template: '',
@@ -438,6 +515,7 @@ const ruleTypeLabel = (t) =>
     line_crossing: '越线入侵',
     zone_crossing: '区域越界',
     unmatched_face: '陌生人脸',
+    fall_detection: '跌倒检测',
   }[t] || t)
 const severityLabel = (s) => ({ high: '高', medium: '中', low: '低' }[s] || s)
 const severityType = (s) => ({ high: 'danger', medium: 'warning', low: 'info' }[s] || 'info')
@@ -463,6 +541,9 @@ const ruleThreshold = (row) => {
   }
   if (row.ruleType === 'unmatched_face') {
     return `未匹配底库 · 连续${c.consecutive_frames ?? 2}帧 · 冷却${c.cooldown_sec ?? 60}s`
+  }
+  if (row.ruleType === 'fall_detection') {
+    return `躯干>${c.trunk_angle_deg ?? 60}° · 速度>${c.centroid_speed ?? 0.5} · 身高比<${c.height_ratio ?? 0.5} · 得分≥${c.min_score ?? 2}`
   }
   return '-'
 }
@@ -550,10 +631,22 @@ const openEdit = (row) => {
   editCfg.min_confidence = Number(c.min_confidence ?? 0.3)
   editCfg.min_count = Number(c.min_count ?? 4)
   editCfg.video_min_count = Number(c.video_min_count ?? c.min_count ?? 3)
-  editCfg.consecutive_frames = Number(c.consecutive_frames ?? (
-    row.ruleType === 'line_crossing' || row.ruleType === 'zone_crossing' ? 1 : 2
-  ))
-  editCfg.cooldown_sec = Number(c.cooldown_sec ?? (row.ruleType === 'unmatched_face' ? 60 : 30))
+  const DEFAULT_CONSECUTIVE = { line_crossing: 1, zone_crossing: 1, fall_detection: 8 }
+  const DEFAULT_COOLDOWN = { unmatched_face: 60, fall_detection: 60 }
+  editCfg.consecutive_frames = Number(c.consecutive_frames ?? (DEFAULT_CONSECUTIVE[row.ruleType] ?? 2))
+  editCfg.cooldown_sec = Number(c.cooldown_sec ?? (DEFAULT_COOLDOWN[row.ruleType] ?? 30))
+  editCfg.trunk_angle_deg = Number(c.trunk_angle_deg ?? 60)
+  editCfg.centroid_speed = Number(c.centroid_speed ?? 0.5)
+  editCfg.height_ratio = Number(c.height_ratio ?? 0.5)
+  editCfg.head_y_ratio = Number(c.head_y_ratio ?? 0.75)
+  editCfg.min_score = Number(c.min_score ?? 2)
+  editCfg.kp_min_conf = Number(c.kp_min_conf ?? 0.3)
+  editCfg.stand_baseline_window = Number(c.stand_baseline_window ?? 90)
+  editCfg.track_max_age = Number(c.track_max_age ?? 15)
+  editCfg.w_trunk = Number(c.weights?.trunk ?? 1) > 0
+  editCfg.w_speed = Number(c.weights?.speed ?? 1) > 0
+  editCfg.w_height = Number(c.weights?.height ?? 1) > 0
+  editCfg.w_head = Number(c.weights?.head ?? 1) > 0
   editCfg.title_template = c.title_template || ''
   editCfg.message_template = c.message_template || ''
 
@@ -641,6 +734,21 @@ const saveEdit = async () => {
         const parsed = JSON.parse(editCfg.regionText || '[]')
         if (Array.isArray(parsed) && parsed.length >= 3) config.region = parsed
       } catch (_) { /* keep previous */ }
+    } else if (editForm.ruleType === 'fall_detection') {
+      config.trunk_angle_deg = editCfg.trunk_angle_deg
+      config.centroid_speed = editCfg.centroid_speed
+      config.height_ratio = editCfg.height_ratio
+      config.head_y_ratio = editCfg.head_y_ratio
+      config.min_score = editCfg.min_score
+      config.kp_min_conf = editCfg.kp_min_conf
+      config.stand_baseline_window = editCfg.stand_baseline_window
+      config.track_max_age = editCfg.track_max_age
+      config.weights = {
+        trunk: editCfg.w_trunk ? 1 : 0,
+        speed: editCfg.w_speed ? 1 : 0,
+        height: editCfg.w_height ? 1 : 0,
+        head: editCfg.w_head ? 1 : 0,
+      }
     } else {
       const names = editCfg.class_names_text.split(/[,，]/).map((s) => s.trim()).filter(Boolean)
       config.class_names = names

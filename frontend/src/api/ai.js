@@ -235,6 +235,16 @@ export const handposeApi = {
     }),
 }
 
+// ---------------- 跌倒检测（姿态关键点四指标 + 告警）
+export const fallApi = {
+  detect: (formData) =>
+    request.post('/ai/fall/detect', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  resetRuntime: (data) => request.post('/ai/fall/reset-runtime', data || {}),
+}
+
 // ---------------- 羽毛球视频分析
 export const badmintonApi = {
   extractFrame: (formData) =>
