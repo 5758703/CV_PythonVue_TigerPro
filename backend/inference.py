@@ -2092,6 +2092,191 @@ def pose_video_rtmlib(model_key, abs_weight_path, src_path, dst_path, conf=0.25,
     }
 
 
+def _draw_fall_boxes(frame, boxes):
+    """在骨架图上叠加 className=="fall" 的红框，标注 fallScore 与四个指标值。
+
+    缺失的指标键（对应权重被关闭或本帧该关键点不可用）显示为 "-"。
+    """
+    for b in boxes:
+        bbox = b.get("bbox") or []
+        if len(bbox) < 4:
+            continue
+        try:
+            x1, y1, x2, y2 = [int(round(float(v))) for v in bbox[:4]]
+        except (TypeError, ValueError):
+            continue
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+        score = b.get("fallScore")
+        indicators = b.get("indicators") or {}
+        parts = [f"score={score:.2f}" if isinstance(score, (int, float)) else "score=-"]
+        for key in ("trunk", "speed", "height", "head"):
+            v = indicators.get(key)
+            parts.append(f"{key}={v:.2f}" if isinstance(v, (int, float)) else f"{key}=-")
+        label = " ".join(parts)
+        ty = max(14, y1 - 8)
+        cv2.putText(frame, label, (x1, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                   (0, 0, 255), 1, cv2.LINE_AA)
+    return frame
+
+
+def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
+               rules, source_key, conf=0.25, progress_cb=None):
+    """跌倒检测视频模式：逐帧姿态推理 -> person 检测框 + trackId -> 四指标规则
+    判定 -> 标注视频（骨架 + fall 红框 + 中央告警块）+ 触发事件列表。
+
+    视频是四指标唯一全可用的模式（真实连续帧，质心速度指标生效、站立基线能
+    建立），故 source_type 固定传 "video"（而非 "image"）：冷启动误报自锁门控
+    正常生效，与 camera 模式行为一致（见 services.alert_engine._eval_fall_detection）。
+
+    时间戳走视频时间轴（now_ts = frames / fps），不是墙钟：处理耗时不应计入
+    质心速度的 dt。三次引擎调用（evaluate_rules / fall_detections /
+    active_overlay_style）必须共用同一 frame_token，命中单帧 memo，避免
+    质心历史被重复推进（否则 dt 会塌成 0，速度指标发散）。
+
+    rules: 已加载的启用规则列表（routes/fall.py 用 load_enabled_alert_rules 取得）；
+    为空时正常处理视频，只是不产出 fall 框与事件。
+    """
+    import uuid
+
+    from services.alert_engine import (
+        active_overlay_style,
+        evaluate_rules,
+        fall_config,
+        fall_detections,
+        reset_runtime,
+    )
+    from services.fall_detect import assign_track_ids, build_person_detections
+
+    lib = (library or "ultralytics").lower()
+    rules = rules or []
+
+    fall_rules = [r for r in rules if r.rule_type == "fall_detection"]
+    if fall_rules:
+        kp_min_conf = min(fall_config(r.config())["kp_min_conf"] for r in fall_rules)
+        track_max_age = max(fall_config(r.config())["track_max_age"] for r in fall_rules)
+    else:
+        kp_min_conf = 0.3
+        track_max_age = 15
+
+    solver = None
+    variant = None
+    model = None
+    if lib == "rtmlib":
+        solver = _get_rtmlib_solver(model_key, abs_weight_path)
+        variant, _spec = rtmlib_variant(model_key)
+    else:
+        model = _get_model(abs_weight_path)
+
+    cap = None
+    writer = None
+    frames = 0
+    total_persons = 0
+    fall_events = []
+    fall_frames = 0
+    try:
+        cap = cv2.VideoCapture(src_path)
+        if not cap.isOpened():
+            raise ValueError("无法打开视频文件")
+
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0) or 25.0
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+
+        writer, ew, eh = _open_h264(dst_path, fps, w, h)
+
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            persons = []
+            keypoints = scores = None
+            if lib == "rtmlib":
+                if variant == "rtmo":
+                    persons_kp = infer_pose_rtmo(frame, solver, conf=conf)
+                    persons = [{"keypoints": kp} for kp in persons_kp]
+                    keypoints, scores = solver(frame)
+                else:
+                    keypoints, scores = solver(frame)
+                    persons = _persons_from_rtmlib(keypoints, scores, model_key, conf)
+                if keypoints is not None and len(keypoints):
+                    plotted = _draw_rtmlib_skeleton(frame, keypoints, scores, conf)
+                else:
+                    plotted = frame
+            else:
+                r = model.predict(frame, **_yolo_predict_kwargs(conf=conf))[0]
+                if r.keypoints is not None and r.keypoints.data is not None:
+                    for kp in r.keypoints.data.cpu().tolist():
+                        pts = [[round(float(x), 1), round(float(y), 1), round(float(c), 4)]
+                               for x, y, c in kp]
+                        persons.append({"keypoints": pts})
+                plotted = r.plot()
+
+            total_persons += len(persons)
+
+            dets = build_person_detections(persons, w, h, kp_min_conf)
+            assign_track_ids(dets, source_key, max_age=track_max_age, kp_min_conf=kp_min_conf)
+
+            now_ts = frames / fps
+            frame_token = f"{source_key}-{frames}-{uuid.uuid4().hex[:8]}"
+
+            triggered = evaluate_rules(
+                rules, dets, source_key, persist_event=None,
+                now_ts=now_ts, frame_width=w, frame_height=h,
+                frame_token=frame_token, source_type="video",
+            )
+            boxes = fall_detections(
+                rules, dets, source_key=source_key, frame_width=w, frame_height=h,
+                frame_token=frame_token, now_ts=now_ts, source_type="video",
+            )
+            overlay = active_overlay_style(
+                rules, dets, video=True, frame_width=w, frame_height=h,
+                source_key=source_key, frame_token=frame_token, source_type="video",
+            )
+
+            fall_boxes = [b for b in boxes if b.get("className") == "fall"]
+            if fall_boxes:
+                fall_frames += 1
+                plotted = _draw_fall_boxes(plotted, fall_boxes)
+            if overlay:
+                plotted = _apply_alert_center_overlay(plotted, overlay, w, h)
+
+            for t in triggered:
+                detail = t.get("detail") or {}
+                fallen = (detail.get("fallen") or [{}])[0]
+                fall_events.append({
+                    "frame": frames,
+                    "sec": round(frames / fps, 2),
+                    "trackId": fallen.get("trackId"),
+                    "score": fallen.get("fallScore"),
+                    "indicators": fallen.get("indicators"),
+                    "title": t.get("title"),
+                })
+
+            _write_bgr(writer, plotted, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        if cap is not None:
+            cap.release()
+        if writer is not None:
+            writer.close()
+        reset_runtime(source_key)
+
+    return {
+        "frames": frames,
+        "totalFrames": total,
+        "totalPersons": total_persons,
+        "fps": round(float(fps), 2),
+        "width": ew,
+        "height": eh,
+        "fallEvents": fall_events,
+        "fallFrames": fall_frames,
+    }
+
+
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 progress_cb=None, alert_rules=None, alert_source_key=None, classes=None,
                 region=None, class_preset=None, zone_style=None):

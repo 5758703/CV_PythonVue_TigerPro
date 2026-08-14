@@ -3,9 +3,13 @@
 姿态关键点 -> person 检测框(+trackId) -> fall_detection 规则判定 -> 合成 fall 框 + 告警事件。
 """
 import json
+import os
+import threading
+import time
 import uuid
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_file
+from werkzeug.utils import secure_filename
 
 from extensions import db
 from models import AiModel
@@ -21,6 +25,11 @@ from services.alert_engine import (
 from services.alert_rules_query import load_enabled_alert_rules, parse_rule_keys
 
 fall_bp = Blueprint("fall", __name__, url_prefix="/api/ai/fall")
+
+# 视频异步任务进度表：jobId -> {status, processed, total, stats, error}（同蓝图自持，
+# 范式照 routes/absence.py 的 _video_jobs / _video_jobs_lock）
+_video_jobs: dict = {}
+_video_jobs_lock = threading.Lock()
 
 
 def _form_float(name, default):
@@ -190,3 +199,138 @@ def reset_runtime_api():
     source_key = (data.get("sourceKey") or "").strip() or None
     reset_runtime(source_key)
     return jsonify(code=0, message="已重置")
+
+
+def _fall_video_worker(job_id, library, model_key, abs_path, src_path, out_path, out_name,
+                       conf, rules):
+    """后台线程：逐帧跌倒检测视频，按帧上报进度，完成写结果。
+
+    无启用规则时 rules 为空列表，仍正常处理视频，只是不产出 fall 框与事件
+    （inference.fall_video 内部对空规则列表天然安全）。
+    """
+    from inference import fall_video
+
+    source_key = f"fall-video-{job_id}"
+
+    def cb(processed, total):
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j["processed"] = processed
+                j["total"] = total
+
+    try:
+        stats = fall_video(
+            library, model_key, abs_path, src_path, out_path,
+            rules=rules, source_key=source_key, conf=conf, progress_cb=cb,
+        )
+        stats["output"] = out_name
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j.update(status="done", stats=stats,
+                        processed=stats["frames"], total=stats["frames"])
+    except Exception as e:  # noqa: BLE001
+        with _video_jobs_lock:
+            j = _video_jobs.get(job_id)
+            if j:
+                j.update(status="error", error=str(e))
+    finally:
+        if os.path.isfile(src_path):
+            try:
+                os.remove(src_path)  # 处理完删除上传源
+            except OSError:
+                pass
+
+
+@fall_bp.post("/detect-video")
+@permission_required("ai:fall:list")
+def detect_video():
+    """跌倒检测（视频）：异步逐帧处理，产出带标注的结果视频 + 触发时间点列表。
+
+    表单：file 视频；modelId 姿态模型；conf 姿态置信度(默认0.25)；
+    ruleKeys 规则过滤(不传=全部启用规则，传 [] =不评估)。
+    立即返回 jobId，前端轮询 /video-progress/<jobId> 获取进度与结果。
+    """
+    from routes.ai_model import _resolve_pose_runtime
+
+    file = request.files.get("file")
+    if file is None or not file.filename:
+        return jsonify(code=400, message="未接收到视频"), 400
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in current_app.config["VIDEO_ALLOWED_EXT"]:
+        return jsonify(code=400, message="不支持的视频格式"), 400
+
+    try:
+        mid = int(request.form.get("modelId", 0))
+    except (TypeError, ValueError):
+        mid = 0
+    if not mid:
+        return jsonify(code=400, message="缺少 modelId"), 400
+    m = AiModel.query.get(mid)
+    if m is None:
+        return jsonify(code=404, message="模型不存在"), 404
+    try:
+        lib, abs_path, _task = _resolve_pose_runtime(m)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+
+    conf = _form_float("conf", 0.25)
+    raw_keys = request.form.get("ruleKeys")
+    rule_keys = parse_rule_keys(raw_keys) if raw_keys is not None else None
+    rules = load_enabled_alert_rules(rule_keys)
+
+    video_folder = current_app.config["VIDEO_FOLDER"]
+    out_folder = current_app.config["OUTPUT_FOLDER"]
+    os.makedirs(video_folder, exist_ok=True)
+    os.makedirs(out_folder, exist_ok=True)
+
+    ts = int(time.time())
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "video"
+    src_path = os.path.join(video_folder, f"{base}_{ts}{ext}")
+    out_name = f"{base}_{ts}_fall.mp4"
+    out_path = os.path.join(out_folder, out_name)
+    file.save(src_path)
+
+    job_id = uuid.uuid4().hex
+    with _video_jobs_lock:
+        _video_jobs[job_id] = {
+            "status": "running", "processed": 0, "total": 0, "stats": None, "error": None,
+        }
+    threading.Thread(
+        target=_fall_video_worker,
+        args=(job_id, lib, m.model_key or "", abs_path, src_path, out_path, out_name,
+              conf, rules),
+        daemon=True,
+    ).start()
+    return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
+
+
+@fall_bp.get("/video-progress/<job_id>")
+@permission_required("ai:fall:list")
+def video_progress(job_id):
+    """查询跌倒检测视频任务进度。"""
+    with _video_jobs_lock:
+        j = _video_jobs.get(job_id)
+        if j is None:
+            return jsonify(code=404, message="任务不存在或已过期"), 404
+        data = dict(j)
+    # 进度轮询统一 HTTP 200，避免前端 axios 将业务失败误判为 Network Error
+    if data["status"] == "error":
+        return jsonify(code=0, message=data.get("error") or "视频处理失败", data=data)
+    return jsonify(code=0, data=data)
+
+
+@fall_bp.get("/output/<path:name>")
+@permission_required("ai:fall:list")
+def output_video(name):
+    """下载跌倒检测结果视频。"""
+    if not name.endswith("_fall.mp4"):
+        return jsonify(code=400, message="非法文件名"), 400
+    safe_name = secure_filename(name)
+    if not safe_name or safe_name != name:
+        return jsonify(code=400, message="非法文件名"), 400
+    path = os.path.join(current_app.config["OUTPUT_FOLDER"], safe_name)
+    if not os.path.isfile(path):
+        return jsonify(code=404, message="文件不存在"), 404
+    return send_file(path, mimetype="video/mp4", conditional=True)
