@@ -32,7 +32,7 @@ def estimate():
     表单：file 图片；palmScore 手掌检测阈值(默认0.5)；handConf 关键点置信阈值(默认0.8)；
     maxHands 最大手数(默认2)；draw=1 返回标注图 base64。
     返回：hands[{..., fingers, count, gesture, gestureZh, digit}],
-    displayText（单手「2」/ 双手「1.2」）, leftDigit, rightDigit,
+    displayText（单手「2」/ 双手「2 1」右空格左）, leftDigit, rightDigit,
     primaryDigit（兼容）, totalCount, extendedTotal。
     """
     file = request.files.get("file")

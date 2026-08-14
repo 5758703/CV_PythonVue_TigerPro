@@ -133,7 +133,7 @@ def test_format_display_dual_hands():
         {"handedness": "Left", "confidence": 0.88, "digit": 1},
         {"handedness": "Right", "confidence": 0.92, "digit": 2},
     ]
-    assert format_display_digits(hands) == {"displayText": "1.2", "leftDigit": 1, "rightDigit": 2}
+    assert format_display_digits(hands) == {"displayText": "2 1", "leftDigit": 1, "rightDigit": 2}
 
 
 def test_format_display_picks_best_per_side():
@@ -142,11 +142,11 @@ def test_format_display_picks_best_per_side():
         {"handedness": "Left", "confidence": 0.95, "digit": 1},
         {"handedness": "Right", "confidence": 0.9, "digit": 2},
     ]
-    assert format_display_digits(hands)["displayText"] == "1.2"
+    assert format_display_digits(hands)["displayText"] == "2 1"
 
 
 def test_format_display_same_side_falls_back_to_position():
-    """双手被标成同一侧时，按画面位置回退为 左.右（未镜像自拍：右画面=左手）。"""
+    """双手被标成同一侧时，按画面位置回退为「右 左」（未镜像自拍：右画面=左手）。"""
     hands = [
         # 画面左侧（使用者右手）数字 2
         {"handedness": "Right", "confidence": 0.9, "digit": 2, "bbox": [10, 20, 80, 160]},
@@ -154,7 +154,7 @@ def test_format_display_same_side_falls_back_to_position():
         {"handedness": "Right", "confidence": 0.88, "digit": 1, "bbox": [200, 20, 280, 160]},
     ]
     r = format_display_digits(hands)
-    assert r["displayText"] == "1.2"
+    assert r["displayText"] == "2 1"
     assert r["leftDigit"] == 1
     assert r["rightDigit"] == 2
 
@@ -168,7 +168,7 @@ def test_resolve_handedness_swaps_and_splits_same_side():
     by_x = sorted(out, key=lambda h: (h["bbox"][0] + h["bbox"][2]) / 2)
     assert by_x[0]["handedness"] == "Right"
     assert by_x[1]["handedness"] == "Left"
-    assert format_display_digits(out)["displayText"] == "1.2"
+    assert format_display_digits(out)["displayText"] == "2 1"
 
 
 def test_resolve_handedness_swap_distinct_sides():
@@ -178,5 +178,5 @@ def test_resolve_handedness_swap_distinct_sides():
     ]
     out = resolve_handedness(hands, swap_labels=True)
     assert {h["handedness"] for h in out} == {"Left", "Right"}
-    # 已区分左右时交换：原 Left→Right(1)、原 Right→Left(2) → 显示 2.1
-    assert format_display_digits(out)["displayText"] == "2.1"
+    # 已区分左右时交换：原 Left→Right(1)、原 Right→Left(2) → 显示「右 左」= 1 2
+    assert format_display_digits(out)["displayText"] == "1 2"

@@ -12,7 +12,7 @@
                   <p>OpenCV Zoo MediaPipe：手掌检测 → 21 关键点 → 0–9 手势分类（含中式单手 6–9）。</p>
                   <p>0 拳 · 1 食 · 2 食+中 · 3 食+中+无 · 4 四指 · 5 五指</p>
                   <p>6 拇+小 · 7 拇+食 · 8 拇+食+中 · 9 拇+食+中+无</p>
-                  <p>双手同时比数：左.右 组合显示（如左手 1、右手 2 → 1.2）。</p>
+                  <p>双手同时比数：右 左 空格组合显示（如左手 1、右手 2 → 2 1）。</p>
                   <p>数字稳定约 1 秒自动记入序列，可勾选语音播报。</p>
                 </div>
               </template>
@@ -192,9 +192,10 @@ const applyDisplayFromResponse = (d) => {
   rightDigit.value = d.rightDigit ?? null;
   let text = d.displayText != null && d.displayText !== "" ? String(d.displayText) : "";
 
-  // 兜底：双手已检出但后端未组合成「左.右」时，按画面位置自行组合
+  // 兜底：双手已检出但后端未组合成「右 左」时，按画面位置自行组合
   const hands = handsNow.value;
-  if (hands.length >= 2 && (!text || !text.includes("."))) {
+  const looksDual = /^\d+\s+\d+$/.test(text.trim());
+  if (hands.length >= 2 && !looksDual) {
     const top2 = [...hands]
       .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
       .slice(0, 2)
@@ -202,11 +203,11 @@ const applyDisplayFromResponse = (d) => {
         const cx = (h) => (h.bbox ? (h.bbox[0] + h.bbox[2]) / 2 : (h.landmarks?.[0]?.[0] || 0));
         return cx(a) - cx(b);
       });
-    // 未镜像自拍：画面右≈左手，画面左≈右手
+    // 未镜像自拍：画面右≈左手，画面左≈右手 → 显示「右 左」
     const leftD = top2[1]?.digit ?? top2[1]?.count;
     const rightD = top2[0]?.digit ?? top2[0]?.count;
     if (leftD != null && rightD != null) {
-      text = `${leftD}.${rightD}`;
+      text = `${rightD} ${leftD}`;
       leftDigit.value = leftD;
       rightDigit.value = rightD;
     }
@@ -386,7 +387,7 @@ const trackDigit = (d) => {
     lastCommitted = stableDigit;
     digitSeq.value.push(stableDigit);
     if (speakOn.value && window.speechSynthesis) {
-      const u = new SpeechSynthesisUtterance(stableDigit.includes(".") ? stableDigit.replace(".", "点") : stableDigit);
+      const u = new SpeechSynthesisUtterance(stableDigit);
       u.lang = "zh-CN";
       window.speechSynthesis.speak(u);
     }

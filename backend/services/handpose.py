@@ -527,7 +527,7 @@ def _best_digit_on_side(hands: list[dict[str, Any]], side: str) -> int | None:
 
 
 def format_display_digits(hands: list[dict[str, Any]]) -> dict[str, Any]:
-    """组合显示：双手为「左.右」（如 1.2），单手仅显示该手数字。
+    """组合显示：双手为「右 左」（如 2 1），单手仅显示该手数字。
 
     先 resolve_handedness；若仍无法凑齐左右，则对置信度最高的两只手按画面位置回退组合。
     """
@@ -537,7 +537,7 @@ def format_display_digits(hands: list[dict[str, Any]]) -> dict[str, Any]:
     left_d = _best_digit_on_side(hands, "Left")
     right_d = _best_digit_on_side(hands, "Right")
     if left_d is not None and right_d is not None:
-        return {"displayText": f"{left_d}.{right_d}", "leftDigit": left_d, "rightDigit": right_d}
+        return {"displayText": f"{right_d} {left_d}", "leftDigit": left_d, "rightDigit": right_d}
 
     if len(hands) >= 2:
         top2 = sorted(hands, key=lambda h: float(h.get("confidence") or 0), reverse=True)[:2]
@@ -546,7 +546,7 @@ def format_display_digits(hands: list[dict[str, Any]]) -> dict[str, Any]:
         left_d = _digit_of(top2_x[1])
         right_d = _digit_of(top2_x[0])
         if left_d is not None and right_d is not None:
-            return {"displayText": f"{left_d}.{right_d}", "leftDigit": left_d, "rightDigit": right_d}
+            return {"displayText": f"{right_d} {left_d}", "leftDigit": left_d, "rightDigit": right_d}
         if left_d is not None:
             return {"displayText": str(left_d), "leftDigit": left_d, "rightDigit": None}
         if right_d is not None:
