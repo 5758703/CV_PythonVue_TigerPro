@@ -15,17 +15,26 @@ KP_L_HIP, KP_R_HIP = 11, 12
 KP_L_ANKLE, KP_R_ANKLE = 15, 16
 
 
+def _coerce_row(row):
+    """解析单行 [x, y, conf]；格式不合法或转换失败返回 None。"""
+    try:
+        row = list(row)
+        if len(row) < 3:
+            return None
+        x, y, c = float(row[0]), float(row[1]), float(row[2])
+        return (x, y, c)
+    except (TypeError, ValueError):
+        return None
+
+
 def _point(kp, idx: int, min_conf: float):
     """取单个关键点像素坐标；置信度不足或索引越界返回 None。"""
     if kp is None or idx >= len(kp):
         return None
-    row = list(kp[idx])
-    if len(row) < 3:
+    parsed = _coerce_row(kp[idx])
+    if parsed is None:
         return None
-    try:
-        x, y, c = float(row[0]), float(row[1]), float(row[2])
-    except (TypeError, ValueError):
-        return None
+    x, y, c = parsed
     return (x, y) if c >= min_conf else None
 
 
@@ -80,13 +89,10 @@ def build_person_detections(persons, width, height, kp_min_conf: float = 0.3) ->
         kp = (p or {}).get("keypoints") or []
         pts = []
         for row in kp:
-            row = list(row)
-            if len(row) < 3:
+            parsed = _coerce_row(row)
+            if parsed is None:
                 continue
-            try:
-                x, y, c = float(row[0]), float(row[1]), float(row[2])
-            except (TypeError, ValueError):
-                continue
+            x, y, c = parsed
             if c >= kp_min_conf:
                 pts.append((x, y, c))
         if not pts:
