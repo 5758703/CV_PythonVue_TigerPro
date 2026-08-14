@@ -243,6 +243,18 @@ export const fallApi = {
       timeout: 0,
     }),
   resetRuntime: (data) => request.post('/ai/fall/reset-runtime', data || {}),
+  // 视频检测：启动异步任务，返回 jobId
+  detectVideo: (formData) =>
+    request.post('/ai/fall/detect-video', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  // 查询视频检测进度（长任务，关闭超时；进度轮询统一 HTTP 200，靠 status 字段判断）
+  videoProgress: (jobId) =>
+    request.get(`/ai/fall/video-progress/${jobId}`, { timeout: 0 }),
+  // 拉取带框输出视频（返回 Blob）
+  outputVideo: (name) =>
+    request.get(`/ai/fall/output/${name}`, { responseType: 'blob', timeout: 0 }),
 }
 
 // ---------------- 羽毛球视频分析

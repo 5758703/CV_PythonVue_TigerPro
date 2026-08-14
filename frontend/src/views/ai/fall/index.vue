@@ -5,6 +5,7 @@
         <el-form-item label="模式">
           <el-radio-group v-model="mode" @change="clearAll">
             <el-radio-button value="image">图片</el-radio-button>
+            <el-radio-button value="video">视频</el-radio-button>
             <el-radio-button value="camera">摄像头</el-radio-button>
           </el-radio-group>
         </el-form-item>
@@ -28,6 +29,15 @@
           <el-button type="primary" :icon="VideoPlay" :loading="running" :disabled="!modelId || !file" @click="runImage">开始检测</el-button>
           <el-button :icon="Refresh" @click="clearAll">清空</el-button>
         </el-form-item>
+        <el-form-item v-if="mode === 'video'">
+          <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPickVideo" accept="video/*">
+            <el-button :icon="UploadFilled">选择视频</el-button>
+          </el-upload>
+        </el-form-item>
+        <el-form-item v-if="mode === 'video'">
+          <el-button type="primary" :icon="VideoPlay" :loading="videoRunning" :disabled="!modelId || !videoFile" @click="runVideo">开始检测</el-button>
+          <el-button :icon="Refresh" @click="clearAll">清空</el-button>
+        </el-form-item>
         <el-form-item v-if="mode === 'camera'" label="摄像头">
           <el-select v-model="deviceId" placeholder="默认摄像头" style="width: 170px" :disabled="camRunning">
             <el-option v-for="d in devices" :key="d.deviceId" :label="d.label || `摄像头 ${d.idx}`" :value="d.deviceId" />
@@ -42,6 +52,8 @@
                 title="暂无可用模型：请到「模型管理」拉取 YOLO-pose / RTMO / RTMPose 权重并启用。" />
       <el-alert type="info" :closable="false" class="tip-alert"
                 title="四个阈值在「检测告警」页的「跌倒检测告警」规则中配置；该规则需先启用，本页才会判定与记事件。" />
+      <el-alert v-if="mode === 'video'" type="warning" :closable="false" class="tip-alert"
+                title="红框每帧画、事件列表稀疏：合成视频里每一帧只要判定为跌倒都会画红框（计入 fallFrames），但右侧「触发记录」受规则的连续帧确认与冷却时间（默认 60 秒）约束，只在满足条件时记一条，数量远少于红框帧数，并非漏检。" />
     </el-card>
 
     <el-row :gutter="12">
@@ -59,6 +71,26 @@
               </div>
             </div>
           </div>
+          <div v-else-if="mode === 'video'">
+            <div v-if="videoRunning" class="progress-box">
+              <div class="progress-title">处理中… {{ processed }}/{{ total || '?' }} 帧</div>
+              <el-progress :percentage="percent" :stroke-width="18" :text-inside="true" :status="percent >= 100 ? 'success' : ''" />
+            </div>
+            <div v-else-if="videoResultUrl">
+              <div class="res-title">
+                检测结果视频（总帧数 {{ videoStats.totalFrames ?? videoStats.frames ?? '-' }}，检出人次 {{ videoStats.totalPersons ?? '-' }}）
+                <el-button link type="primary" :icon="Download" @click="downloadVideoResult">下载视频</el-button>
+              </div>
+              <div class="cam-stage">
+                <video ref="videoRef" :src="videoResultUrl" controls class="cam-video"></video>
+              </div>
+              <div class="stats">
+                <el-tag type="danger" effect="dark">红框帧数 {{ videoStats.fallFrames ?? 0 }}</el-tag>
+                <el-tag type="warning" effect="dark">触发次数 {{ (videoStats.fallEvents || []).length }}</el-tag>
+              </div>
+            </div>
+            <el-empty v-else description="选择模型与视频后开始检测" />
+          </div>
           <div v-else-if="resultImg">
             <div class="res-title">检测结果（{{ personCount }} 人，疑似跌倒 {{ fallCount }}）</div>
             <div class="cam-stage">
@@ -72,13 +104,24 @@
       <el-col :span="8">
         <el-card shadow="never">
           <div class="res-title">触发记录</div>
-          <el-empty v-if="!events.length" description="暂无触发" :image-size="60" />
-          <el-timeline v-else>
-            <el-timeline-item v-for="(e, i) in events" :key="i" :timestamp="e.time" type="danger">
-              <div class="ev-title">{{ e.title }}</div>
-              <div class="ev-msg">{{ e.message }}</div>
-            </el-timeline-item>
-          </el-timeline>
+          <template v-if="mode === 'video'">
+            <el-empty v-if="!(videoStats.fallEvents || []).length" description="暂无触发" :image-size="60" />
+            <el-timeline v-else>
+              <el-timeline-item v-for="(e, i) in videoStats.fallEvents" :key="i" :timestamp="`${e.sec.toFixed(1)} 秒`" type="danger">
+                <div class="ev-title ev-clickable" @click="seekTo(e.sec)">{{ e.title }}</div>
+                <div class="ev-msg">角{{ e.indicators?.trunk ?? '-' }} 速{{ e.indicators?.speed ?? '-' }} 高{{ e.indicators?.height ?? '-' }} 头{{ e.indicators?.head ?? '-' }}</div>
+              </el-timeline-item>
+            </el-timeline>
+          </template>
+          <template v-else>
+            <el-empty v-if="!events.length" description="暂无触发" :image-size="60" />
+            <el-timeline v-else>
+              <el-timeline-item v-for="(e, i) in events" :key="i" :timestamp="e.time" type="danger">
+                <div class="ev-title">{{ e.title }}</div>
+                <div class="ev-msg">{{ e.message }}</div>
+              </el-timeline-item>
+            </el-timeline>
+          </template>
         </el-card>
       </el-col>
     </el-row>
@@ -86,9 +129,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, VideoPlay, Refresh } from '@element-plus/icons-vue'
+import { UploadFilled, VideoPlay, Refresh, Download } from '@element-plus/icons-vue'
 import { modelApi, fallApi } from '../../../api/ai'
 
 const POSE_TASKS = ['pose-estimation', 'wholebody-pose-estimation']
@@ -117,6 +160,18 @@ const personCount = ref(0)
 const fallCount = ref(0)
 const events = ref([])
 const lastData = ref(null)
+
+// 视频模式状态
+const videoFile = ref(null)
+const videoRunning = ref(false)
+const processed = ref(0)
+const total = ref(0)
+const videoResultUrl = ref('')
+const videoStats = ref({})
+const videoRef = ref(null)
+let videoBlobUrl = null
+let pollTimer = null
+const percent = computed(() => (total.value ? Math.min(100, Math.floor((processed.value / total.value) * 100)) : 0))
 
 const devices = ref([])
 const deviceId = ref('')
@@ -188,6 +243,78 @@ const runImage = async () => {
   } finally {
     running.value = false
   }
+}
+
+const onPickVideo = (uploadFile) => {
+  videoFile.value = uploadFile.raw
+}
+
+const clearVideoResult = () => {
+  if (videoBlobUrl) { URL.revokeObjectURL(videoBlobUrl); videoBlobUrl = null }
+  videoResultUrl.value = ''
+}
+
+const runVideo = async () => {
+  videoRunning.value = true
+  processed.value = 0
+  total.value = 0
+  clearVideoResult()
+  videoStats.value = {}
+  try {
+    const fd = new FormData()
+    fd.append('file', videoFile.value)
+    fd.append('modelId', modelId.value)
+    fd.append('conf', conf.value)
+    const res = await fallApi.detectVideo(fd)
+    await pollVideo(res.data.jobId)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '跌倒视频检测失败')
+    videoRunning.value = false
+  }
+}
+
+// 轮询统一 HTTP 200：业务失败靠 status === 'error' 判断，不走 catch 分支
+const pollVideo = (jobId) => new Promise((resolve) => {
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fallApi.videoProgress(jobId)
+      const d = res.data
+      processed.value = d.processed
+      total.value = d.total
+      if (d.status === 'error') {
+        clearInterval(pollTimer); pollTimer = null
+        ElMessage.error(d.error || '跌倒视频检测失败')
+        videoRunning.value = false
+        resolve()
+        return
+      }
+      if (d.status === 'done') {
+        clearInterval(pollTimer); pollTimer = null
+        videoStats.value = d.stats || {}
+        const blob = await fallApi.outputVideo(d.stats.output)
+        videoBlobUrl = URL.createObjectURL(blob)
+        videoResultUrl.value = videoBlobUrl
+        videoRunning.value = false
+        resolve()
+      }
+    } catch (e) {
+      clearInterval(pollTimer); pollTimer = null
+      ElMessage.error(e?.message || '跌倒视频检测失败')
+      videoRunning.value = false
+      resolve()
+    }
+  }, 1000)
+})
+
+const downloadVideoResult = () => {
+  const a = document.createElement('a')
+  a.href = videoResultUrl.value
+  a.download = videoStats.value.output || `fall_${Date.now()}.mp4`
+  a.click()
+}
+
+const seekTo = (sec) => {
+  if (videoRef.value) videoRef.value.currentTime = sec
 }
 
 const drawOverlay = (ctx, w, h) => {
@@ -298,6 +425,7 @@ const camStop = async () => {
 
 const clearAll = () => {
   camStop()
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   file.value = null
   if (resultImg.value) URL.revokeObjectURL(resultImg.value)
   resultImg.value = ''
@@ -305,13 +433,23 @@ const clearAll = () => {
   fallCount.value = 0
   lastData.value = null
   events.value = []
+  videoFile.value = null
+  videoRunning.value = false
+  processed.value = 0
+  total.value = 0
+  videoStats.value = {}
+  clearVideoResult()
 }
 
 onMounted(() => {
   loadModels()
   enumCams()
 })
-onBeforeUnmount(() => { camStop() })
+onBeforeUnmount(() => {
+  camStop()
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  clearVideoResult()
+})
 </script>
 
 <style scoped>
@@ -323,7 +461,11 @@ onBeforeUnmount(() => { camStop() })
 .cam-canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 .cam-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #909399; }
 .cam-hud { position: absolute; left: 8px; top: 8px; display: flex; gap: 6px; }
-.res-title { font-weight: 600; margin-bottom: 8px; }
+.res-title { font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
 .ev-title { font-weight: 600; color: #cf1322; }
+.ev-clickable { cursor: pointer; text-decoration: underline dotted; }
 .ev-msg { font-size: 12px; color: #606266; }
+.progress-box { padding: 22px 4px; }
+.progress-title { font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
+.stats { display: flex; gap: 10px; margin-top: 12px; }
 </style>
