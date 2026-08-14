@@ -1,4 +1,4 @@
-"""检测告警规则引擎：烟火 / 聚集 / PPE 未戴帽 / 越线入侵等。
+"""检测告警规则引擎：烟火 / 聚集 / PPE 未戴帽 / 越线入侵 / 区域越界 / 陌生人脸 / 跌倒。
 
 规则阈值与中央叠加样式均存于 AlertRule.config_json，管理员可改。
 越线复用跟踪页几何判定（与 inference._crosses 一致）。
@@ -21,6 +21,7 @@ _SUGGESTIONS = {
     "line-intrusion": "核查越线人员身份与事由；必要时广播劝离并联动门禁/安保。",
     "zone-intrusion": "核查区域越界人员/车辆身份与事由；必要时广播劝离并联动门禁/安保。",
     "stranger-face": "核查现场人员身份；必要时登记访客或联动门禁/安保。",
+    "fall-detection": "立即前往现场查看老人状态，确认意识与外伤；必要时拨打急救电话，避免长时间卧地。",
 }
 
 _PERSON_ALIASES = ("person", "people", "human", "pedestrian", "行人", "人", "人体", "Person")
@@ -105,6 +106,19 @@ _DEFAULT_OVERLAY: dict[str, dict[str, Any]] = {
         "showTriangle": True,
         "triangleFill": "#FFFFFF",
         "triangleMark": "#1D6FBF",
+    },
+    "fall-detection": {
+        "fillColor": "#CF1322",
+        "borderColor": "#A8071A",
+        "textColor": "#FFFFFF",
+        "titleLines": ["FALL DETECTED"],
+        "subtitleLines": ["疑似跌倒", "请立即查看"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#A8071A",
     },
 }
 
@@ -863,6 +877,16 @@ def _title_message(rule, detail: dict) -> tuple[str, str]:
         title = f"陌生人脸：检测到 {n} 张未匹配人脸"
         msg = _SUGGESTIONS.get(key) or _SUGGESTIONS["stranger-face"]
         return title, msg
+    if key == "fall-detection" or (
+        (rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")) == "fall_detection"
+    ):
+        n = detail.get("fallenCount", 0)
+        sustain = detail.get("sustainSec", 0)
+        title = f"跌倒告警：检测到 {n} 人疑似跌倒"
+        if sustain:
+            title += f"（持续 {sustain:.1f} 秒）"
+        msg = _SUGGESTIONS.get(key) or _SUGGESTIONS["fall-detection"]
+        return title, msg
     return name, detail.get("message") or "检测规则触发，请现场核实。"
 
 
@@ -941,6 +965,7 @@ def active_overlay_style(
         key = rule.rule_key if hasattr(rule, "rule_key") else rule.get("ruleKey", "")
         default_pri = {
             "fire-smoke": 0,
+            "fall-detection": 2,
             "ppe-no-hardhat": 5,
             "crowd-gathering": 10,
             "zone-intrusion": 12,
@@ -1087,7 +1112,10 @@ def evaluate_rules(
 
 
 def reset_runtime(source_key: str | None = None):
-    """测试或停止检测时清状态。"""
+    """测试或停止检测时清状态（含跌倒跟踪器）。"""
+    from services.fall_detect import reset_tracker
+
+    reset_tracker(source_key)
     with _lock:
         if source_key is None:
             _runtime.clear()

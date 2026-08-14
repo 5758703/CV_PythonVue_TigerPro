@@ -9,6 +9,7 @@ from services.alert_engine import (
     reset_runtime,
     resolve_overlay_style,
 )
+from services.fall_detect import reset_tracker
 
 
 def _rule(key, rtype, cfg, rid=1):
@@ -348,4 +349,51 @@ def test_fall_detections_empty_when_no_fall():
     _eval(rule, dets, "fall7", 100.0, "d1")
     assert fall_detections([rule], dets, source_key="fall7", frame_width=640,
                            frame_height=480, frame_token="d1", now_ts=100.0) == []
+    reset_runtime()
+
+
+def test_fall_overlay_theme_and_priority():
+    reset_runtime()
+    fall = _fall_rule({"consecutive_frames": 1}, rid=98)
+    crowd = _rule(
+        "crowd-gathering",
+        "count_threshold",
+        {"class_name": "person", "min_count": 1, "min_confidence": 0.2,
+         "consecutive_frames": 1, "cooldown_sec": 0},
+        rid=99,
+    )
+    for i in range(3):
+        _eval(fall, [_standing_det()], "fall8", 100.0 + i * 0.1, f"e{i}")
+    dets = [_lying_det()]
+    _eval(fall, dets, "fall8", 100.4, "e9")
+    style = active_overlay_style([fall, crowd], dets, frame_width=640,
+                                 frame_height=480, source_key="fall8", frame_token="e9")
+    assert style["ruleKey"] == "fall-detection"
+    assert style["fillColor"] == "#CF1322"
+    assert style["titleLines"] == ["FALL DETECTED"]
+    reset_runtime()
+
+
+def test_fall_title_message():
+    reset_runtime("fall9")
+    rule = _fall_rule({"consecutive_frames": 1}, rid=100)
+    for i in range(3):
+        _eval(rule, [_standing_det()], "fall9", 100.0 + i * 0.1, f"g{i}")
+    out = _eval(rule, [_lying_det()], "fall9", 100.4, "g9")
+    assert len(out) == 1
+    assert "跌倒" in out[0]["title"]
+    assert "1 人" in out[0]["title"]
+    assert "急救" in out[0]["message"]
+    reset_runtime()
+
+
+def test_reset_runtime_clears_fall_tracker():
+    reset_tracker()
+    reset_runtime("fall10")
+    rule = _fall_rule({"consecutive_frames": 1}, rid=101)
+    _eval(rule, [_standing_det()], "fall10", 100.0, "h1")
+    reset_runtime("fall10")
+    # 复位后基线清空：卧地首帧因基线未建立，身高比指标不参与计分
+    out = _eval(rule, [_lying_det()], "fall10", 100.1, "h2")
+    assert out == [] or out[0]["detail"]["fallen"][0]["indicators"].get("height") is None
     reset_runtime()

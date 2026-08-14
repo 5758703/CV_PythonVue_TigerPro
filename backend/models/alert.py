@@ -12,7 +12,7 @@ class AlertRule(db.Model):
     rule_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
     name = db.Column(db.String(128), nullable=False)
     description = db.Column(db.String(500))
-    rule_type = db.Column(db.String(32), nullable=False)  # class_presence | count_threshold | line_crossing | zone_crossing | unmatched_face
+    rule_type = db.Column(db.String(32), nullable=False)  # class_presence | count_threshold | line_crossing | zone_crossing | unmatched_face | fall_detection
     config_json = db.Column(db.Text, nullable=False, default="{}")
     severity = db.Column(db.String(16), default="medium")  # low | medium | high
     status = db.Column(db.String(1), default="1")  # 0启用 1停用（默认不启用）
