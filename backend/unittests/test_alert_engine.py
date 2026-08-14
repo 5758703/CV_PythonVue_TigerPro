@@ -199,3 +199,103 @@ def test_stranger_face_unmatched():
     assert evaluate_rules([rule], known, "face2") == []
     assert evaluate_rules([rule], known, "face2") == []
     reset_runtime()
+
+
+def _fall_rule(cfg=None, rid=90):
+    base = {
+        "trunk_angle_deg": 60,
+        "centroid_speed": 0.5,
+        "height_ratio": 0.5,
+        "head_y_ratio": 0.75,
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 1},
+        "min_score": 2,
+        "kp_min_conf": 0.3,
+        "stand_baseline_window": 90,
+        "track_max_age": 15,
+        "consecutive_frames": 2,
+        "cooldown_sec": 0,
+    }
+    base.update(cfg or {})
+    return _rule("fall-detection", "fall_detection", base, rid=rid)
+
+
+def _standing_det(track_id=1, hip_y=260.0, nose_y=60.0, conf=0.9):
+    """站立：躯干竖直、鼻在画面上部、肩踝相距 320px。"""
+    kp = [[320.0, 100.0, conf] for _ in range(17)]
+    kp[0] = [320.0, nose_y, conf]
+    kp[5] = [300.0, hip_y - 140.0, conf]
+    kp[6] = [340.0, hip_y - 140.0, conf]
+    kp[11] = [305.0, hip_y, conf]
+    kp[12] = [335.0, hip_y, conf]
+    kp[15] = [305.0, hip_y + 180.0, conf]
+    kp[16] = [335.0, hip_y + 180.0, conf]
+    return {"className": "person", "confidence": 0.9, "trackId": track_id,
+            "bbox": [290.0, hip_y - 160.0, 350.0, hip_y + 190.0], "keypoints": kp}
+
+
+def _lying_det(track_id=1, y=430.0, conf=0.9):
+    """卧地：肩髋左右分布且等高、鼻贴近画面底部、躯干高度骤降。"""
+    kp = [[300.0, y, conf] for _ in range(17)]
+    kp[0] = [200.0, y - 5.0, conf]
+    kp[5] = [240.0, y - 10.0, conf]
+    kp[6] = [240.0, y + 10.0, conf]
+    kp[11] = [360.0, y - 10.0, conf]
+    kp[12] = [360.0, y + 10.0, conf]
+    kp[15] = [460.0, y - 5.0, conf]
+    kp[16] = [460.0, y + 5.0, conf]
+    return {"className": "person", "confidence": 0.9, "trackId": track_id,
+            "bbox": [190.0, y - 30.0, 470.0, y + 30.0], "keypoints": kp}
+
+
+def _eval(rule, dets, src, ts, token):
+    return evaluate_rules([rule], dets, src, now_ts=ts,
+                          frame_width=640, frame_height=480, frame_token=token)
+
+
+def test_fall_triggers_after_consecutive_frames():
+    reset_runtime("fall1")
+    rule = _fall_rule()
+    # 前三帧站立：建立站立高度基线
+    assert _eval(rule, [_standing_det()], "fall1", 100.0, "f1") == []
+    assert _eval(rule, [_standing_det()], "fall1", 100.1, "f2") == []
+    assert _eval(rule, [_standing_det()], "fall1", 100.2, "f3") == []
+    # 下坠 + 卧地：连续两帧达标才触发
+    assert _eval(rule, [_lying_det()], "fall1", 100.3, "f4") == []
+    out = _eval(rule, [_lying_det()], "fall1", 100.4, "f5")
+    assert len(out) == 1
+    assert out[0]["ruleKey"] == "fall-detection"
+    assert out[0]["detail"]["fallen"][0]["fallScore"] >= 2
+    reset_runtime()
+
+
+def test_fall_single_indicator_does_not_trigger():
+    reset_runtime("fall2")
+    # 只开躯干角权重，min_score=2 -> 单指标永远达不到
+    rule = _fall_rule({"weights": {"trunk": 1, "speed": 0, "height": 0, "head": 0},
+                       "consecutive_frames": 1})
+    for i in range(4):
+        assert _eval(rule, [_lying_det()], "fall2", 100.0 + i * 0.1, f"s{i}") == []
+    reset_runtime()
+
+
+def test_fall_low_confidence_keypoints_no_trigger():
+    reset_runtime("fall3")
+    rule = _fall_rule({"consecutive_frames": 1})
+    for i in range(4):
+        assert _eval(rule, [_lying_det(conf=0.05)], "fall3", 100.0 + i * 0.1, f"l{i}") == []
+    reset_runtime()
+
+
+def test_fall_isolates_two_tracks():
+    reset_runtime("fall4")
+    rule = _fall_rule({"consecutive_frames": 1})
+    for i in range(3):
+        _eval(rule, [_standing_det(1), _standing_det(2, hip_y=250.0)],
+              "fall4", 100.0 + i * 0.1, f"a{i}")
+    out = _eval(rule, [_lying_det(1), _standing_det(2, hip_y=250.0)],
+                "fall4", 100.4, "a9")
+    assert len(out) == 1
+    # 只有 track 1 跌倒；track 2 的站立基线未被污染，仍判定为正常
+    assert [f["trackId"] for f in out[0]["detail"]["fallen"]] == [1]
+    assert out[0]["detail"]["fallenCount"] == 1
+    reset_runtime()

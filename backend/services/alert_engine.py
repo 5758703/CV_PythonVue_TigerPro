@@ -9,7 +9,8 @@ import threading
 import time
 from typing import Any
 
-# (rule_id, source_key) -> { streak, last_fire_ts, centroids, crossed }
+# (rule_id, source_key) -> { streak, last_fire_ts, centroids, crossed,
+#                            fall_tracks, fall_frame_token, fall_frame_detail }
 _runtime: dict[tuple[int, str], dict[str, Any]] = {}
 _lock = threading.Lock()
 
@@ -536,6 +537,197 @@ def _eval_unmatched_face(rule, cfg: dict, detections: list[dict]) -> dict | None
     }
 
 
+# ---------------------------------------------------------------- 跌倒检测
+_FALL_THRESHOLD_DEFAULTS = {
+    "trunk_angle_deg": 60.0,
+    "centroid_speed": 0.5,
+    "height_ratio": 0.5,
+    "head_y_ratio": 0.75,
+    "min_score": 2.0,
+    "kp_min_conf": 0.3,
+}
+_FALL_INT_DEFAULTS = {
+    "stand_baseline_window": 90,
+    "track_max_age": 15,
+}
+_FALL_WEIGHT_KEYS = ("trunk", "speed", "height", "head")
+
+
+def _camel(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(w.capitalize() for w in rest)
+
+
+def _cfg_num(cfg: dict, key: str, default, cast=float):
+    raw = cfg.get(key, cfg.get(_camel(key), default))
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        return cast(default)
+
+
+def fall_config(cfg: dict) -> dict:
+    """从规则 config 解析跌倒阈值与权重，缺省回落到默认值（兼容驼峰键）。"""
+    cfg = cfg or {}
+    out = {k: _cfg_num(cfg, k, v) for k, v in _FALL_THRESHOLD_DEFAULTS.items()}
+    out.update({k: _cfg_num(cfg, k, v, int) for k, v in _FALL_INT_DEFAULTS.items()})
+    raw_w = cfg.get("weights") or {}
+    weights = {}
+    for k in _FALL_WEIGHT_KEYS:
+        try:
+            weights[k] = float(raw_w.get(k, 1))
+        except (TypeError, ValueError):
+            weights[k] = 1.0
+    out["weights"] = weights
+    out["stand_baseline_window"] = max(3, out["stand_baseline_window"])
+    return out
+
+
+def _fall_bbox_height(det: dict) -> float | None:
+    bbox = det.get("bbox") or []
+    if len(bbox) < 4:
+        return None
+    try:
+        h = abs(float(bbox[3]) - float(bbox[1]))
+    except (TypeError, ValueError):
+        return None
+    return h or None
+
+
+def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | None) -> dict | None:
+    """姿态关键点四指标跌倒判定：躯干角 / 质心速度 / 身高比 / 头部高度。
+
+    阈值与权重全部来自 rule.config()。跨帧状态按 trackId 存于 _runtime；
+    同一 frame_token 重复调用直接复用缓存，避免质心被提前推进。
+    """
+    from services.fall_detect import keypoint_metrics
+
+    ctx = ctx or {}
+    fh = ctx.get("frame_height") or ctx.get("frameHeight")
+    try:
+        fh = float(fh) if fh is not None else None
+    except (TypeError, ValueError):
+        fh = None
+
+    rid = rule.id if hasattr(rule, "id") else rule.get("id")
+    src = ctx.get("source_key") or "default"
+    key = (rid, src)
+    frame_token = ctx.get("frame_token")
+    try:
+        now = float(ctx.get("now_ts")) if ctx.get("now_ts") is not None else time.time()
+    except (TypeError, ValueError):
+        now = time.time()
+
+    conf = fall_config(cfg)
+    weights = conf["weights"]
+    total_weight = sum(weights.values()) or 1.0
+    window = conf["stand_baseline_window"]
+
+    with _lock:
+        st = _runtime.setdefault(
+            key, {"streak": 0, "last_fire_ts": 0.0, "centroids": {}, "crossed": set()}
+        )
+        if frame_token is not None and st.get("fall_frame_token") == frame_token:
+            return st.get("fall_frame_detail")
+
+        tracks: dict = st.setdefault("fall_tracks", {})
+        fallen = []
+        live = set()
+
+        for d in detections or []:
+            tid = d.get("trackId", d.get("track_id"))
+            kp = d.get("keypoints")
+            if tid is None or not kp:
+                continue
+            try:
+                tid = int(tid)
+            except (TypeError, ValueError):
+                continue
+            live.add(tid)
+            m = keypoint_metrics(kp, None, fh, conf["kp_min_conf"])
+            tr = tracks.setdefault(tid, {"hip": None, "standHist": [], "since": None, "miss": 0})
+            tr["miss"] = 0
+
+            score = 0.0
+            indicators = {}
+
+            # 指标 1：躯干角（肩中点->髋中点 与垂直方向夹角）
+            if weights["trunk"] and m["valid"]["trunk"]:
+                indicators["trunk"] = round(m["trunkAngle"], 2)
+                if m["trunkAngle"] > conf["trunk_angle_deg"]:
+                    score += weights["trunk"]
+
+            # 指标 2：质心（髋部）下降速度，单位「画面高/秒」
+            if m["valid"]["hip"]:
+                prev = tr.get("hip")
+                if weights["speed"] and prev and fh and now - prev[0] > 0:
+                    v = (m["hipY"] - prev[1]) / (now - prev[0]) / fh
+                    indicators["speed"] = round(v, 4)
+                    if v > conf["centroid_speed"]:
+                        score += weights["speed"]
+                tr["hip"] = (now, m["hipY"])
+
+            # 指标 3：身高比（当前躯干高度 / 站立基线）
+            if weights["height"]:
+                body_h = m["bodyHeight"] or _fall_bbox_height(d)
+                if body_h:
+                    hist = tr["standHist"]
+                    base = max(hist) if len(hist) >= 3 else None
+                    if base:
+                        ratio = body_h / base
+                        indicators["height"] = round(ratio, 4)
+                        if ratio < conf["height_ratio"]:
+                            score += weights["height"]
+                        else:
+                            hist.append(body_h)   # 仅站立姿态更新基线，避免倒地污染
+                    else:
+                        hist.append(body_h)
+                    if len(hist) > window:
+                        del hist[:-window]
+
+            # 指标 4：头部离地高度
+            if weights["head"] and m["valid"]["nose"] and fh:
+                head_ratio = m["noseY"] / fh
+                indicators["head"] = round(head_ratio, 4)
+                if head_ratio > conf["head_y_ratio"]:
+                    score += weights["head"]
+
+            if score >= conf["min_score"]:
+                if tr["since"] is None:
+                    tr["since"] = now
+                fallen.append({
+                    "trackId": tid,
+                    "bbox": d.get("bbox"),
+                    "fallScore": round(score, 4),
+                    "confidence": round(score / total_weight, 4),
+                    "sustainSec": round(now - tr["since"], 2),
+                    "indicators": indicators,
+                })
+            else:
+                tr["since"] = None
+
+        for tid in list(tracks):
+            if tid in live:
+                continue
+            tracks[tid]["miss"] = tracks[tid].get("miss", 0) + 1
+            if tracks[tid]["miss"] > conf["track_max_age"]:
+                del tracks[tid]
+
+        detail = None
+        if fallen:
+            detail = {
+                "matched": True,
+                "fallenCount": len(fallen),
+                "maxScore": max(f["fallScore"] for f in fallen),
+                "sustainSec": max(f["sustainSec"] for f in fallen),
+                "fallen": fallen[:10],
+            }
+        if frame_token is not None:
+            st["fall_frame_token"] = frame_token
+            st["fall_frame_detail"] = detail
+        return detail
+
+
 def _condition_met(rule, detections: list[dict], ctx: dict | None = None) -> dict | None:
     cfg = rule.config() if hasattr(rule, "config") else (rule.get("config") or {})
     rtype = rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")
@@ -549,6 +741,8 @@ def _condition_met(rule, detections: list[dict], ctx: dict | None = None) -> dic
         return _eval_zone_crossing(rule, cfg, detections, ctx)
     if rtype == "unmatched_face":
         return _eval_unmatched_face(rule, cfg, detections)
+    if rtype == "fall_detection":
+        return _eval_fall_detection(rule, cfg, detections, ctx)
     return None
 
 
@@ -782,6 +976,7 @@ def evaluate_rules(
         "line": line,
         "region": region,
         "frame_token": frame_token,
+        "now_ts": now,
     }
 
     for rule in rules:
