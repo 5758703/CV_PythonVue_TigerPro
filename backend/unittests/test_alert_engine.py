@@ -391,9 +391,17 @@ def test_reset_runtime_clears_fall_tracker():
     reset_tracker()
     reset_runtime("fall10")
     rule = _fall_rule({"consecutive_frames": 1}, rid=101)
-    _eval(rule, [_standing_det()], "fall10", 100.0, "h1")
+    # 前三帧站立：建立站立高度基线（长度 >= 3）
+    for i in range(3):
+        _eval(rule, [_standing_det()], "fall10", 100.0 + i * 0.1, f"h{i}")
+    # 前置断言：卧地帧因基线已建立，身高比指标应参与计分（有 "height" 键）
+    out_before = _eval(rule, [_lying_det()], "fall10", 100.3, "h_before")
+    assert len(out_before) == 1
+    assert "height" in out_before[0]["detail"]["fallen"][0]["indicators"]
+    # 复位跟踪器与基线
     reset_runtime("fall10")
-    # 复位后基线清空：卧地首帧因基线未建立，身高比指标不参与计分
-    out = _eval(rule, [_lying_det()], "fall10", 100.1, "h2")
-    assert out == [] or out[0]["detail"]["fallen"][0]["indicators"].get("height") is None
+    # 复位后基线清空：卧地首帧因基线未建立，身高比指标不参与计分（无 "height" 键）
+    out = _eval(rule, [_lying_det()], "fall10", 100.4, "h_after")
+    assert len(out) == 1
+    assert "height" not in out[0]["detail"]["fallen"][0]["indicators"]
     reset_runtime()
