@@ -696,7 +696,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
             if weights["height"]:
                 body_h = m["bodyHeight"]  # 关键点置信度不足时为 None，直接跳过，不用 bbox 顶替
                 torso = m["torsoLength"]
-                if body_h and torso and torso > 0:
+                if body_h and torso:
                     ratio = body_h / torso
                     indicators["height"] = round(ratio, 4)
                     if ratio < conf["body_torso_ratio"]:
@@ -743,6 +743,14 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 })
             else:
                 tr["since"] = None
+                # okFrames 统计的是该 track 迄今观察到的「非跌倒」帧数，只要本帧
+                # 综合判定不是跌倒就无条件 +1，与 weights["height"]（身高比指标
+                # 是否参与计分）无关——这是有意的解耦（架构改进，非疏漏）：冷启动
+                # 门控的意图是区分「刚摔倒」与「本来就是这个姿势」，这个意图本身
+                # 与身高比指标是否开启无关。回归测试见
+                # test_fall_okframes_decoupled_from_height_weight_gate（下方），
+                # 不要为了「贴近旧实现」把这里改回只在 weights["height"] 非零时
+                # 才自增。
                 tr["okFrames"] += 1
 
         for tid in list(tracks):

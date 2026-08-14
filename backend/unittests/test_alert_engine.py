@@ -518,6 +518,65 @@ def test_fall_cold_start_gate_exempts_speed_weight_disabled():
     reset_runtime()
 
 
+def _decoupled_trigger_det(track_id=1, hip_y=260.0, conf=0.9):
+    """躯干角>60°+头部高度>阈值两指标凑够 min_score，但髋部纵坐标与调用方传入的
+    上一帧保持一致（v=0，不产生下坠证据）；用于验证 okFrames 与
+    weights["height"] 解耦后的冷启动门控行为（见
+    test_fall_okframes_decoupled_from_height_weight_gate）。"""
+    hip_x = 320.0
+    kp = [[hip_x, hip_y, conf] for _ in range(17)]
+    kp[5] = [hip_x + 130.0, hip_y - 20.0, conf]
+    kp[6] = [hip_x + 130.0, hip_y + 20.0, conf]
+    kp[11] = [hip_x - 15.0, hip_y, conf]
+    kp[12] = [hip_x + 15.0, hip_y, conf]
+    kp[0] = [hip_x + 150.0, 400.0, conf]  # 鼻部贴近画面底部（noseY/fh=400/480≈0.833>0.75）
+    kp[15] = [hip_x + 200.0, hip_y - 10.0, conf]
+    kp[16] = [hip_x + 200.0, hip_y + 10.0, conf]
+    return {"className": "person", "confidence": conf, "trackId": track_id,
+            "bbox": [hip_x - 30.0, hip_y - 60.0, hip_x + 230.0, hip_y + 60.0], "keypoints": kp}
+
+
+def test_fall_okframes_decoupled_from_height_weight_gate():
+    """okFrames（冷启动门控的「非跌倒帧数」计数器）与 weights["height"]（身高比
+    指标是否参与计分）解耦，是经代码审查确认的架构改进而非回归：旧实现里
+    standHist 只在 weights["height"] 非零时才会被追加（身高比指标块内才会给
+    pending_stand_h 赋值），所以 weights.height=0 时旧 standHist 恒为空、冷启动
+    门控恒生效；新实现的 okFrames 在「非跌倒」分支无条件自增，与
+    weights["height"] 是否开启无关。门控的设计意图从来是区分「刚摔倒」与
+    「本来就是那个姿势」，这个意图与身高比指标是否参与计分无关，因此新行为是
+    有意的解耦。此测试把这一预期行为固化为回归用例，防止未来被误当作 bug
+    「修复」回耦合状态而不被发现（鉴别力已人工验证：临时把 okFrames 自增改成
+    `if weights["height"]: tr["okFrames"] += 1` 后，本测试 FAIL；还原后 PASS）。
+
+    序列：weights.height=0（身高比关闭），camera 模式（不豁免门控）；先喂 3 帧
+    站立（非跌倒姿态，各用不同 frame_token）让 okFrames 累计到 3；第 4 帧躯干角
+    +头部高度两指标凑够 min_score=2，但刻意保持髋部纵坐标与前一帧一致（v=0，
+    没有下坠证据）。若门控仍生效（旧耦合行为），这一帧会被拦截、不触发；解耦
+    后 okFrames 已达 3，门控不再生效，应当直接触发——这正是新行为。
+    """
+    reset_runtime("fall_decouple")
+    rule = _fall_rule({
+        "weights": {"trunk": 1, "speed": 1, "height": 0, "head": 1},
+        "min_score": 2,
+        "consecutive_frames": 1,
+        "cooldown_sec": 0,
+    }, rid=120)
+    hip_y = 260.0
+    for i in range(3):
+        out = _eval(rule, [_standing_det(hip_y=hip_y, nose_y=60.0)], "fall_decouple",
+                     100.0 + i * 0.1, f"ok{i}", source_type="camera")
+        assert out == []
+    out = _eval(rule, [_decoupled_trigger_det(hip_y=hip_y)], "fall_decouple",
+                100.3, "trigger", source_type="camera")
+    assert len(out) == 1
+    fallen = out[0]["detail"]["fallen"][0]
+    assert fallen["indicators"]["trunk"] > 60
+    assert fallen["indicators"]["head"] > 0.75
+    assert "height" not in fallen["indicators"]  # weights.height=0，指标块整体跳过
+    assert fallen["indicators"].get("speed", 0) <= 0.5  # 无下坠证据，靠门控解耦通过
+    reset_runtime()
+
+
 def _photo_lying_det(track_id=1, conf=0.9):
     """贴近根因实测的卧倒单帧几何：躯干角≈83.3°，bodyHeight/torsoLength≈0.63
     （对应根因表格 fall-images.jpg 实测：躯干角 83.3°，肩踝纵向跨度/躯干长 0.63）。
