@@ -299,3 +299,53 @@ def test_fall_isolates_two_tracks():
     assert [f["trackId"] for f in out[0]["detail"]["fallen"]] == [1]
     assert out[0]["detail"]["fallenCount"] == 1
     reset_runtime()
+
+
+from services.alert_engine import fall_detections
+
+
+def test_fall_detections_returns_synthetic_box():
+    reset_runtime("fall5")
+    rule = _fall_rule({"consecutive_frames": 1}, rid=95)
+    for i in range(3):
+        _eval(rule, [_standing_det()], "fall5", 100.0 + i * 0.1, f"b{i}")
+    dets = [_lying_det()]
+    _eval(rule, dets, "fall5", 100.4, "b9")
+    boxes = fall_detections([rule], dets, source_key="fall5", frame_width=640,
+                            frame_height=480, frame_token="b9", now_ts=100.4)
+    assert len(boxes) == 1
+    box = boxes[0]
+    assert box["className"] == "fall"
+    assert box["synthetic"] is True
+    assert len(box["bbox"]) == 4
+    assert box["trackId"] == 1
+    assert box["ruleKey"] == "fall-detection"
+    assert set(box["indicators"]) >= {"trunk", "height", "head"}
+    reset_runtime()
+
+
+def test_fall_frame_token_is_idempotent():
+    reset_runtime("fall6")
+    rule = _fall_rule({"consecutive_frames": 1}, rid=96)
+    for i in range(3):
+        _eval(rule, [_standing_det()], "fall6", 100.0 + i * 0.1, f"c{i}")
+    dets = [_lying_det()]
+    _eval(rule, dets, "fall6", 100.4, "c9")
+    first = fall_detections([rule], dets, source_key="fall6", frame_width=640,
+                            frame_height=480, frame_token="c9", now_ts=100.4)
+    active_overlay_style([rule], dets, frame_width=640, frame_height=480,
+                         source_key="fall6", frame_token="c9")
+    second = fall_detections([rule], dets, source_key="fall6", frame_width=640,
+                             frame_height=480, frame_token="c9", now_ts=100.4)
+    assert first[0]["indicators"]["speed"] == second[0]["indicators"]["speed"]
+    reset_runtime()
+
+
+def test_fall_detections_empty_when_no_fall():
+    reset_runtime("fall7")
+    rule = _fall_rule({"consecutive_frames": 1}, rid=97)
+    dets = [_standing_det()]
+    _eval(rule, dets, "fall7", 100.0, "d1")
+    assert fall_detections([rule], dets, source_key="fall7", frame_width=640,
+                           frame_height=480, frame_token="d1", now_ts=100.0) == []
+    reset_runtime()

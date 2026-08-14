@@ -724,6 +724,58 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
         return detail
 
 
+def fall_detections(
+    rules,
+    detections,
+    *,
+    source_key: str = "default",
+    frame_width: float | None = None,
+    frame_height: float | None = None,
+    frame_token: str | None = None,
+    now_ts: float | None = None,
+) -> list[dict]:
+    """当前帧判定为跌倒的人 -> className="fall" 合成检测框（无防抖，与叠加同语义）。
+
+    同一 trackId 被多条规则命中时保留 fallScore 最高的一条。
+    """
+    eval_ctx = {
+        "source_key": source_key,
+        "frame_width": frame_width,
+        "frame_height": frame_height,
+        "frame_token": frame_token,
+        "now_ts": now_ts,
+    }
+    best: dict[int, dict] = {}
+    for rule in rules or []:
+        status = rule.status if hasattr(rule, "status") else rule.get("status", "0")
+        if status != "0":
+            continue
+        rtype = rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")
+        if rtype != "fall_detection":
+            continue
+        cfg = rule.config() if hasattr(rule, "config") else (rule.get("config") or {})
+        detail = _eval_fall_detection(rule, cfg, detections, eval_ctx)
+        if not detail:
+            continue
+        rkey = rule.rule_key if hasattr(rule, "rule_key") else rule.get("ruleKey", "")
+        for f in detail.get("fallen") or []:
+            tid = f.get("trackId")
+            prev = best.get(tid)
+            if prev is not None and prev["fallScore"] >= f["fallScore"]:
+                continue
+            best[tid] = {
+                "className": "fall",
+                "confidence": f["confidence"],
+                "bbox": f["bbox"],
+                "trackId": tid,
+                "synthetic": True,
+                "fallScore": f["fallScore"],
+                "indicators": f["indicators"],
+                "ruleKey": rkey,
+            }
+    return list(best.values())
+
+
 def _condition_met(rule, detections: list[dict], ctx: dict | None = None) -> dict | None:
     cfg = rule.config() if hasattr(rule, "config") else (rule.get("config") or {})
     rtype = rule.rule_type if hasattr(rule, "rule_type") else rule.get("ruleType")
