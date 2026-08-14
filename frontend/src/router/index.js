@@ -23,6 +23,7 @@ const routes = [
       { path: 'ai/face', name: 'aiFace', component: () => import('../views/ai/face/index.vue'), meta: { title: '人脸识别' } },
       { path: 'ai/reid', name: 'aiReid', component: () => import('../views/ai/reid/index.vue'), meta: { title: '行人重识别' } },
       { path: 'ai/handpose', name: 'aiHandpose', component: () => import('../views/ai/handpose/index.vue'), meta: { title: '手势识别' } },
+      { path: 'ai/fall', name: 'aiFall', component: () => import('../views/ai/fall/index.vue'), meta: { title: '跌倒检测' } },
       { path: 'ai/alert', name: 'aiAlert', component: () => import('../views/ai/alert/index.vue'), meta: { title: '检测告警' } },
       { path: 'ai/text', name: 'aiText', component: () => import('../views/ai/text/index.vue'), meta: { title: '文本分析' } },
       { path: 'ai/imgcls', name: 'aiImgcls', component: () => import('../views/ai/imgcls/index.vue'), meta: { title: '图像分类' } },
