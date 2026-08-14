@@ -102,9 +102,11 @@ def detect():
     width = result.get("width")
     height = result.get("height")
     rules = load_enabled_alert_rules(rule_keys)
+    kp_min_conf = _min_kp_conf(rules)
     detections = build_person_detections(
-        result.get("persons") or [], width, height, _min_kp_conf(rules))
-    assign_track_ids(detections, source_key, max_age=_max_track_max_age(rules))
+        result.get("persons") or [], width, height, kp_min_conf)
+    assign_track_ids(
+        detections, source_key, max_age=_max_track_max_age(rules), kp_min_conf=kp_min_conf)
 
     data = {
         "persons": result.get("persons") or [],

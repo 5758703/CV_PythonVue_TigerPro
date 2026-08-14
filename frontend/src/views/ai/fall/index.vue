@@ -98,7 +98,12 @@ const SKELETON = [
   [11, 13], [13, 15], [12, 14], [14, 16], [0, 1], [0, 2], [1, 3], [2, 4],
 ]
 const KP_CONF = 0.3
-const SOURCE_KEY = 'fall-live'
+// 摄像头模式与图片模式各用独立的 sourceKey：两者共享同一个 key 会导致
+// assign_track_ids 把互不相干的人用 IoU 匹配成同一 trackId、站立基线用
+// 上一张图的像素尺度当这张图的基线、质心速度用两次点击的墙钟间隔当 dt——
+// 该间隔与真实运动完全无关，速度指标数值毫无意义（M-3）。
+const SOURCE_KEY_CAMERA = 'fall-live'
+const SOURCE_KEY_IMAGE = 'fall-image'
 
 const mode = ref('image')
 const modelOptions = ref([])
@@ -142,6 +147,7 @@ const loadModels = async () => {
 
 const onPick = (uploadFile) => {
   file.value = uploadFile.raw
+  if (resultImg.value) URL.revokeObjectURL(resultImg.value)
   resultImg.value = URL.createObjectURL(uploadFile.raw)
 }
 
@@ -160,7 +166,7 @@ const buildForm = (blob, name) => {
   fd.append('file', blob, name)
   fd.append('modelId', modelId.value)
   fd.append('conf', conf.value)
-  fd.append('sourceKey', SOURCE_KEY)
+  fd.append('sourceKey', mode.value === 'camera' ? SOURCE_KEY_CAMERA : SOURCE_KEY_IMAGE)
   fd.append('sourceType', mode.value === 'camera' ? 'camera' : 'image')
   fd.append('persist', persist.value ? '1' : '0')
   fd.append('draw', '0')
@@ -170,11 +176,15 @@ const buildForm = (blob, name) => {
 const runImage = async () => {
   running.value = true
   try {
+    // 图片模式每次检测前先重置该 sourceKey 的连续帧/冷却/跟踪状态：图片模式面向
+    // 互不相干的独立照片，不应共享跨帧 trackId、站立基线与质心速度状态（M-3）。
+    // 副作用：每次检测都是「无上一帧」的冷启动，质心速度指标恒不可用。
+    await fallApi.resetRuntime({ sourceKey: SOURCE_KEY_IMAGE })
     const res = await fallApi.detect(buildForm(file.value, file.value.name))
     applyData(res.data)
     drawStill()
   } catch (e) {
-    ElMessage.error('跌倒检测失败')
+    ElMessage.error(e.response?.data?.message || '跌倒检测失败')
   } finally {
     running.value = false
   }
@@ -283,12 +293,13 @@ const camStop = async () => {
   camRunning.value = false
   if (fpsTimer) { clearInterval(fpsTimer); fpsTimer = null }
   if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null }
-  try { await fallApi.resetRuntime({ sourceKey: SOURCE_KEY }) } catch (e) { /* 忽略 */ }
+  try { await fallApi.resetRuntime({ sourceKey: SOURCE_KEY_CAMERA }) } catch (e) { /* 忽略 */ }
 }
 
 const clearAll = () => {
   camStop()
   file.value = null
+  if (resultImg.value) URL.revokeObjectURL(resultImg.value)
   resultImg.value = ''
   personCount.value = 0
   fallCount.value = 0

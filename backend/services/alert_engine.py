@@ -592,8 +592,14 @@ def fall_config(cfg: dict) -> dict:
             weights[k] = float(raw_w.get(k, 1))
         except (TypeError, ValueError):
             weights[k] = 1.0
-    out["weights"] = weights
+    out["weights"] = {k: max(0.0, v) for k, v in weights.items()}
     out["stand_baseline_window"] = max(3, out["stand_baseline_window"])
+    # min_score=0 会让任何一帧都判定跌倒（哪怕站立），track_max_age=0 会让目标每帧
+    # 都被当作新出现（跟踪永远建立不起来）；负权重会对该指标反向减分。三者都只能
+    # 通过 PUT /api/ai/alert/rules/:id 直传 config 绕过前端 el-input-number 的 :min
+    # 校验，这里补一道服务端下限兜底。
+    out["min_score"] = max(0.5, out["min_score"])
+    out["track_max_age"] = max(1, out["track_max_age"])
     return out
 
 
@@ -653,6 +659,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
 
             score = 0.0
             indicators = {}
+            speed_hit = False  # 质心速度指标是否实际越阈（= 真正的「下坠证据」）
 
             # 指标 1：躯干角（肩中点->髋中点 与垂直方向夹角）
             if weights["trunk"] and m["valid"]["trunk"]:
@@ -668,6 +675,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                     indicators["speed"] = round(v, 4)
                     if v > conf["centroid_speed"]:
                         score += weights["speed"]
+                        speed_hit = True
                 tr["hip"] = (now, m["hipY"])
 
             # 指标 3：身高比（当前躯干高度 / 站立基线）
@@ -697,6 +705,17 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                     score += weights["head"]
 
             if score >= conf["min_score"]:
+                # 冷启动自锁防护：该 track 的站立基线尚未建立（< 3 帧非跌倒历史，
+                # 身高比指标本就还不可用）且这是本次跌倒状态的首次判定（since 为空）
+                # 时，要求质心速度指标本帧确实越阈（真实下坠证据），否则不判定。
+                # 目的：避免「一直保持同一姿态」的目标（如坐在低矮沙发上、躯干角
+                # 恰好越阈）被误判为跌倒后，因为「一直被判定为跌倒」永远拿不到
+                # 非跌倒帧、基线永远建不起来，从而每次冷却后重复触发（误报自锁）。
+                # 只在「首次触发」这一帧把关：一旦 since 已置位（事件已经开始），
+                # 后续卧地不动、无下坠的帧不再受此门控约束，否则真实跌倒也会被拦截。
+                if tr["since"] is None and len(tr["standHist"]) < 3 and not speed_hit:
+                    tr["since"] = None
+                    continue
                 if tr["since"] is None:
                     tr["since"] = now
                 fallen.append({
@@ -1062,6 +1081,8 @@ def evaluate_rules(
         # 越线/区域越界/陌生人：瞬时或低频事件，默认连续 1～2 帧
         if rtype in ("line_crossing", "zone_crossing"):
             default_consec = 1
+        elif rtype == "fall_detection":
+            default_consec = 8
         elif rtype == "unmatched_face":
             default_consec = 2
         else:

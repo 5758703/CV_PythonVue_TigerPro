@@ -99,8 +99,10 @@ def build_person_detections(persons, width, height, kp_min_conf: float = 0.3) ->
             continue
         xs = [q[0] for q in pts]
         ys = [q[1] for q in pts]
-        pad_x = (max(xs) - min(xs)) * 0.05
-        pad_y = (max(ys) - min(ys)) * 0.05
+        # 单点（或多点重合）时外扩 5% 得到的 pad 为 0，会产出零宽高 bbox，
+        # 导致下游 IoU 恒为 0、跟踪必然失配；给 pad 设一个像素下限兜底。
+        pad_x = (max(xs) - min(xs)) * 0.05 or 2.0
+        pad_y = (max(ys) - min(ys)) * 0.05 or 2.0
         x1 = max(0.0, min(xs) - pad_x)
         y1 = max(0.0, min(ys) - pad_y)
         x2 = max(xs) + pad_x
@@ -141,10 +143,16 @@ def _iou(a, b) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def _track_anchor(det: dict):
-    """跟踪锚点：优先髋部中点（匹配阶段不设置信度门限），退化为 bbox 中心。"""
+def _track_anchor(det: dict, kp_min_conf: float = 1e-6):
+    """跟踪锚点：优先髋部中点，退化为 bbox 中心。
+
+    kp_min_conf 默认取一个极小正数（而非 0），只为剔除「未检出」的哨兵置信度
+    （ultralytics 对未检出关键点原样透传 conf=0.0）；真正的置信度门限由调用方
+    （通常是规则里配置的 kp_min_conf）传入，确保跟踪锚点与指标计算对同一批
+    低置信度点保持一致的取舍，否则髋部间歇掉检时锚点会跳到画面原点造成误换 ID。
+    """
     kp = det.get("keypoints") or []
-    hip = _mid(_point(kp, KP_L_HIP, 0.0), _point(kp, KP_R_HIP, 0.0))
+    hip = _mid(_point(kp, KP_L_HIP, kp_min_conf), _point(kp, KP_R_HIP, kp_min_conf))
     if hip:
         return hip
     bbox = det.get("bbox") or []
@@ -161,13 +169,24 @@ def _bbox_long_side(bbox) -> float:
                abs(float(bbox[3]) - float(bbox[1])), 1.0)
 
 
-def assign_track_ids(detections, source_key: str = "default", max_age: int = 15):
-    """按髋部质心最近邻 + IoU 双条件匹配上一帧，原地写入 trackId。"""
+def assign_track_ids(
+    detections, source_key: str = "default", max_age: int = 15, kp_min_conf: float = 1e-6
+):
+    """按髋部质心最近邻 + IoU 双条件匹配上一帧，原地写入 trackId。
+
+    kp_min_conf 透传给 _track_anchor：调用方（如 routes/fall.py）传入规则里配置
+    的 kp_min_conf 时，跟踪锚点与后续指标计算使用一致的置信度门限；不传时默认
+    极小下限，仅用于剔除 conf==0 的哨兵值。
+    """
     dets = detections or []
     try:
         max_age = int(max_age)
     except (TypeError, ValueError):
         max_age = 15
+    try:
+        kp_min_conf = float(kp_min_conf)
+    except (TypeError, ValueError):
+        kp_min_conf = 1e-6
 
     with _tracker_lock:
         st = _trackers.setdefault(source_key or "default", {"next_id": 1, "tracks": {}})
@@ -175,7 +194,7 @@ def assign_track_ids(detections, source_key: str = "default", max_age: int = 15)
 
         pairs = []
         for i, d in enumerate(dets):
-            anchor = _track_anchor(d)
+            anchor = _track_anchor(d, kp_min_conf)
             limit = _bbox_long_side(d.get("bbox")) * _MATCH_DIST_FACTOR
             for tid, tr in tracks.items():
                 dist = math.dist(anchor, tr["anchor"])
@@ -200,7 +219,7 @@ def assign_track_ids(detections, source_key: str = "default", max_age: int = 15)
                 tid = st["next_id"]
                 st["next_id"] += 1
             tracks[tid] = {
-                "anchor": _track_anchor(d),
+                "anchor": _track_anchor(d, kp_min_conf),
                 "bbox": list(d.get("bbox") or []),
                 "miss": 0,
             }

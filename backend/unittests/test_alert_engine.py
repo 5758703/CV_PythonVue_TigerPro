@@ -1,5 +1,6 @@
 """告警规则引擎单测。"""
 import json
+import math
 import types
 
 from services.alert_engine import (
@@ -279,6 +280,59 @@ def test_fall_single_indicator_does_not_trigger():
     reset_runtime()
 
 
+def _bending_det(track_id=1, hip_y=260.0, theta_deg=65.0, conf=0.9):
+    """缓慢弯腰：仅躯干角越阈，髋部不下坠（速度=0）、鼻部仍在画面上部、
+    肩→踝纵向跨度相对站立基线未显著缩短（身高比未低于阈值）。
+
+    躯干长度固定为 140（与 _standing_det 的肩髋距一致），围绕髋部旋转 theta_deg，
+    鼻子沿同一方向延伸到距髋 200（= 躯干140 + 站立时鼻肩差60）处，双脚不动。
+    """
+    theta = math.radians(theta_deg)
+    hip_x = 320.0
+    trunk_len = 140.0
+    dx = trunk_len * math.sin(theta)
+    dy = -trunk_len * math.cos(theta)
+    shoulder_x = hip_x + dx
+    shoulder_y = hip_y + dy
+    nose_dist = trunk_len + 60.0
+    nose_x = hip_x + nose_dist * math.sin(theta)
+    nose_y = hip_y - nose_dist * math.cos(theta)
+    kp = [[hip_x, hip_y, conf] for _ in range(17)]
+    kp[0] = [nose_x, nose_y, conf]
+    kp[5] = [shoulder_x - 15.0, shoulder_y, conf]
+    kp[6] = [shoulder_x + 15.0, shoulder_y, conf]
+    kp[11] = [hip_x - 15.0, hip_y, conf]
+    kp[12] = [hip_x + 15.0, hip_y, conf]
+    kp[15] = [hip_x - 15.0, hip_y + 180.0, conf]
+    kp[16] = [hip_x + 15.0, hip_y + 180.0, conf]
+    return {"className": "person", "confidence": conf, "trackId": track_id,
+            "bbox": [200.0, hip_y - 220.0, 440.0, hip_y + 210.0], "keypoints": kp}
+
+
+def test_fall_slow_bend_only_trunk_indicator_does_not_trigger():
+    """四指标全开、min_score=2 时，仅躯干角越阈的缓慢弯腰不得触发——这是对抗
+    「老人主动弯腰/躺下」误报的核心防线，必须验证是「只有一个指标命中」而不是
+    「凑分不够」才不触发。四指标算术验算（hip_y=260, theta=65°, frame 640x480）：
+      trunk：dx=140*sin65°≈126.9，dy=-140*cos65°≈-59.16，
+             trunkAngle=atan2(126.9,59.16)=65° > 60° 阈值 → 命中(+1)
+      speed：髋部三帧站立后本帧仍在 hip_y=260，位移为 0 → v=0 < 0.5 阈值 → 不命中
+      height：肩y=260-59.16=200.84，踝y=260+180=440，bodyHeight=|200.84-440|=239.16；
+             基线（3 帧站立）body_height=320；ratio=239.16/320≈0.747，
+             未低于 0.5 阈值 → 不命中
+      head：鼻y=260-200*cos65°≈175.48，head_ratio=175.48/480≈0.366，
+            未高于 0.75 阈值 → 不命中
+      总分=1（仅 trunk）< min_score(2) → 不触发
+    """
+    reset_runtime("fall2b")
+    rule = _fall_rule({"consecutive_frames": 1})
+    # 前三帧站立：建立身高比基线（body_height=320）
+    for i in range(3):
+        assert _eval(rule, [_standing_det()], "fall2b", 100.0 + i * 0.1, f"bend{i}") == []
+    out = _eval(rule, [_bending_det()], "fall2b", 100.3, "bend3")
+    assert out == []
+    reset_runtime()
+
+
 def test_fall_low_confidence_keypoints_no_trigger():
     reset_runtime("fall3")
     rule = _fall_rule({"consecutive_frames": 1})
@@ -387,6 +441,83 @@ def test_fall_title_message():
     reset_runtime()
 
 
+def test_fall_cold_start_without_fall_evidence_never_triggers():
+    """基线未建立（站立基线帧数 < 3，从未有过「非跌倒」帧）且从无下坠证据（质心
+    速度指标从未越阈）时，即便躯干角+头部两指标凑够 min_score，也不得判定跌倒。
+
+    覆盖场景：取流开始时目标就已处于当前姿态（如坐在低矮沙发上），躯干角刚好
+    过 60° 且鼻部偏下，若不加此门控，会被误判为跌倒 → 该 track 因为「一直被判定
+    为跌倒」永远拿不到非跌倒帧 → 站立基线永远建不起来 → 每次 cooldown_sec 后
+    复触，形成误报自锁。此处每帧姿态、时间戳都保持完全不变（无下坠动作），
+    验证该场景下永不触发。
+    """
+    reset_runtime("fall_cold1")
+    rule = _fall_rule({"consecutive_frames": 1})
+    for i in range(6):
+        out = _eval(rule, [_lying_det()], "fall_cold1", 100.0 + i * 0.1, f"cold{i}")
+        assert out == []
+    reset_runtime()
+
+
+def test_fall_cold_start_with_fast_drop_still_triggers():
+    """基线未建立，但存在真实下坠（质心速度越阈）时应正常触发，且一旦跌倒事件
+    已经开始（tr["since"] 已置位），后续卧地不动（无下坠）的帧不应被冷启动门控
+    重新拦截——否则真实跌倒也会被该门控误伤，无法凑满 consecutive_frames。
+
+    序列：仅 1 帧站立（standHist 远未达到 3 帧基线门槛）→ 快速下坠一帧（髋部
+    从 260 猛降到 430，dt=0.1s，v=170/0.1/480≈3.54 远超 0.5 阈值，是「下坠证据」）
+    → 两帧卧地不动（v≈0，但事件已开始，不应被二次拦截）。consecutive_frames=3。
+    """
+    reset_runtime("fall_cold2")
+    rule = _fall_rule({"consecutive_frames": 3})
+    assert _eval(rule, [_standing_det()], "fall_cold2", 100.0, "drop0") == []
+    assert _eval(rule, [_lying_det()], "fall_cold2", 100.1, "drop1") == []  # streak 1/3，下坠证据触发首帧判定
+    assert _eval(rule, [_lying_det()], "fall_cold2", 100.2, "drop2") == []  # streak 2/3，无下坠但事件已开始
+    out = _eval(rule, [_lying_det()], "fall_cold2", 100.3, "drop3")  # streak 3/3 → 触发
+    assert len(out) == 1
+    reset_runtime()
+
+
+def test_fall_config_clamps_min_score_track_age_and_weights():
+    """PUT /api/ai/alert/rules/:id 可直传 config，绕过前端 el-input-number 的 :min
+    校验；min_score=0 会让站立当帧即判跌倒，track_max_age=0 会让跟踪永远建立不起来，
+    负权重会反向减分——三者都需要服务端下限兜底（M-2）。"""
+    from services.alert_engine import fall_config
+
+    out = fall_config({
+        "min_score": 0,
+        "track_max_age": 0,
+        "weights": {"trunk": -1, "speed": 1, "height": 1, "head": 1},
+    })
+    assert out["min_score"] >= 0.5
+    assert out["track_max_age"] >= 1
+    assert out["weights"]["trunk"] >= 0.0
+
+
+def test_fall_default_consecutive_frames_is_eight_when_config_missing_key():
+    """引擎兜底的 default_consec 分支：config 缺 consecutive_frames 时，fall_detection
+    应回落到 8（与 seed 默认值、前端一致），而不是与其它规则共用的 2（M-5）。
+
+    先跑 3 帧站立建立基线，绕开冷启动门控（本测试目标是 default_consec 兜底值，
+    不是冷启动门控），再跑 8 帧卧地：前 7 帧只累计 streak，第 8 帧才触发。
+    """
+    reset_runtime("fall_m5")
+    cfg = {
+        "trunk_angle_deg": 60, "centroid_speed": 0.5, "height_ratio": 0.5,
+        "head_y_ratio": 0.75, "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 1},
+        "min_score": 2, "kp_min_conf": 0.3, "stand_baseline_window": 90,
+        "track_max_age": 15, "cooldown_sec": 0,
+    }  # 故意不含 consecutive_frames，走引擎兜底默认值分支
+    rule = _rule("fall-detection", "fall_detection", cfg, rid=103)
+    for i in range(3):
+        assert _eval(rule, [_standing_det()], "fall_m5", 100.0 + i * 0.1, f"base{i}") == []
+    for i in range(7):
+        assert _eval(rule, [_lying_det()], "fall_m5", 100.3 + i * 0.1, f"def{i}") == []
+    out = _eval(rule, [_lying_det()], "fall_m5", 101.0, "def7")
+    assert len(out) == 1
+    reset_runtime()
+
+
 def test_reset_runtime_clears_fall_tracker():
     reset_tracker()
     reset_runtime("fall10")
@@ -400,7 +531,10 @@ def test_reset_runtime_clears_fall_tracker():
     assert "height" in out_before[0]["detail"]["fallen"][0]["indicators"]
     # 复位跟踪器与基线
     reset_runtime("fall10")
-    # 复位后基线清空：卧地首帧因基线未建立，身高比指标不参与计分（无 "height" 键）
+    # 复位后基线清空且是本次跌倒状态的首次判定：先给一帧站立（seed 髋部位置，
+    # 不足以建立基线，standHist 长度仍 < 3），再给一帧快速下坠（真实速度证据，
+    # 满足冷启动门控），验证身高比指标因基线未建立而不参与计分（无 "height" 键）
+    _eval(rule, [_standing_det()], "fall10", 100.35, "h_seed")
     out = _eval(rule, [_lying_det()], "fall10", 100.4, "h_after")
     assert len(out) == 1
     assert "height" not in out[0]["detail"]["fallen"][0]["indicators"]
