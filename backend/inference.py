@@ -4,6 +4,7 @@
 ultralytics / torch 体积大，全部惰性导入，加快应用启动。
 """
 import base64
+import importlib.util
 import json
 import math
 import os
@@ -1023,6 +1024,25 @@ def _load_legacy_yolov5_model(abs_path: str):
     return model
 
 
+_openvino_available_cache = None  # None=未探测；True/False=探测结果缓存
+
+
+def _openvino_available() -> bool:
+    """探测当前解释器是否真的能导入 openvino（结果缓存，避免热路径重复探测）。
+
+    用 importlib.util.find_spec 而非 `try: import openvino`：前者不会把包真正
+    加载进内存，开销更小。某些损坏安装下 find_spec 本身也可能抛
+    ValueError/ModuleNotFoundError，需要兜底为不可用。
+    """
+    global _openvino_available_cache
+    if _openvino_available_cache is None:
+        try:
+            _openvino_available_cache = importlib.util.find_spec("openvino") is not None
+        except (ValueError, ModuleNotFoundError, ImportError):
+            _openvino_available_cache = False
+    return _openvino_available_cache
+
+
 def _yolo_infer_settings():
     backend = (os.getenv("YOLO_INFER_BACKEND") or "auto").strip().lower()
     precision = (os.getenv("YOLO_OPENVINO_PRECISION") or "fp16").strip().lower()
@@ -1210,7 +1230,19 @@ def _get_model(abs_path):
                 except Exception:  # noqa: BLE001
                     # onnx 损坏/算子不支持等：继续走 OpenVINO/PyTorch 原路径
                     model = None
-        use_ov = model is None and backend in ("auto", "openvino") and str(abs_path).lower().endswith((".pt", ".pth"))
+        ov_applicable = (
+            model is None
+            and backend in ("auto", "openvino")
+            and str(abs_path).lower().endswith((".pt", ".pth"))
+        )
+        if ov_applicable and backend == "openvino" and not _openvino_available():
+            # 用户显式指定 openvino 后端，环境却没装：不要静默回退 PyTorch，
+            # 否则用户会误以为在用 OpenVINO 加速。
+            raise RuntimeError(
+                "OpenVINO 加载失败：当前运行环境未安装 openvino 包。"
+                "请执行 pip install openvino，或将 YOLO_INFER_BACKEND 设为 auto 以自动回退 PyTorch。"
+            )
+        use_ov = ov_applicable and _openvino_available()
         if use_ov:
             try:
                 ov_src = _ensure_openvino_artifact(abs_path, precision=precision, imgsz=imgsz)
