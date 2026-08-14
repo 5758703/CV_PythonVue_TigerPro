@@ -241,8 +241,8 @@ def _lying_det(track_id=1, y=430.0, conf=0.9):
     kp[6] = [240.0, y + 10.0, conf]
     kp[11] = [360.0, y - 10.0, conf]
     kp[12] = [360.0, y + 10.0, conf]
-    kp[15] = [460.0, y - 5.0, conf]
-    kp[16] = [460.0, y + 5.0, conf]
+    kp[15] = [460.0, y - 40.0, conf]
+    kp[16] = [460.0, y - 30.0, conf]
     return {"className": "person", "confidence": 0.9, "trackId": track_id,
             "bbox": [190.0, y - 30.0, 470.0, y + 30.0], "keypoints": kp}
 

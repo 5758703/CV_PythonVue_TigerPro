@@ -583,17 +583,6 @@ def fall_config(cfg: dict) -> dict:
     return out
 
 
-def _fall_bbox_height(det: dict) -> float | None:
-    bbox = det.get("bbox") or []
-    if len(bbox) < 4:
-        return None
-    try:
-        h = abs(float(bbox[3]) - float(bbox[1]))
-    except (TypeError, ValueError):
-        return None
-    return h or None
-
-
 def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | None) -> dict | None:
     """姿态关键点四指标跌倒判定：躯干角 / 质心速度 / 身高比 / 头部高度。
 
@@ -668,8 +657,11 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 tr["hip"] = (now, m["hipY"])
 
             # 指标 3：身高比（当前躯干高度 / 站立基线）
+            # 本块只算比值/计分，不直接写基线——基线是否可信取决于本帧
+            # 综合判定结果（见下方 not-fallen 分支），而非本指标单独的态度。
+            pending_stand_h = None
             if weights["height"]:
-                body_h = m["bodyHeight"] or _fall_bbox_height(d)
+                body_h = m["bodyHeight"]  # 关键点置信度不足时为 None，直接跳过，不用 bbox 顶替
                 if body_h:
                     hist = tr["standHist"]
                     base = max(hist) if len(hist) >= 3 else None
@@ -679,11 +671,9 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                         if ratio < conf["height_ratio"]:
                             score += weights["height"]
                         else:
-                            hist.append(body_h)   # 仅站立姿态更新基线，避免倒地污染
+                            pending_stand_h = body_h  # 疑似站立，待整体判定确认后再计入基线
                     else:
-                        hist.append(body_h)
-                    if len(hist) > window:
-                        del hist[:-window]
+                        pending_stand_h = body_h  # 基线冷启动：先暂存，同样待整体判定确认
 
             # 指标 4：头部离地高度
             if weights["head"] and m["valid"]["nose"] and fh:
@@ -705,6 +695,12 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 })
             else:
                 tr["since"] = None
+                # 仅整体判定为「非跌倒」时才把本帧身高计入站立基线，避免倒地污染
+                if pending_stand_h is not None:
+                    hist = tr["standHist"]
+                    hist.append(pending_stand_h)
+                    if len(hist) > window:
+                        del hist[:-window]
 
         for tid in list(tracks):
             if tid in live:
