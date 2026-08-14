@@ -600,6 +600,13 @@ def fall_config(cfg: dict) -> dict:
     # 校验，这里补一道服务端下限兜底。
     out["min_score"] = max(0.5, out["min_score"])
     out["track_max_age"] = max(1, out["track_max_age"])
+    # kp_min_conf<=0（同样只能靠直传 config 绕过前端 slider 的 :min="0.05"）会让
+    # I-1 的哨兵置信度 bug 原样复现：_track_anchor 用它做门限时 `0.0 >= 0.0` 恒真，
+    # 哨兵 [0,0,0] 会再次被当成真实锚点；build_person_detections 里同样的 kp_min_conf
+    # 还用于筛选纳入 bbox 计算的关键点，<=0 会让哨兵点也被纳入、把 bbox 拉向画面
+    # 原点。在这唯一的配置解析入口钳一道下限，_track_anchor/build_person_detections
+    # 两处消费者都自动受益，不需要各自防御。
+    out["kp_min_conf"] = max(1e-6, out["kp_min_conf"])
     return out
 
 
@@ -622,6 +629,10 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
     src = ctx.get("source_key") or "default"
     key = (rid, src)
     frame_token = ctx.get("frame_token")
+    # 图片模式：每次检测都是独立、无上一帧的单次判定（routes/fall.py 在每次
+    # /detect 前都会 reset-runtime 该 sourceKey），不存在「连续流误报自锁」，
+    # 冷启动门控不适用；摄像头模式（含未显式传值时的默认）保持原有门控行为。
+    source_type = str(ctx.get("source_type") or "camera").strip().lower() or "camera"
     try:
         now = float(ctx.get("now_ts")) if ctx.get("now_ts") is not None else time.time()
     except (TypeError, ValueError):
@@ -713,7 +724,17 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 # 非跌倒帧、基线永远建不起来，从而每次冷却后重复触发（误报自锁）。
                 # 只在「首次触发」这一帧把关：一旦 since 已置位（事件已经开始），
                 # 后续卧地不动、无下坠的帧不再受此门控约束，否则真实跌倒也会被拦截。
-                if tr["since"] is None and len(tr["standHist"]) < 3 and not speed_hit:
+                #
+                # 两处豁免（都不套用门控，直接按 score 判定）：
+                # 1. source_type == "image"：图片模式每次检测都是独立单帧、无
+                #    连续流意义下的误报自锁风险（routes/fall.py 每次 /detect 前
+                #    都会 reset-runtime 该 sourceKey，since/standHist 恒为空，
+                #    若仍套用门控会导致图片模式恒判定不触发——见回归修复记录）。
+                # 2. weights["speed"] <= 0：管理员已关闭速度指标，speed_hit 永远
+                #    无法为 True，再拿它当准入条件会让该 track 永久无法首次触发。
+                cold_start = tr["since"] is None and len(tr["standHist"]) < 3
+                gate_applies = cold_start and source_type != "image" and weights["speed"] > 0
+                if gate_applies and not speed_hit:
                     tr["since"] = None
                     continue
                 if tr["since"] is None:
@@ -766,10 +787,12 @@ def fall_detections(
     frame_height: float | None = None,
     frame_token: str | None = None,
     now_ts: float | None = None,
+    source_type: str | None = None,
 ) -> list[dict]:
     """当前帧判定为跌倒的人 -> className="fall" 合成检测框（无防抖，与叠加同语义）。
 
-    同一 trackId 被多条规则命中时保留 fallScore 最高的一条。
+    同一 trackId 被多条规则命中时保留 fallScore 最高的一条。source_type 透传给
+    _eval_fall_detection：图片模式（"image"）豁免冷启动门控，见该函数内注释。
     """
     eval_ctx = {
         "source_key": source_key,
@@ -777,6 +800,7 @@ def fall_detections(
         "frame_height": frame_height,
         "frame_token": frame_token,
         "now_ts": now_ts,
+        "source_type": source_type,
     }
     best: dict[int, dict] = {}
     for rule in rules or []:
@@ -955,8 +979,13 @@ def active_overlay_style(
     region: list | None = None,
     source_key: str = "default",
     frame_token: str | None = None,
+    source_type: str | None = None,
 ) -> dict | None:
-    """当前帧应显示的叠加样式（无防抖）。优先级：config.priority 升序。"""
+    """当前帧应显示的叠加样式（无防抖）。优先级：config.priority 升序。
+
+    source_type 透传给跌倒判定：图片模式（"image"）豁免冷启动门控，
+    见 _eval_fall_detection 内注释。
+    """
     eval_ctx = {
         "source_key": source_key,
         "frame_width": frame_width,
@@ -964,6 +993,7 @@ def active_overlay_style(
         "line": line,
         "region": region,
         "frame_token": frame_token,
+        "source_type": source_type,
     }
     matched: list[tuple[int, int, Any, dict]] = []
     for rule in rules or []:
@@ -1056,8 +1086,13 @@ def evaluate_rules(
     line: list | None = None,
     region: list | None = None,
     frame_token: str | None = None,
+    source_type: str | None = None,
 ) -> list[dict]:
-    """评估规则列表；满足连续帧 + 冷却则触发并可选持久化。"""
+    """评估规则列表；满足连续帧 + 冷却则触发并可选持久化。
+
+    source_type 透传给跌倒判定：图片模式（"image"）豁免冷启动门控，
+    见 _eval_fall_detection 内注释。
+    """
     now = float(now_ts) if now_ts is not None else time.time()
     triggered = []
     src = source_key or "default"
@@ -1069,6 +1104,7 @@ def evaluate_rules(
         "region": region,
         "frame_token": frame_token,
         "now_ts": now,
+        "source_type": source_type,
     }
 
     for rule in rules:

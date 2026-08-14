@@ -142,6 +142,11 @@ def detect():
         db.session.commit()
         return ev.to_dict()
 
+    # source_type 透传给引擎：图片模式（"image"）豁免跌倒判定的冷启动误报自锁
+    # 门控（见 alert_engine._eval_fall_detection）。三处调用都要传，保证同一帧
+    # 内 evaluate_rules / fall_detections / active_overlay_style 行为一致——
+    # 后两者虽然会命中 frame_token memo 直接复用缓存，但参数仍应一致，避免
+    # 未来 memo 逻辑变化时因参数不一致而产生难以复现的偏差。
     triggered = evaluate_rules(
         rules,
         detections,
@@ -150,6 +155,7 @@ def detect():
         frame_width=width,
         frame_height=height,
         frame_token=frame_token,
+        source_type=source_type,
     )
     boxes = fall_detections(
         rules,
@@ -158,6 +164,7 @@ def detect():
         frame_width=width,
         frame_height=height,
         frame_token=frame_token,
+        source_type=source_type,
     )
     overlay = active_overlay_style(
         rules,
@@ -167,6 +174,7 @@ def detect():
         frame_height=height,
         source_key=source_key,
         frame_token=frame_token,
+        source_type=source_type,
     )
     data["detections"] = detections + boxes
     data["triggered"] = triggered

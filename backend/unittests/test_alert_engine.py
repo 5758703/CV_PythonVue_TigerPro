@@ -249,9 +249,10 @@ def _lying_det(track_id=1, y=430.0, conf=0.9):
             "bbox": [190.0, y - 30.0, 470.0, y + 30.0], "keypoints": kp}
 
 
-def _eval(rule, dets, src, ts, token):
+def _eval(rule, dets, src, ts, token, source_type=None):
     return evaluate_rules([rule], dets, src, now_ts=ts,
-                          frame_width=640, frame_height=480, frame_token=token)
+                          frame_width=640, frame_height=480, frame_token=token,
+                          source_type=source_type)
 
 
 def test_fall_triggers_after_consecutive_frames():
@@ -478,6 +479,43 @@ def test_fall_cold_start_with_fast_drop_still_triggers():
     reset_runtime()
 
 
+def test_fall_cold_start_gate_exempts_image_source_type():
+    """图片模式（source_type="image"）豁免冷启动门控：每次检测都是独立单帧、
+    无上一帧、无基线，若仍套用门控会导致图片模式恒判定不触发（回归修复）。
+
+    用与 test_fall_cold_start_without_fall_evidence_never_triggers 完全相同的
+    「取流即已倒地、无下坠」序列，camera 不触发、image 触发——两条断言对比
+    才能证明豁免只影响 source_type，而不是把门控整个拆掉。
+    """
+    reset_runtime("fall_cold_cam")
+    rule_cam = _fall_rule({"consecutive_frames": 1}, rid=104)
+    out_cam = _eval(rule_cam, [_lying_det()], "fall_cold_cam", 100.0, "camsrc0",
+                     source_type="camera")
+    assert out_cam == []  # 摄像头模式：门控行为必须与之前一字不变
+    reset_runtime()
+
+    reset_runtime("fall_cold_img")
+    rule_img = _fall_rule({"consecutive_frames": 1}, rid=105)
+    out_img = _eval(rule_img, [_lying_det()], "fall_cold_img", 100.0, "imgsrc0",
+                     source_type="image")
+    assert len(out_img) == 1  # 图片模式：豁免门控，score>=min_score 当帧即触发
+    reset_runtime()
+
+
+def test_fall_cold_start_gate_exempts_speed_weight_disabled():
+    """weights.speed=0 时管理员已主动关闭速度指标，speed_hit 永远无法为 True，
+    再拿它当冷启动准入条件会让该 track 永久无法首次触发——门控需豁免这种配置。
+    """
+    reset_runtime("fall_cold_nospeed")
+    rule = _fall_rule({
+        "weights": {"trunk": 1, "speed": 0, "height": 1, "head": 1},
+        "consecutive_frames": 1,
+    }, rid=106)
+    out = _eval(rule, [_lying_det()], "fall_cold_nospeed", 100.0, "nospeed0")
+    assert len(out) == 1
+    reset_runtime()
+
+
 def test_fall_config_clamps_min_score_track_age_and_weights():
     """PUT /api/ai/alert/rules/:id 可直传 config，绕过前端 el-input-number 的 :min
     校验；min_score=0 会让站立当帧即判跌倒，track_max_age=0 会让跟踪永远建立不起来，
@@ -492,6 +530,17 @@ def test_fall_config_clamps_min_score_track_age_and_weights():
     assert out["min_score"] >= 0.5
     assert out["track_max_age"] >= 1
     assert out["weights"]["trunk"] >= 0.0
+
+
+def test_fall_config_clamps_kp_min_conf():
+    """kp_min_conf<=0 会让 I-1 的哨兵置信度 bug 原样复现（_track_anchor 的
+    `c >= min_conf` 判据在 min_conf<=0 时对 conf=0 的哨兵值恒真），也会让
+    build_person_detections 把哨兵点纳入 bbox 计算。config 解析入口需要下限
+    兜底（回归修复 Must-fix 3）。"""
+    from services.alert_engine import fall_config
+
+    assert fall_config({"kp_min_conf": 0})["kp_min_conf"] > 0
+    assert fall_config({"kp_min_conf": -0.5})["kp_min_conf"] > 0
 
 
 def test_fall_default_consecutive_frames_is_eight_when_config_missing_key():
