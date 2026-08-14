@@ -18,11 +18,14 @@ from security import permission_required
 from services.alert_engine import (
     active_overlay_style,
     evaluate_rules,
-    fall_config,
     fall_detections,
     reset_runtime,
 )
-from services.alert_rules_query import load_enabled_alert_rules, parse_rule_keys
+from services.alert_rules_query import (
+    load_enabled_alert_rules,
+    parse_rule_keys,
+    serialize_alert_rules_payload,
+)
 
 fall_bp = Blueprint("fall", __name__, url_prefix="/api/ai/fall")
 
@@ -39,22 +42,6 @@ def _form_float(name, default):
         return default
 
 
-def _fall_rules(rules):
-    return [r for r in rules if r.rule_type == "fall_detection"]
-
-
-def _max_track_max_age(rules) -> int:
-    """多条 fall 规则取 track_max_age 最大值（ID 分配层只能有一份配置）。"""
-    ages = [fall_config(r.config())["track_max_age"] for r in _fall_rules(rules)]
-    return max(ages) if ages else 15
-
-
-def _min_kp_conf(rules) -> float:
-    """多条 fall 规则取 kp_min_conf 最小值，保证任一规则都能拿到所需关键点。"""
-    confs = [fall_config(r.config())["kp_min_conf"] for r in _fall_rules(rules)]
-    return min(confs) if confs else 0.3
-
-
 @fall_bp.post("/detect")
 @permission_required("ai:fall:list")
 def detect():
@@ -66,7 +53,7 @@ def detect():
     draw 是否返回骨架图 base64(默认0)。
     """
     from routes.ai_model import _resolve_pose_runtime
-    from services.fall_detect import assign_track_ids, build_person_detections
+    from services.fall_detect import assign_track_ids, build_person_detections, fall_track_params
 
     file = request.files.get("file")
     if file is None or not file.filename:
@@ -111,11 +98,11 @@ def detect():
     width = result.get("width")
     height = result.get("height")
     rules = load_enabled_alert_rules(rule_keys)
-    kp_min_conf = _min_kp_conf(rules)
+    kp_min_conf, track_max_age = fall_track_params(rules)
     detections = build_person_detections(
         result.get("persons") or [], width, height, kp_min_conf)
     assign_track_ids(
-        detections, source_key, max_age=_max_track_max_age(rules), kp_min_conf=kp_min_conf)
+        detections, source_key, max_age=track_max_age, kp_min_conf=kp_min_conf)
 
     data = {
         "persons": result.get("persons") or [],
@@ -205,8 +192,11 @@ def _fall_video_worker(job_id, library, model_key, abs_path, src_path, out_path,
                        conf, rules):
     """后台线程：逐帧跌倒检测视频，按帧上报进度，完成写结果。
 
-    无启用规则时 rules 为空列表，仍正常处理视频，只是不产出 fall 框与事件
-    （inference.fall_video 内部对空规则列表天然安全）。
+    rules 是 serialize_alert_rules_payload() 序列化后的 dict 列表（不是 ORM
+    AlertRule 实例）——请求上下文销毁后线程仍要长时间访问 r.config()，避免
+    ORM 实例跨线程可能因 session 变化而 DetachedInstanceError。无启用规则时
+    rules 为空列表，仍正常处理视频，只是不产出 fall 框与事件（inference.
+    fall_video 内部对空规则列表天然安全）。
     """
     from inference import fall_video
 
@@ -278,7 +268,13 @@ def detect_video():
     conf = _form_float("conf", 0.25)
     raw_keys = request.form.get("ruleKeys")
     rule_keys = parse_rule_keys(raw_keys) if raw_keys is not None else None
-    rules = load_enabled_alert_rules(rule_keys)
+    # ORM 实例（AlertRule）不能带过请求上下文边界交给后台线程：请求上下文销毁后
+    # 若任何代码路径对 session 做过 commit，实例会 expire，worker 里再访问
+    # r.config() 会抛 DetachedInstanceError（被下面的宽 except 吞成晦涩 job
+    # error）。序列化成纯 dict 再传线程，照 ai_model.py:1745/vehicle.py:573 的
+    # 既有范式；services.alert_engine 三个引擎函数与 fall_track_params 均已
+    # 兼容 dict（ruleType/config 驼峰键）。
+    rules_payload = serialize_alert_rules_payload(load_enabled_alert_rules(rule_keys))
 
     video_folder = current_app.config["VIDEO_FOLDER"]
     out_folder = current_app.config["OUTPUT_FOLDER"]
@@ -300,7 +296,7 @@ def detect_video():
     threading.Thread(
         target=_fall_video_worker,
         args=(job_id, lib, m.model_key or "", abs_path, src_path, out_path, out_name,
-              conf, rules),
+              conf, rules_payload),
         daemon=True,
     ).start()
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})

@@ -2128,35 +2128,44 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
     建立），故 source_type 固定传 "video"（而非 "image"）：冷启动误报自锁门控
     正常生效，与 camera 模式行为一致（见 services.alert_engine._eval_fall_detection）。
 
-    时间戳走视频时间轴（now_ts = frames / fps），不是墙钟：处理耗时不应计入
-    质心速度的 dt。三次引擎调用（evaluate_rules / fall_detections /
-    active_overlay_style）必须共用同一 frame_token，命中单帧 memo，避免
-    质心历史被重复推进（否则 dt 会塌成 0，速度指标发散）。
+    now_ts = 处理起始墙钟(start) + frames / fps：既保证跨帧位移用视频时间轴的
+    dt（不受处理耗时影响，速度指标不发散），又保证 now_ts 本身是真实墙钟量级
+    的数字，能与 evaluate_rules 里各规则运行时状态初始的 last_fire_ts=0.0 正确
+    比较冷却。若 now_ts 从 0 起算（旧实现的 bug），"now - 0 < cooldown_sec" 在
+    整段视频时长小于 cooldown_sec 秒时恒成立——出厂默认 cooldown_sec=60，绝大
+    多数上传的跌倒样本视频短于 60 秒，会导致 fallEvents 恒为空数组（标注视频
+    里红框、中央告警块仍会正常出现，因为 fall_detections/active_overlay_style
+    不受连续帧/冷却约束，只有"触发时间点列表"这个交付物是空的，很容易被
+    误判为功能正常）。"sec" 字段是视频内部相对时刻，仍为 frames/fps，不叠加
+    start。
 
-    rules: 已加载的启用规则列表（routes/fall.py 用 load_enabled_alert_rules 取得）；
-    为空时正常处理视频，只是不产出 fall 框与事件。
+    三次引擎调用（evaluate_rules / fall_detections / active_overlay_style）
+    必须共用同一 frame_token，命中单帧 memo，避免质心历史被重复推进（否则
+    dt 会塌成 0，速度指标发散）。
+
+    fallEvents 只收 evaluate_rules 触发结果里真正来自 fall_detection 规则的
+    条目（detail 含非空 "fallen" 列表）——rules 通常是全量启用规则（不只 fall
+    规则），若不过滤，同时启用的其它规则（如人员聚集）触发时会往 fallEvents
+    里混入一条 trackId/score/indicators 全为 None 的空字段行。
+
+    rules: 已加载的启用规则列表（ORM AlertRule 对象或
+    services.alert_rules_query.serialize_alert_rules_payload 输出的 dict，
+    均可，services.fall_detect.fall_track_params 与三个引擎函数都兼容两种
+    形态）；为空时正常处理视频，只是不产出 fall 框与事件。
     """
     import uuid
 
     from services.alert_engine import (
         active_overlay_style,
         evaluate_rules,
-        fall_config,
         fall_detections,
         reset_runtime,
     )
-    from services.fall_detect import assign_track_ids, build_person_detections
+    from services.fall_detect import assign_track_ids, build_person_detections, fall_track_params
 
     lib = (library or "ultralytics").lower()
     rules = rules or []
-
-    fall_rules = [r for r in rules if r.rule_type == "fall_detection"]
-    if fall_rules:
-        kp_min_conf = min(fall_config(r.config())["kp_min_conf"] for r in fall_rules)
-        track_max_age = max(fall_config(r.config())["track_max_age"] for r in fall_rules)
-    else:
-        kp_min_conf = 0.3
-        track_max_age = 15
+    kp_min_conf, track_max_age = fall_track_params(rules)
 
     solver = None
     variant = None
@@ -2173,22 +2182,30 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
     total_persons = 0
     fall_events = []
     fall_frames = 0
+    fps = 25.0
+    total = 0
+    w = h = ew = eh = 0
     try:
         cap = cv2.VideoCapture(src_path)
         if not cap.isOpened():
             raise ValueError("无法打开视频文件")
 
-        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0) or 25.0
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        if not (0 < fps <= 240):  # 排除 0/负数/nan（nan 的比较恒为 False）/异常大值
+            fps = 25.0
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
 
-        writer, ew, eh = _open_h264(dst_path, fps, w, h)
-
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
+        ok, frame = cap.read()
+        start = None
+        while ok:
+            if writer is None:
+                # 用首帧的真实解码尺寸开写入器，而非 CAP_PROP_FRAME_*：带旋转
+                # 元数据的手机竖屏视频，OpenCV 可能已把帧转正但 CAP_PROP 仍报
+                # 原始宽高——用错的分母会让 speed/head 两个归一化指标静默算错，
+                # 也会让 _write_bgr 的裁切尺寸与 writer 尺寸对不上。
+                h, w = frame.shape[:2]
+                writer, ew, eh = _open_h264(dst_path, fps, w, h)
+                start = time.time()
 
             persons = []
             keypoints = scores = None
@@ -2218,7 +2235,7 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
             dets = build_person_detections(persons, w, h, kp_min_conf)
             assign_track_ids(dets, source_key, max_age=track_max_age, kp_min_conf=kp_min_conf)
 
-            now_ts = frames / fps
+            now_ts = start + frames / fps
             frame_token = f"{source_key}-{frames}-{uuid.uuid4().hex[:8]}"
 
             triggered = evaluate_rules(
@@ -2244,7 +2261,13 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
 
             for t in triggered:
                 detail = t.get("detail") or {}
-                fallen = (detail.get("fallen") or [{}])[0]
+                fallen_list = detail.get("fallen")
+                if not fallen_list:
+                    # 该触发不是来自 fall_detection 规则（rules 是全量启用规则，
+                    # 可能同时含人员聚集等其它类型）——不往 fallEvents 里混入
+                    # trackId/score/indicators 全 None 的空字段行。
+                    continue
+                fallen = fallen_list[0]
                 fall_events.append({
                     "frame": frames,
                     "sec": round(frames / fps, 2),
@@ -2258,6 +2281,14 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
             frames += 1
             if progress_cb:
                 progress_cb(frames, total)
+            ok, frame = cap.read()
+
+        if writer is None:
+            # 视频打开成功但一帧都读不到（空/损坏文件）：仍产出一个有效的空
+            # mp4 容器，而不是让下游因 dst_path 不存在而出错。
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 2
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 2
+            writer, ew, eh = _open_h264(dst_path, fps, w, h)
     finally:
         if cap is not None:
             cap.release()

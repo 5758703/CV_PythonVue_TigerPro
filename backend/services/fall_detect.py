@@ -246,3 +246,36 @@ def reset_tracker(source_key: str | None = None):
             _trackers.clear()
             return
         _trackers.pop(source_key, None)
+
+
+def fall_track_params(rules) -> tuple[float, int]:
+    """多条 fall 规则 -> (kp_min_conf 取 min, track_max_age 取 max)。
+
+    ID 分配层（build_person_detections / assign_track_ids）只能有一份配置，
+    多条 fall_detection 规则并存时：kp_min_conf 取 min（保证任一规则都能拿到
+    所需关键点），track_max_age 取 max（保证跟踪存活时间满足最严格的规则）。
+    图片/摄像头模式（routes/fall.py）与视频模式（inference.fall_video）都要
+    用同一份逻辑，否则同一批规则在两种模式下会算出不同的 trackId 分组——这个
+    差异跑测试完全看不出来，只会体现为两种模式下跌倒判定悄悄不一致。
+
+    rules 支持 ORM AlertRule 对象与 dict（services.alert_rules_query.
+    serialize_alert_rules_payload 的输出，键为驼峰 ruleType/config）两种形态，
+    与 services.alert_engine 里既有的 hasattr 兼容写法一致。
+    """
+    from services.alert_engine import fall_config  # 惰性导入，避免与 alert_engine 成环
+
+    fall_rules = []
+    for r in rules or []:
+        rtype = r.rule_type if hasattr(r, "rule_type") else r.get("ruleType")
+        if rtype == "fall_detection":
+            fall_rules.append(r)
+    if not fall_rules:
+        return 0.3, 15
+
+    confs, ages = [], []
+    for r in fall_rules:
+        cfg = r.config() if hasattr(r, "config") else (r.get("config") or {})
+        parsed = fall_config(cfg)
+        confs.append(parsed["kp_min_conf"])
+        ages.append(parsed["track_max_age"])
+    return min(confs), max(ages)
