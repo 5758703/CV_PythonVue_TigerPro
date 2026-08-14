@@ -441,6 +441,11 @@ def seed_ai_menus():
                     path="/ai/handpose", component="ai/handpose/index", icon="Pointer",
                     order=15, grant_common=True)
     _ensure_ai_menu(2901, 290, "手势识别查询", "F", "ai:handpose:query", grant_common=True)
+    # 跌倒检测（视觉识别 230 下）
+    _ensure_ai_menu(292, 230, "跌倒检测", "C", "ai:fall:list",
+                    path="/ai/fall", component="ai/fall/index", icon="WarningFilled",
+                    order=16, grant_common=True)
+    _ensure_ai_menu(2921, 292, "跌倒检测查询", "F", "ai:fall:query", grant_common=True)
     _ensure_ai_menu(2882, 288, "行人底库新增", "F", "ai:reid:add")
     _ensure_ai_menu(2883, 288, "行人底库修改", "F", "ai:reid:edit")
     _ensure_ai_menu(2884, 288, "行人底库删除", "F", "ai:reid:remove")
@@ -1783,6 +1788,37 @@ def seed_alert_rules():
         "message_template": "核查现场人员身份；必要时登记访客或联动门禁/安保。",
         "overlay": stranger_overlay,
     }
+    fall_overlay = {
+        "enabled": True,
+        "priority": 2,
+        "fillColor": "#CF1322",
+        "borderColor": "#A8071A",
+        "textColor": "#FFFFFF",
+        "titleLines": ["FALL DETECTED"],
+        "subtitleLines": ["疑似跌倒", "请立即查看"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#A8071A",
+    }
+    fall_cfg = {
+        "trunk_angle_deg": 60,
+        "centroid_speed": 0.5,
+        "height_ratio": 0.5,
+        "head_y_ratio": 0.75,
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 1},
+        "min_score": 2,
+        "kp_min_conf": 0.3,
+        "stand_baseline_window": 90,
+        "track_max_age": 15,
+        "consecutive_frames": 8,
+        "cooldown_sec": 60,
+        "title_template": "",
+        "message_template": "",
+        "overlay": fall_overlay,
+    }
     defaults = [
         dict(
             rule_key="fire-smoke",
@@ -1838,6 +1874,15 @@ def seed_alert_rules():
             severity="high",
             status="1",
         ),
+        dict(
+            rule_key="fall-detection",
+            name="跌倒检测告警",
+            description="姿态关键点四指标（躯干角/质心速度/身高比/头部高度）判定跌倒（在「跌倒检测」页使用）",
+            rule_type="fall_detection",
+            config_json=json.dumps(fall_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
     ]
     created = False
     updated = False
@@ -1848,6 +1893,7 @@ def seed_alert_rules():
         "line-intrusion": line_cfg,
         "zone-intrusion": zone_cfg,
         "stranger-face": stranger_cfg,
+        "fall-detection": fall_cfg,
     }
     for fields in defaults:
         existing = AlertRule.query.filter_by(rule_key=fields["rule_key"]).first()
