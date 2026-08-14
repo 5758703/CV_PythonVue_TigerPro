@@ -436,7 +436,7 @@ def seed_ai_menus():
                     path="/ai/reid", component="ai/reid/index", icon="Avatar",
                     order=13, grant_common=True)
     _ensure_ai_menu(2881, 288, "行人重识别查询", "F", "ai:reid:query", grant_common=True)
-    # 手势识别（手部 21 关键点 + 数手指）
+    # 手势识别（手部 21 关键点 + 0-9，含中式 6-9）
     _ensure_ai_menu(290, 230, "手势识别", "C", "ai:handpose:list",
                     path="/ai/handpose", component="ai/handpose/index", icon="Pointer",
                     order=15, grant_common=True)
@@ -1272,7 +1272,7 @@ def _ensure_handpose_model():
             task="pose-estimation", library="opencv-dnn", version="2023feb",
             source_url="https://huggingface.co/opencv/handpose_estimation_mediapipe",
             description="OpenCV Zoo 双模型：MP-PalmDet 手掌检测（192）+ MP-HandPose 21 关键点（224），"
-                        "cv2.dnn CPU 推理；支撑「手势识别」页数手指/动态数字案例。",
+                        "cv2.dnn CPU 推理；GestureClassification 识别 0–9（含中式单手 6–9）。",
             status="1",
         )
         db.session.add(m)

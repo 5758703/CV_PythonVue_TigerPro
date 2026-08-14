@@ -5,12 +5,15 @@
       <template #header>
         <div class="card-head">
           <div class="card-head-left">
-            <span class="card-title">手势识别 · 数手指</span>
+            <span class="card-title">手势识别 · 0–9</span>
             <el-tooltip placement="bottom-start">
               <template #content>
                 <div class="help-pop">
-                  <p>OpenCV Zoo MediaPipe 双模型：手掌检测（192）→ 21 关键点（224），CPU 实时。</p>
-                  <p>伸出手指比数字（0-5，双手可到 10）。数字稳定约 1 秒自动记入序列，可勾选语音播报。</p>
+                  <p>OpenCV Zoo MediaPipe：手掌检测 → 21 关键点 → 0–9 手势分类（含中式单手 6–9）。</p>
+                  <p>0 拳 · 1 食 · 2 食+中 · 3 食+中+无 · 4 四指 · 5 五指</p>
+                  <p>6 拇+小 · 7 拇+食 · 8 拇+食+中 · 9 拇+食+中+无</p>
+                  <p>双手同时比数：左.右 组合显示（如左手 1、右手 2 → 1.2）。</p>
+                  <p>数字稳定约 1 秒自动记入序列，可勾选语音播报。</p>
                 </div>
               </template>
               <el-icon class="card-help"><QuestionFilled /></el-icon>
@@ -99,15 +102,16 @@
           <template #header>
             <div class="card-head"><span class="card-title">当前识别结果</span></div>
           </template>
-          <div class="digit-big" :class="{ 'digit-none': !handsNow.length }">
-            {{ handsNow.length ? totalNow : '—' }}
+          <div class="digit-big" :class="{ 'digit-none': !displayText, 'digit-dual': isDualDisplay }">
+            {{ displayText || '—' }}
           </div>
-          <div class="digit-sub">{{ handsNow.length ? `检测到 ${handsNow.length} 只手` : '未检测到手' }}</div>
+          <div class="digit-sub">{{ displaySubText }}</div>
           <div class="hand-chips">
             <div v-for="(h, i) in handsNow" :key="i" class="hand-chip">
               <el-tag size="small" :type="h.handedness === 'Right' ? 'success' : 'warning'" effect="dark">
-                {{ h.handedness === 'Right' ? '右手' : '左手' }} · {{ h.count }}
+                {{ h.handedness === 'Right' ? '右手' : '左手' }} · {{ h.digit ?? h.count }}
               </el-tag>
+              <span class="gesture-zh">{{ h.gestureZh || '' }}</span>
               <span class="finger-dots">
                 <span v-for="f in FINGER_ORDER" :key="f" class="finger-dot" :class="{ on: h.fingers[f] }" :title="f" />
               </span>
@@ -131,7 +135,7 @@
 </template>
 
 <script setup>
-import { ref, onBeforeUnmount } from "vue";
+import { ref, computed, onBeforeUnmount } from "vue";
 import { ElMessage } from "element-plus";
 import { QuestionFilled, UploadFilled } from "@element-plus/icons-vue";
 import { handposeApi } from "../../../api/ai";
@@ -165,8 +169,57 @@ const fps = ref(0);
 const videoEl = ref(null);
 const overlayEl = ref(null);
 const handsNow = ref([]);
-const totalNow = ref(0);
+const displayText = ref("");
+const leftDigit = ref(null);
+const rightDigit = ref(null);
 const digitSeq = ref([]);
+
+const isDualDisplay = computed(() => leftDigit.value != null && rightDigit.value != null);
+
+const displaySubText = computed(() => {
+  if (!handsNow.value.length) return "未检测到手";
+  if (leftDigit.value != null && rightDigit.value != null) {
+    return `左手 ${leftDigit.value} · 右手 ${rightDigit.value}`;
+  }
+  if (leftDigit.value != null) return `左手 ${leftDigit.value}`;
+  if (rightDigit.value != null) return `右手 ${rightDigit.value}`;
+  return `检测到 ${handsNow.value.length} 只手`;
+});
+
+const applyDisplayFromResponse = (d) => {
+  handsNow.value = d.hands || [];
+  leftDigit.value = d.leftDigit ?? null;
+  rightDigit.value = d.rightDigit ?? null;
+  let text = d.displayText != null && d.displayText !== "" ? String(d.displayText) : "";
+
+  // 兜底：双手已检出但后端未组合成「左.右」时，按画面位置自行组合
+  const hands = handsNow.value;
+  if (hands.length >= 2 && (!text || !text.includes("."))) {
+    const top2 = [...hands]
+      .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+      .slice(0, 2)
+      .sort((a, b) => {
+        const cx = (h) => (h.bbox ? (h.bbox[0] + h.bbox[2]) / 2 : (h.landmarks?.[0]?.[0] || 0));
+        return cx(a) - cx(b);
+      });
+    // 未镜像自拍：画面右≈左手，画面左≈右手
+    const leftD = top2[1]?.digit ?? top2[1]?.count;
+    const rightD = top2[0]?.digit ?? top2[0]?.count;
+    if (leftD != null && rightD != null) {
+      text = `${leftD}.${rightD}`;
+      leftDigit.value = leftD;
+      rightDigit.value = rightD;
+    }
+  }
+
+  if (text) {
+    displayText.value = text;
+  } else if (hands.length) {
+    displayText.value = d.primaryDigit != null ? String(d.primaryDigit) : String(d.totalCount ?? "");
+  } else {
+    displayText.value = "";
+  }
+};
 
 const imgLoading = ref(false);
 const imgResult = ref("");
@@ -203,6 +256,9 @@ const onModeChange = () => {
   stop();
   imgResult.value = "";
   handsNow.value = [];
+  displayText.value = "";
+  leftDigit.value = null;
+  rightDigit.value = null;
 };
 
 const start = async () => {
@@ -236,6 +292,9 @@ const stop = () => {
   }
   previewOpen.value = false;
   handsNow.value = [];
+  displayText.value = "";
+  leftDigit.value = null;
+  rightDigit.value = null;
   const ov = overlayEl.value;
   if (ov?.width) ov.getContext("2d").clearRect(0, 0, ov.width, ov.height);
 };
@@ -265,8 +324,7 @@ const loopOnce = async () => {
       const res = await handposeApi.estimate(fd);
       if (running.value) {
         const d = res.data || {};
-        handsNow.value = d.hands || [];
-        totalNow.value = d.totalCount || 0;
+        applyDisplayFromResponse(d);
         drawOverlay(d);
         trackDigit(d);
         frameCount += 1;
@@ -302,14 +360,17 @@ const drawOverlay = (d) => {
       ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2);
       ctx.fill();
     }
+    const dig = h.digit != null ? h.digit : h.count;
     ctx.font = "bold 20px sans-serif";
     ctx.fillStyle = "#ffee00";
-    ctx.fillText(`${h.handedness === "Right" ? "右" : "左"} ${h.count}`, h.bbox[0], Math.max(20, h.bbox[1] - 6));
+    ctx.fillText(`${h.handedness === "Right" ? "右" : "左"} ${dig}`, h.bbox[0], Math.max(20, h.bbox[1] - 6));
   }
 };
 
 const trackDigit = (d) => {
-  const digit = (d.hands || []).length ? d.totalCount : null;
+  const digit = (d.hands || []).length
+    ? (d.displayText != null && d.displayText !== "" ? String(d.displayText) : null)
+    : null;
   if (digit === stableDigit) {
     stableCnt += 1;
   } else {
@@ -325,7 +386,7 @@ const trackDigit = (d) => {
     lastCommitted = stableDigit;
     digitSeq.value.push(stableDigit);
     if (speakOn.value && window.speechSynthesis) {
-      const u = new SpeechSynthesisUtterance(String(stableDigit));
+      const u = new SpeechSynthesisUtterance(stableDigit.includes(".") ? stableDigit.replace(".", "点") : stableDigit);
       u.lang = "zh-CN";
       window.speechSynthesis.speak(u);
     }
@@ -343,8 +404,7 @@ const onPickImage = async (uploadFile) => {
     const res = await handposeApi.estimate(fd);
     const d = res.data || {};
     imgResult.value = d.imageBase64 || "";
-    handsNow.value = d.hands || [];
-    totalNow.value = d.totalCount || 0;
+    applyDisplayFromResponse(d);
     if (!(d.hands || []).length) ElMessage.info("未检测到手部");
   } catch (e) {
     ElMessage.error(e.message || "识别失败");
@@ -355,7 +415,7 @@ const onPickImage = async (uploadFile) => {
 
 const copySeq = async () => {
   try {
-    await navigator.clipboard.writeText(digitSeq.value.join(""));
+    await navigator.clipboard.writeText(digitSeq.value.join(" "));
     ElMessage.success("已复制");
   } catch {
     ElMessage.warning("复制失败");
@@ -405,10 +465,12 @@ onBeforeUnmount(() => {
   font-size: 96px; font-weight: 800; line-height: 1.1; text-align: center;
   color: #1f6feb; font-variant-numeric: tabular-nums;
 }
+.digit-big.digit-dual { font-size: 84px; letter-spacing: 0.02em; }
 .digit-big.digit-none { color: #c0c4cc; }
 .digit-sub { text-align: center; color: #7a8aa5; font-size: 13px; margin-bottom: 10px; }
 .hand-chips { display: flex; flex-direction: column; gap: 8px; }
-.hand-chip { display: flex; align-items: center; gap: 10px; }
+.hand-chip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gesture-zh { font-size: 12px; color: #606266; min-width: 72px; }
 .finger-dots { display: inline-flex; gap: 4px; }
 .finger-dot {
   width: 12px; height: 12px; border-radius: 50%; background: #e4e7ed; display: inline-block;
@@ -420,8 +482,8 @@ onBeforeUnmount(() => {
 }
 .seq-digit {
   min-width: 34px; height: 34px; border-radius: 6px; background: #1f6feb; color: #fff;
-  font-size: 20px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
-  padding: 0 6px;
+  font-size: 18px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 8px;
 }
 .seq-actions { margin-top: 8px; display: flex; gap: 8px; }
 </style>

@@ -1,4 +1,4 @@
-"""手势识别（手部 21 关键点 + 数手指）/api/ai/handpose。"""
+"""手势识别（手部 21 关键点 + 0-9 手势，含中式 6-9）/api/ai/handpose。"""
 import base64
 import os
 
@@ -27,11 +27,13 @@ def _parse_float(name, default):
 @handpose_bp.post("/estimate")
 @permission_required("ai:handpose:list")
 def estimate():
-    """单帧/单图手部关键点估计。
+    """单帧/单图手部关键点估计与 0-9 手势分类。
 
     表单：file 图片；palmScore 手掌检测阈值(默认0.5)；handConf 关键点置信阈值(默认0.8)；
     maxHands 最大手数(默认2)；draw=1 返回标注图 base64。
-    返回：hands[{bbox, landmarks(21×3), handedness, confidence, fingers, count}], totalCount。
+    返回：hands[{..., fingers, count, gesture, gestureZh, digit}],
+    displayText（单手「2」/ 双手「1.2」）, leftDigit, rightDigit,
+    primaryDigit（兼容）, totalCount, extendedTotal。
     """
     file = request.files.get("file")
     if file is None or not file.filename:
@@ -46,7 +48,7 @@ def estimate():
     max_hands = int(_parse_float("maxHands", 2))
     draw = (request.form.get("draw") or "0") in ("1", "true", "True")
 
-    from services.handpose import detect_hands, draw_hands
+    from services.handpose import detect_hands, draw_hands, format_display_digits, primary_digit, resolve_handedness
 
     try:
         hands = detect_hands(
@@ -58,9 +60,16 @@ def estimate():
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"手部关键点推理失败：{e}"), 500
 
+    # 摄像头帧通常非镜像，而 MediaPipe 按镜像假设输出左右；校正后再组合左.右
+    hands = resolve_handedness(hands, swap_labels=True)
+    disp = format_display_digits(hands)
+    dig = primary_digit(hands)
     data = {
         "hands": hands,
-        "totalCount": int(sum(h["count"] for h in hands)),
+        **disp,
+        "primaryDigit": dig,
+        "totalCount": int(dig) if dig is not None else 0,
+        "extendedTotal": int(sum(h["count"] for h in hands)),
         "width": img.shape[1],
         "height": img.shape[0],
     }

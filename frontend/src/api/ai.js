@@ -226,7 +226,7 @@ export const absenceApi = {
     request.post('/ai/absence/export-events', { sessionId }),
 }
 
-// ---------------- 手势识别（手部 21 关键点 + 数手指）
+// ---------------- 手势识别（手部 21 关键点 + 0-9，含中式 6-9）
 export const handposeApi = {
   estimate: (formData) =>
     request.post('/ai/handpose/estimate', formData, {
