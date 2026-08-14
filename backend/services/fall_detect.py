@@ -116,3 +116,111 @@ def build_person_detections(persons, width, height, kp_min_conf: float = 0.3) ->
             "keypoints": kp,
         })
     return out
+
+
+# ---------------------------------------------------------------- 轻量跨帧跟踪
+# source_key -> {"next_id": int, "tracks": {tid: {"anchor": (x,y), "bbox": [...], "miss": int}}}
+_trackers: dict[str, dict] = {}
+_tracker_lock = threading.Lock()
+
+_MATCH_MIN_IOU = 0.2
+_MATCH_DIST_FACTOR = 0.6  # 允许位移上限 = 该框长边 * 系数
+
+
+def _iou(a, b) -> float:
+    if not a or not b or len(a) < 4 or len(b) < 4:
+        return 0.0
+    ax1, ay1, ax2, ay2 = (float(v) for v in a[:4])
+    bx1, by1, bx2, by2 = (float(v) for v in b[:4])
+    iw = min(ax2, bx2) - max(ax1, bx1)
+    ih = min(ay2, by2) - max(ay1, by1)
+    if iw <= 0 or ih <= 0:
+        return 0.0
+    inter = iw * ih
+    union = (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _track_anchor(det: dict):
+    """跟踪锚点：优先髋部中点（匹配阶段不设置信度门限），退化为 bbox 中心。"""
+    kp = det.get("keypoints") or []
+    hip = _mid(_point(kp, KP_L_HIP, 0.0), _point(kp, KP_R_HIP, 0.0))
+    if hip:
+        return hip
+    bbox = det.get("bbox") or []
+    if len(bbox) >= 4:
+        return ((float(bbox[0]) + float(bbox[2])) / 2.0,
+                (float(bbox[1]) + float(bbox[3])) / 2.0)
+    return (0.0, 0.0)
+
+
+def _bbox_long_side(bbox) -> float:
+    if not bbox or len(bbox) < 4:
+        return 1.0
+    return max(abs(float(bbox[2]) - float(bbox[0])),
+               abs(float(bbox[3]) - float(bbox[1])), 1.0)
+
+
+def assign_track_ids(detections, source_key: str = "default", max_age: int = 15):
+    """按髋部质心最近邻 + IoU 双条件匹配上一帧，原地写入 trackId。"""
+    dets = detections or []
+    try:
+        max_age = int(max_age)
+    except (TypeError, ValueError):
+        max_age = 15
+
+    with _tracker_lock:
+        st = _trackers.setdefault(source_key or "default", {"next_id": 1, "tracks": {}})
+        tracks: dict = st["tracks"]
+
+        pairs = []
+        for i, d in enumerate(dets):
+            anchor = _track_anchor(d)
+            limit = _bbox_long_side(d.get("bbox")) * _MATCH_DIST_FACTOR
+            for tid, tr in tracks.items():
+                dist = math.dist(anchor, tr["anchor"])
+                if dist > limit:
+                    continue
+                if _iou(d.get("bbox"), tr["bbox"]) < _MATCH_MIN_IOU:
+                    continue
+                pairs.append((dist, i, tid))
+        pairs.sort()
+
+        matched_det, matched_tid = {}, set()
+        for _dist, i, tid in pairs:
+            if i in matched_det or tid in matched_tid:
+                continue
+            matched_det[i] = tid
+            matched_tid.add(tid)
+
+        live = set()
+        for i, d in enumerate(dets):
+            tid = matched_det.get(i)
+            if tid is None:
+                tid = st["next_id"]
+                st["next_id"] += 1
+            tracks[tid] = {
+                "anchor": _track_anchor(d),
+                "bbox": list(d.get("bbox") or []),
+                "miss": 0,
+            }
+            d["trackId"] = tid
+            live.add(tid)
+
+        for tid in list(tracks):
+            if tid in live:
+                continue
+            tracks[tid]["miss"] += 1
+            if tracks[tid]["miss"] > max_age:
+                del tracks[tid]
+
+    return dets
+
+
+def reset_tracker(source_key: str | None = None):
+    """清跟踪器状态；source_key 为 None 时全清（含 ID 计数器）。"""
+    with _tracker_lock:
+        if source_key is None:
+            _trackers.clear()
+            return
+        _trackers.pop(source_key, None)

@@ -52,3 +52,56 @@ def test_build_person_detections_bbox_within_frame():
 
 def test_build_person_detections_skips_all_low_conf():
     assert build_person_detections([{"keypoints": _kp(conf=0.05)}], 640, 480) == []
+
+
+from services.fall_detect import assign_track_ids, reset_tracker
+
+
+def _det(cx, cy, w=60.0, h=160.0):
+    """构造带 bbox 与髋关键点的检测框（所有关键点置于框中心）。"""
+    kp = [[cx, cy, 0.9] for _ in range(17)]
+    return {
+        "className": "person",
+        "confidence": 0.9,
+        "bbox": [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2],
+        "keypoints": kp,
+    }
+
+
+def test_tracker_keeps_id_for_small_motion():
+    reset_tracker("t1")
+    first = assign_track_ids([_det(300.0, 240.0)], "t1")
+    tid = first[0]["trackId"]
+    second = assign_track_ids([_det(306.0, 246.0)], "t1")
+    assert second[0]["trackId"] == tid
+    reset_tracker("t1")
+
+
+def test_tracker_assigns_new_id_after_max_age():
+    reset_tracker("t2")
+    first = assign_track_ids([_det(300.0, 240.0)], "t2", max_age=2)
+    tid = first[0]["trackId"]
+    for _ in range(3):
+        assign_track_ids([], "t2", max_age=2)
+    again = assign_track_ids([_det(300.0, 240.0)], "t2", max_age=2)
+    assert again[0]["trackId"] != tid
+    reset_tracker("t2")
+
+
+def test_tracker_separates_two_people():
+    reset_tracker("t3")
+    out = assign_track_ids([_det(150.0, 240.0), _det(500.0, 240.0)], "t3")
+    assert out[0]["trackId"] != out[1]["trackId"]
+    out2 = assign_track_ids([_det(155.0, 242.0), _det(505.0, 238.0)], "t3")
+    assert out2[0]["trackId"] == out[0]["trackId"]
+    assert out2[1]["trackId"] == out[1]["trackId"]
+    reset_tracker("t3")
+
+
+def test_reset_tracker_all_clears_ids():
+    reset_tracker()
+    a = assign_track_ids([_det(300.0, 240.0)], "t4")[0]["trackId"]
+    reset_tracker()
+    b = assign_track_ids([_det(300.0, 240.0)], "t4")[0]["trackId"]
+    assert a == b == 1
+    reset_tracker()
