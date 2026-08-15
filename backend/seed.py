@@ -1259,7 +1259,49 @@ def seed_ai_models():
     _ensure_security_detector_models()
     _ensure_fish_detector_model()
     _ensure_handpose_model()
+    _ensure_csl_model()
     return created
+
+
+def _ensure_csl_model():
+    """中国手语 YOLO11s（tigerhhzz 训练）：幂等登记并绑定目录。"""
+    key = "chinese-sign-language-tigerhhzz-yolo11s"
+    rel = "models/chinese-sign-language-tigerhhzz-yolo11s"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    m = AiModel.query.filter_by(model_key=key).first()
+    if not m:
+        m = AiModel(
+            model_key=key,
+            model_name="中国手语识别（YOLO11s·tigerhhzz）",
+            category="手势识别",
+            task="object-detection", library="ultralytics", version="11s",
+            source_url="",
+            description="Roboflow/tigerhhzz 训练 YOLO11s，30 类手语字母手势（A–Z、CH、NG、SH、ZH）。"
+                        "用于「手势识别」页中国手语模式。",
+            status="1",
+        )
+        db.session.add(m)
+    size = 0
+    if os.path.isdir(abs_dir):
+        for f in os.listdir(abs_dir):
+            fp = os.path.join(abs_dir, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    changed = False
+    if size > 0:
+        if m.file_path != rel:
+            m.file_path = rel
+            changed = True
+        if m.file_size != size:
+            m.file_size = size
+            changed = True
+        if m.status != "0":
+            m.status = "0"
+            changed = True
+    if changed or m.id is None:
+        db.session.commit()
+    return changed
 
 
 def _ensure_handpose_model():

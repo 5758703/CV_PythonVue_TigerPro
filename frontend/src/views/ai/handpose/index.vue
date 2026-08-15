@@ -5,15 +5,13 @@
       <template #header>
         <div class="card-head">
           <div class="card-head-left">
-            <span class="card-title">手势识别 · 0–9</span>
+            <span class="card-title">手势识别</span>
             <el-tooltip placement="bottom-start">
               <template #content>
                 <div class="help-pop">
-                  <p>OpenCV Zoo MediaPipe：手掌检测 → 21 关键点 → 0–9 手势分类（含中式单手 6–9）。</p>
-                  <p>0 拳 · 1 食 · 2 食+中 · 3 食+中+无 · 4 四指 · 5 五指</p>
-                  <p>6 拇+小 · 7 拇+食 · 8 拇+食+中 · 9 拇+食+中+无</p>
-                  <p>双手同时比数：右 左 空格组合显示（如左手 1、右手 2 → 2 1）。</p>
-                  <p>数字稳定约 1 秒自动记入序列，可勾选语音播报。</p>
+                  <p><b>数字手势（MediaPipe）</b>：21 关键点 → 0–9（含中式 6–9）；双手「右 左」组合。</p>
+                  <p><b>中国手语（YOLO11s）</b>：先定位手部再识别 30 类字母/声母（A–Z、CH、NG、SH、ZH）。请将手靠近镜头、背景简洁。</p>
+                  <p>识别稳定约 1 秒自动记入序列，可勾选语音播报。</p>
                 </div>
               </template>
               <el-icon class="card-help"><QuestionFilled /></el-icon>
@@ -30,6 +28,18 @@
       </template>
       <el-form label-position="top" class="cfg-form" @submit.prevent>
         <el-row :gutter="16">
+          <el-col :xs="24" :sm="12" :md="8">
+            <el-form-item label="识别模型">
+              <el-select v-model="recognizer" :disabled="running" @change="onRecognizerChange">
+                <el-option
+                  v-for="r in recognizers"
+                  :key="r.id"
+                  :label="r.name"
+                  :value="r.id"
+                />
+              </el-select>
+            </el-form-item>
+          </el-col>
           <el-col :xs="12" :sm="6" :md="4">
             <el-form-item label="来源">
               <el-select v-model="mode" :disabled="running" @change="onModeChange">
@@ -57,14 +67,19 @@
               </div>
             </el-form-item>
           </el-col>
-          <el-col :xs="12" :sm="4" :md="3">
+          <el-col v-if="isMediapipe" :xs="12" :sm="4" :md="3">
             <el-form-item label="最大手数">
               <el-input-number v-model="maxHands" :min="1" :max="4" style="width: 100%" :disabled="running" />
             </el-form-item>
           </el-col>
-          <el-col :xs="12" :sm="6" :md="4">
+          <el-col v-if="isMediapipe" :xs="12" :sm="6" :md="4">
             <el-form-item label="关键点置信度">
               <el-slider v-model="handConf" :min="0.5" :max="0.95" :step="0.05" :disabled="running" />
+            </el-form-item>
+          </el-col>
+          <el-col v-if="isCsl" :xs="12" :sm="6" :md="4">
+            <el-form-item label="检测置信度">
+              <el-slider v-model="detConf" :min="0.25" :max="0.9" :step="0.05" :disabled="running" />
             </el-form-item>
           </el-col>
           <el-col :xs="12" :sm="6" :md="4">
@@ -102,11 +117,12 @@
           <template #header>
             <div class="card-head"><span class="card-title">当前识别结果</span></div>
           </template>
-          <div class="digit-big" :class="{ 'digit-none': !displayText, 'digit-dual': isDualDisplay }">
+          <div class="digit-big" :class="{ 'digit-none': !displayText, 'digit-dual': isDualDisplay, 'digit-csl': isCsl }">
             {{ displayText || '—' }}
           </div>
           <div class="digit-sub">{{ displaySubText }}</div>
-          <div class="hand-chips">
+          <!-- MediaPipe 手列表 -->
+          <div v-if="isMediapipe" class="hand-chips">
             <div v-for="(h, i) in handsNow" :key="i" class="hand-chip">
               <el-tag size="small" :type="h.handedness === 'Right' ? 'success' : 'warning'" effect="dark">
                 {{ h.handedness === 'Right' ? '右手' : '左手' }} · {{ h.digit ?? h.count }}
@@ -118,10 +134,19 @@
               <span class="hint-inline">{{ (h.confidence * 100).toFixed(0) }}%</span>
             </div>
           </div>
+          <!-- 手语检测列表 -->
+          <div v-else class="hand-chips">
+            <div v-for="(det, i) in detectionsNow" :key="i" class="hand-chip">
+              <el-tag size="small" type="primary" effect="dark">{{ det.className }}</el-tag>
+              <span class="gesture-zh">{{ det.labelZh || '' }}</span>
+              <span class="hint-inline">{{ (det.confidence * 100).toFixed(0) }}%</span>
+            </div>
+            <div v-if="!detectionsNow.length" class="hint-inline">未检测到手语手势</div>
+          </div>
 
-          <el-divider content-position="left">动态数字序列</el-divider>
+          <el-divider content-position="left">{{ isCsl ? '动态手语序列' : '动态数字序列' }}</el-divider>
           <div class="seq-box">
-            <span v-if="!digitSeq.length" class="hint-inline">比出数字并保持约 1 秒，自动记录到这里</span>
+            <span v-if="!digitSeq.length" class="hint-inline">{{ isCsl ? '比出手语并保持约 1 秒，自动记录到这里' : '比出数字并保持约 1 秒，自动记录到这里' }}</span>
             <span v-for="(d, i) in digitSeq" :key="i" class="seq-digit">{{ d }}</span>
           </div>
           <div class="seq-actions">
@@ -156,6 +181,11 @@ const CONN_FINGER = ["thumb", "thumb", "thumb", "thumb", "index", "index", "inde
   "pinky", "pinky", "pinky", "pinky", "pinky"];
 
 const mode = ref("camera");
+const recognizer = ref("mediapipe");
+const recognizers = ref([
+  { id: "mediapipe", name: "数字手势（MediaPipe 0–9）" },
+  { id: "csl-yolo11s", name: "中国手语（YOLO11s）" },
+]);
 const devices = ref([]);
 const deviceId = ref("");
 const devicesLoading = ref(false);
@@ -163,20 +193,30 @@ const running = ref(false);
 const previewOpen = ref(false);
 const maxHands = ref(2);
 const handConf = ref(0.8);
+const detConf = ref(0.5);
 const speakOn = ref(false);
 const fps = ref(0);
+
+const isMediapipe = computed(() => recognizer.value === "mediapipe");
+const isCsl = computed(() => recognizer.value === "csl-yolo11s");
 
 const videoEl = ref(null);
 const overlayEl = ref(null);
 const handsNow = ref([]);
+const detectionsNow = ref([]);
 const displayText = ref("");
+const labelZh = ref("");
 const leftDigit = ref(null);
 const rightDigit = ref(null);
 const digitSeq = ref([]);
 
-const isDualDisplay = computed(() => leftDigit.value != null && rightDigit.value != null);
+const isDualDisplay = computed(() => isMediapipe.value && leftDigit.value != null && rightDigit.value != null);
 
 const displaySubText = computed(() => {
+  if (isCsl.value) {
+    if (!detectionsNow.value.length) return "未检测到手语手势";
+    return labelZh.value || `检测到 ${detectionsNow.value.length} 个手势`;
+  }
   if (!handsNow.value.length) return "未检测到手";
   if (leftDigit.value != null && rightDigit.value != null) {
     return `左手 ${leftDigit.value} · 右手 ${rightDigit.value}`;
@@ -186,13 +226,33 @@ const displaySubText = computed(() => {
   return `检测到 ${handsNow.value.length} 只手`;
 });
 
+const resetResult = () => {
+  handsNow.value = [];
+  detectionsNow.value = [];
+  displayText.value = "";
+  labelZh.value = "";
+  leftDigit.value = null;
+  rightDigit.value = null;
+};
+
 const applyDisplayFromResponse = (d) => {
+  if (d.recognizer === "csl-yolo11s" || isCsl.value) {
+    detectionsNow.value = d.detections || [];
+    handsNow.value = [];
+    leftDigit.value = null;
+    rightDigit.value = null;
+    displayText.value = d.displayText != null && d.displayText !== "" ? String(d.displayText) : "";
+    labelZh.value = d.labelZh || "";
+    return;
+  }
+
+  detectionsNow.value = [];
   handsNow.value = d.hands || [];
   leftDigit.value = d.leftDigit ?? null;
   rightDigit.value = d.rightDigit ?? null;
+  labelZh.value = "";
   let text = d.displayText != null && d.displayText !== "" ? String(d.displayText) : "";
 
-  // 兜底：双手已检出但后端未组合成「右 左」时，按画面位置自行组合
   const hands = handsNow.value;
   const looksDual = /^\d+\s+\d+$/.test(text.trim());
   if (hands.length >= 2 && !looksDual) {
@@ -203,7 +263,6 @@ const applyDisplayFromResponse = (d) => {
         const cx = (h) => (h.bbox ? (h.bbox[0] + h.bbox[2]) / 2 : (h.landmarks?.[0]?.[0] || 0));
         return cx(a) - cx(b);
       });
-    // 未镜像自拍：画面右≈左手，画面左≈右手 → 显示「右 左」
     const leftD = top2[1]?.digit ?? top2[1]?.count;
     const rightD = top2[0]?.digit ?? top2[0]?.count;
     if (leftD != null && rightD != null) {
@@ -220,6 +279,34 @@ const applyDisplayFromResponse = (d) => {
   } else {
     displayText.value = "";
   }
+};
+
+const appendFormParams = (fd) => {
+  fd.append("recognizer", recognizer.value);
+  if (isMediapipe.value) {
+    fd.append("maxHands", String(maxHands.value));
+    fd.append("handConf", String(handConf.value));
+  } else {
+    fd.append("conf", String(detConf.value));
+  }
+};
+
+const loadRecognizers = async () => {
+  try {
+    const res = await handposeApi.models();
+    const list = res.data?.recognizers;
+    if (Array.isArray(list) && list.length) recognizers.value = list;
+  } catch { /* 使用默认列表 */ }
+};
+
+const onRecognizerChange = () => {
+  stop();
+  resetResult();
+  digitSeq.value = [];
+  stableDigit = null;
+  stableCnt = 0;
+  lastCommitted = null;
+  imgResult.value = "";
 };
 
 const imgLoading = ref(false);
@@ -256,10 +343,7 @@ const listDevices = async (requestPerm = false) => {
 const onModeChange = () => {
   stop();
   imgResult.value = "";
-  handsNow.value = [];
-  displayText.value = "";
-  leftDigit.value = null;
-  rightDigit.value = null;
+  resetResult();
 };
 
 const start = async () => {
@@ -292,15 +376,13 @@ const stop = () => {
     stream = null;
   }
   previewOpen.value = false;
-  handsNow.value = [];
-  displayText.value = "";
-  leftDigit.value = null;
-  rightDigit.value = null;
+  resetResult();
   const ov = overlayEl.value;
   if (ov?.width) ov.getContext("2d").clearRect(0, 0, ov.width, ov.height);
 };
 
-const SEND_W = 480; // 降采样送检，坐标系与 overlay 一致
+const SEND_W_DIGIT = 480;
+const SEND_W_CSL = 640;
 const capCanvas = document.createElement("canvas");
 
 const loopOnce = async () => {
@@ -312,16 +394,16 @@ const loopOnce = async () => {
   }
   busy = true;
   try {
-    const scale = SEND_W / v.videoWidth;
-    capCanvas.width = SEND_W;
+    const sendW = isCsl.value ? SEND_W_CSL : SEND_W_DIGIT;
+    const scale = sendW / v.videoWidth;
+    capCanvas.width = sendW;
     capCanvas.height = Math.round(v.videoHeight * scale);
     capCanvas.getContext("2d").drawImage(v, 0, 0, capCanvas.width, capCanvas.height);
     const blob = await new Promise((r) => capCanvas.toBlob(r, "image/jpeg", 0.7));
     if (blob && running.value) {
       const fd = new FormData();
       fd.append("file", blob, "frame.jpg");
-      fd.append("maxHands", String(maxHands.value));
-      fd.append("handConf", String(handConf.value));
+      appendFormParams(fd);
       const res = await handposeApi.estimate(fd);
       if (running.value) {
         const d = res.data || {};
@@ -345,6 +427,20 @@ const drawOverlay = (d) => {
   }
   const ctx = ov.getContext("2d");
   ctx.clearRect(0, 0, ov.width, ov.height);
+
+  if (d.recognizer === "csl-yolo11s" || isCsl.value) {
+    for (const det of d.detections || []) {
+      const [x1, y1, x2, y2] = det.bbox;
+      ctx.strokeStyle = "#00ff88";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      ctx.font = "bold 18px sans-serif";
+      ctx.fillStyle = "#00ff88";
+      ctx.fillText(`${det.className}`, x1, Math.max(20, y1 - 6));
+    }
+    return;
+  }
+
   for (const h of d.hands || []) {
     const pts = h.landmarks;
     ctx.lineWidth = 2;
@@ -369,17 +465,20 @@ const drawOverlay = (d) => {
 };
 
 const trackDigit = (d) => {
-  const digit = (d.hands || []).length
-    ? (d.displayText != null && d.displayText !== "" ? String(d.displayText) : null)
-    : null;
-  if (digit === stableDigit) {
+  let token = null;
+  if (d.recognizer === "csl-yolo11s" || isCsl.value) {
+    token = (d.detections || []).length && d.displayText ? String(d.displayText) : null;
+  } else {
+    token = (d.hands || []).length && d.displayText != null && d.displayText !== ""
+      ? String(d.displayText) : null;
+  }
+  if (token === stableDigit) {
     stableCnt += 1;
   } else {
-    stableDigit = digit;
+    stableDigit = token;
     stableCnt = 1;
   }
   if (stableDigit == null) {
-    // 手离开画面：允许下一次相同数字重新记录
     if (stableCnt >= STABLE_N) lastCommitted = null;
     return;
   }
@@ -387,7 +486,7 @@ const trackDigit = (d) => {
     lastCommitted = stableDigit;
     digitSeq.value.push(stableDigit);
     if (speakOn.value && window.speechSynthesis) {
-      const u = new SpeechSynthesisUtterance(stableDigit);
+      const u = new SpeechSynthesisUtterance(isCsl.value ? (d.labelZh || stableDigit) : stableDigit);
       u.lang = "zh-CN";
       window.speechSynthesis.speak(u);
     }
@@ -399,14 +498,17 @@ const onPickImage = async (uploadFile) => {
   try {
     const fd = new FormData();
     fd.append("file", uploadFile.raw);
-    fd.append("maxHands", String(maxHands.value));
-    fd.append("handConf", String(handConf.value));
+    appendFormParams(fd);
     fd.append("draw", "1");
     const res = await handposeApi.estimate(fd);
     const d = res.data || {};
     imgResult.value = d.imageBase64 || "";
     applyDisplayFromResponse(d);
-    if (!(d.hands || []).length) ElMessage.info("未检测到手部");
+    if (isCsl.value) {
+      if (!(d.detections || []).length) ElMessage.info("未检测到手语手势");
+    } else if (!(d.hands || []).length) {
+      ElMessage.info("未检测到手部");
+    }
   } catch (e) {
     ElMessage.error(e.message || "识别失败");
   } finally {
@@ -424,6 +526,7 @@ const copySeq = async () => {
 };
 
 listDevices();
+loadRecognizers();
 
 onBeforeUnmount(() => {
   stop();
@@ -467,6 +570,7 @@ onBeforeUnmount(() => {
   color: #1f6feb; font-variant-numeric: tabular-nums;
 }
 .digit-big.digit-dual { font-size: 84px; letter-spacing: 0.02em; }
+.digit-big.digit-csl { font-size: 72px; letter-spacing: 0.04em; }
 .digit-big.digit-none { color: #c0c4cc; }
 .digit-sub { text-align: center; color: #7a8aa5; font-size: 13px; margin-bottom: 10px; }
 .hand-chips { display: flex; flex-direction: column; gap: 8px; }
