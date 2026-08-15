@@ -234,6 +234,15 @@ export const handposeApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 0,
     }),
+  estimateVideo: (formData) =>
+    request.post('/ai/handpose/estimate-video', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+  videoProgress: (jobId) =>
+    request.get(`/ai/handpose/video-progress/${jobId}`, { timeout: 0 }),
+  outputVideo: (name) =>
+    request.get(`/ai/handpose/output/${name}`, { responseType: 'blob', timeout: 0 }),
 }
 
 // ---------------- 跌倒检测（姿态关键点四指标 + 告警）

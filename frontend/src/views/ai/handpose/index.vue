@@ -11,17 +11,26 @@
                 <div class="help-pop">
                   <p><b>数字手势（MediaPipe）</b>：21 关键点 → 0–9（含中式 6–9）；双手「右 左」组合。</p>
                   <p><b>中国手语（YOLO11s）</b>：先定位手部再识别 30 类字母/声母（A–Z、CH、NG、SH、ZH）。请将手靠近镜头、背景简洁。</p>
+                  <p><b>可多选</b>：同时启用数字与手语时，结果区分别展示，主结果为「数字 | 手语」。</p>
+                  <p>支持本地摄像头 / 图片 / <b>本地视频</b>。视频异步处理，完成后可播放标注结果并查看识别序列。</p>
                   <p>识别稳定约 1 秒自动记入序列，可勾选语音播报。</p>
                 </div>
               </template>
               <el-icon class="card-help"><QuestionFilled /></el-icon>
             </el-tooltip>
-            <el-tag v-if="running" type="success" size="small" effect="plain">识别中</el-tag>
+            <el-tag v-if="running || videoRunning" type="success" size="small" effect="plain">
+              {{ videoRunning ? '视频处理中' : '识别中' }}
+            </el-tag>
           </div>
           <div class="card-head-actions">
             <template v-if="mode === 'camera'">
               <el-button v-if="!running" type="primary" :disabled="!deviceId" @click="start">开始识别</el-button>
               <el-button v-else type="danger" @click="stop">停止</el-button>
+            </template>
+            <template v-else-if="mode === 'video'">
+              <el-button type="primary" :loading="videoRunning" :disabled="!videoFile || videoRunning" @click="runVideo">
+                开始识别视频
+              </el-button>
             </template>
           </div>
         </div>
@@ -29,8 +38,16 @@
       <el-form label-position="top" class="cfg-form" @submit.prevent>
         <el-row :gutter="16">
           <el-col :xs="24" :sm="12" :md="8">
-            <el-form-item label="识别模型">
-              <el-select v-model="recognizer" :disabled="running" @change="onRecognizerChange">
+            <el-form-item label="识别模型（可多选）">
+              <el-select
+                v-model="selectedRecognizers"
+                multiple
+                collapse-tags
+                collapse-tags-tooltip
+                :disabled="running || videoRunning"
+                placeholder="至少选一项"
+                @change="onRecognizerChange"
+              >
                 <el-option
                   v-for="r in recognizers"
                   :key="r.id"
@@ -42,9 +59,10 @@
           </el-col>
           <el-col :xs="12" :sm="6" :md="4">
             <el-form-item label="来源">
-              <el-select v-model="mode" :disabled="running" @change="onModeChange">
+              <el-select v-model="mode" :disabled="running || videoRunning" @change="onModeChange">
                 <el-option label="本地摄像头" value="camera" />
                 <el-option label="图片" value="image" />
+                <el-option label="本地视频" value="video" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -67,19 +85,33 @@
               </div>
             </el-form-item>
           </el-col>
+          <el-col v-if="mode === 'video'" :xs="24" :sm="10" :md="8">
+            <el-form-item label="视频">
+              <div class="src-pick">
+                <el-upload :show-file-list="false" :auto-upload="false" accept="video/*" :on-change="onPickVideo" :disabled="videoRunning">
+                  <el-button :icon="UploadFilled" :disabled="videoRunning">{{ videoFileName || '选择本地视频' }}</el-button>
+                </el-upload>
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col v-if="mode === 'video'" :xs="12" :sm="4" :md="3">
+            <el-form-item label="抽帧间隔">
+              <el-input-number v-model="frameStride" :min="1" :max="8" style="width: 100%" :disabled="videoRunning" />
+            </el-form-item>
+          </el-col>
           <el-col v-if="isMediapipe" :xs="12" :sm="4" :md="3">
             <el-form-item label="最大手数">
-              <el-input-number v-model="maxHands" :min="1" :max="4" style="width: 100%" :disabled="running" />
+              <el-input-number v-model="maxHands" :min="1" :max="4" style="width: 100%" :disabled="running || videoRunning" />
             </el-form-item>
           </el-col>
           <el-col v-if="isMediapipe" :xs="12" :sm="6" :md="4">
             <el-form-item label="关键点置信度">
-              <el-slider v-model="handConf" :min="0.5" :max="0.95" :step="0.05" :disabled="running" />
+              <el-slider v-model="handConf" :min="0.5" :max="0.95" :step="0.05" :disabled="running || videoRunning" />
             </el-form-item>
           </el-col>
           <el-col v-if="isCsl" :xs="12" :sm="6" :md="4">
             <el-form-item label="检测置信度">
-              <el-slider v-model="detConf" :min="0.25" :max="0.9" :step="0.05" :disabled="running" />
+              <el-slider v-model="detConf" :min="0.25" :max="0.9" :step="0.05" :disabled="running || videoRunning" />
             </el-form-item>
           </el-col>
           <el-col :xs="12" :sm="6" :md="4">
@@ -96,14 +128,29 @@
       <el-col :xs="24" :md="15">
         <el-card shadow="never" class="stage-card">
           <template #header>
-            <div class="card-head"><span class="card-title">{{ mode === 'camera' ? '实时画面' : '识别结果图' }}</span>
-              <span v-if="fps" class="hint-inline">{{ fps }} FPS</span>
+            <div class="card-head">
+              <span class="card-title">{{ stageTitle }}</span>
+              <span v-if="fps && mode === 'camera'" class="hint-inline">{{ fps }} FPS</span>
             </div>
           </template>
           <div v-if="mode === 'camera'" class="cam-stage">
             <video ref="videoEl" class="cam-media" autoplay muted playsinline />
             <canvas ref="overlayEl" class="cam-overlay" />
             <div v-if="!previewOpen" class="stage-placeholder">选择摄像头后点击「开始识别」</div>
+          </div>
+          <div v-else-if="mode === 'video'" class="img-stage">
+            <div v-if="videoRunning" class="progress-box">
+              <div class="progress-title">处理中… {{ videoProcessed }}/{{ videoTotal || '?' }} 帧</div>
+              <el-progress :percentage="videoPercent" :stroke-width="16" :text-inside="true" />
+            </div>
+            <template v-else-if="videoResultUrl">
+              <video ref="resultVideoEl" :src="videoResultUrl" class="result-img" controls />
+              <div class="video-actions">
+                <el-button size="small" @click="downloadVideoResult">下载结果视频</el-button>
+                <span class="hint-inline">共 {{ videoStats.frames ?? '-' }} 帧，识别 {{ (videoStats.sequence || []).length }} 条</span>
+              </div>
+            </template>
+            <el-empty v-else description="选择本地视频后点击「开始识别视频」" />
           </div>
           <div v-else class="img-stage">
             <img v-if="imgResult" :src="'data:image/jpeg;base64,' + imgResult" class="result-img" />
@@ -117,13 +164,26 @@
           <template #header>
             <div class="card-head"><span class="card-title">当前识别结果</span></div>
           </template>
-          <div class="digit-big" :class="{ 'digit-none': !displayText, 'digit-dual': isDualDisplay, 'digit-csl': isCsl }">
+          <div class="digit-big" :class="{ 'digit-none': !displayText, 'digit-dual': isDualDisplay, 'digit-csl': isCslOnly }">
             {{ displayText || '—' }}
           </div>
           <div class="digit-sub">{{ displaySubText }}</div>
+
+          <div v-if="isBoth" class="dual-panels">
+            <div class="dual-panel">
+              <div class="dual-title">数字手势</div>
+              <div class="dual-value">{{ digitText || '—' }}</div>
+            </div>
+            <div class="dual-panel">
+              <div class="dual-title">中国手语</div>
+              <div class="dual-value">{{ signText || '—' }}</div>
+              <div v-if="labelZh" class="dual-sub">{{ labelZh }}</div>
+            </div>
+          </div>
+
           <!-- MediaPipe 手列表 -->
           <div v-if="isMediapipe" class="hand-chips">
-            <div v-for="(h, i) in handsNow" :key="i" class="hand-chip">
+            <div v-for="(h, i) in handsNow" :key="'h'+i" class="hand-chip">
               <el-tag size="small" :type="h.handedness === 'Right' ? 'success' : 'warning'" effect="dark">
                 {{ h.handedness === 'Right' ? '右手' : '左手' }} · {{ h.digit ?? h.count }}
               </el-tag>
@@ -135,8 +195,8 @@
             </div>
           </div>
           <!-- 手语检测列表 -->
-          <div v-else class="hand-chips">
-            <div v-for="(det, i) in detectionsNow" :key="i" class="hand-chip">
+          <div v-if="isCsl" class="hand-chips" :class="{ 'chips-gap': isMediapipe }">
+            <div v-for="(det, i) in detectionsNow" :key="'d'+i" class="hand-chip">
               <el-tag size="small" type="primary" effect="dark">{{ det.className }}</el-tag>
               <span class="gesture-zh">{{ det.labelZh || '' }}</span>
               <span class="hint-inline">{{ (det.confidence * 100).toFixed(0) }}%</span>
@@ -144,10 +204,16 @@
             <div v-if="!detectionsNow.length" class="hint-inline">未检测到手语手势</div>
           </div>
 
-          <el-divider content-position="left">{{ isCsl ? '动态手语序列' : '动态数字序列' }}</el-divider>
+          <el-divider content-position="left">{{ seqTitle }}</el-divider>
           <div class="seq-box">
-            <span v-if="!digitSeq.length" class="hint-inline">{{ isCsl ? '比出手语并保持约 1 秒，自动记录到这里' : '比出数字并保持约 1 秒，自动记录到这里' }}</span>
-            <span v-for="(d, i) in digitSeq" :key="i" class="seq-digit">{{ d }}</span>
+            <span v-if="!digitSeq.length" class="hint-inline">{{ seqHint }}</span>
+            <span
+              v-for="(d, i) in digitSeq"
+              :key="i"
+              class="seq-digit"
+              :class="{ clickable: mode === 'video' && videoSeqMeta[i] }"
+              @click="seekVideoSeq(i)"
+            >{{ d }}</span>
           </div>
           <div class="seq-actions">
             <el-button size="small" :disabled="!digitSeq.length" @click="digitSeq = []">清空序列</el-button>
@@ -181,7 +247,7 @@ const CONN_FINGER = ["thumb", "thumb", "thumb", "thumb", "index", "index", "inde
   "pinky", "pinky", "pinky", "pinky", "pinky"];
 
 const mode = ref("camera");
-const recognizer = ref("mediapipe");
+const selectedRecognizers = ref(["mediapipe"]);
 const recognizers = ref([
   { id: "mediapipe", name: "数字手势（MediaPipe 0–9）" },
   { id: "csl-yolo11s", name: "中国手语（YOLO11s）" },
@@ -194,17 +260,43 @@ const previewOpen = ref(false);
 const maxHands = ref(2);
 const handConf = ref(0.8);
 const detConf = ref(0.5);
+const frameStride = ref(2);
 const speakOn = ref(false);
 const fps = ref(0);
 
-const isMediapipe = computed(() => recognizer.value === "mediapipe");
-const isCsl = computed(() => recognizer.value === "csl-yolo11s");
+const videoFile = ref(null);
+const videoFileName = ref("");
+const videoRunning = ref(false);
+const videoProcessed = ref(0);
+const videoTotal = ref(0);
+const videoResultUrl = ref("");
+const videoStats = ref({});
+const videoSeqMeta = ref([]);
+const resultVideoEl = ref(null);
+let videoBlobUrl = null;
+let videoPollTimer = null;
+
+const isMediapipe = computed(() => selectedRecognizers.value.includes("mediapipe"));
+const isCsl = computed(() => selectedRecognizers.value.includes("csl-yolo11s"));
+const isBoth = computed(() => isMediapipe.value && isCsl.value);
+const isCslOnly = computed(() => isCsl.value && !isMediapipe.value);
+const videoPercent = computed(() => {
+  if (!videoTotal.value) return videoRunning.value ? 5 : 0;
+  return Math.min(100, Math.round((videoProcessed.value / videoTotal.value) * 100));
+});
+const stageTitle = computed(() => {
+  if (mode.value === "camera") return "实时画面";
+  if (mode.value === "video") return "视频识别结果";
+  return "识别结果图";
+});
 
 const videoEl = ref(null);
 const overlayEl = ref(null);
 const handsNow = ref([]);
 const detectionsNow = ref([]);
 const displayText = ref("");
+const digitText = ref("");
+const signText = ref("");
 const labelZh = ref("");
 const leftDigit = ref(null);
 const rightDigit = ref(null);
@@ -212,7 +304,26 @@ const digitSeq = ref([]);
 
 const isDualDisplay = computed(() => isMediapipe.value && leftDigit.value != null && rightDigit.value != null);
 
+const seqTitle = computed(() => {
+  if (isBoth.value) return "动态识别序列";
+  if (isCsl.value) return "动态手语序列";
+  return "动态数字序列";
+});
+const seqHint = computed(() => {
+  if (mode.value === "video") return "视频识别完成后，稳定手势会按时间记入这里（可点击跳转）";
+  if (isBoth.value) return "比出手势并保持约 1 秒，数字与手语结果会一并记录";
+  if (isCsl.value) return "比出手语并保持约 1 秒，自动记录到这里";
+  return "比出数字并保持约 1 秒，自动记录到这里";
+});
+
 const displaySubText = computed(() => {
+  if (isBoth.value) {
+    const bits = [];
+    if (digitText.value) bits.push(`数字 ${digitText.value}`);
+    if (signText.value) bits.push(`手语 ${signText.value}${labelZh.value ? `（${labelZh.value}）` : ""}`);
+    if (!bits.length) return "未检测到手势";
+    return bits.join(" · ");
+  }
   if (isCsl.value) {
     if (!detectionsNow.value.length) return "未检测到手语手势";
     return labelZh.value || `检测到 ${detectionsNow.value.length} 个手势`;
@@ -230,28 +341,21 @@ const resetResult = () => {
   handsNow.value = [];
   detectionsNow.value = [];
   displayText.value = "";
+  digitText.value = "";
+  signText.value = "";
   labelZh.value = "";
   leftDigit.value = null;
   rightDigit.value = null;
 };
 
-const applyDisplayFromResponse = (d) => {
-  if (d.recognizer === "csl-yolo11s" || isCsl.value) {
-    detectionsNow.value = d.detections || [];
-    handsNow.value = [];
-    leftDigit.value = null;
-    rightDigit.value = null;
-    displayText.value = d.displayText != null && d.displayText !== "" ? String(d.displayText) : "";
-    labelZh.value = d.labelZh || "";
-    return;
-  }
-
-  detectionsNow.value = [];
+const applyMediapipeDigits = (d) => {
   handsNow.value = d.hands || [];
   leftDigit.value = d.leftDigit ?? null;
   rightDigit.value = d.rightDigit ?? null;
-  labelZh.value = "";
-  let text = d.displayText != null && d.displayText !== "" ? String(d.displayText) : "";
+  let text = d.digitText != null && d.digitText !== ""
+    ? String(d.digitText)
+    : (d.displayText != null && d.displayText !== "" && !String(d.displayText).includes("|")
+      ? String(d.displayText) : "");
 
   const hands = handsNow.value;
   const looksDual = /^\d+\s+\d+$/.test(text.trim());
@@ -271,22 +375,61 @@ const applyDisplayFromResponse = (d) => {
       rightDigit.value = rightD;
     }
   }
+  if (!text && hands.length) {
+    text = d.primaryDigit != null ? String(d.primaryDigit) : String(d.totalCount ?? "");
+  }
+  digitText.value = text || "";
+  return digitText.value;
+};
 
-  if (text) {
-    displayText.value = text;
-  } else if (hands.length) {
-    displayText.value = d.primaryDigit != null ? String(d.primaryDigit) : String(d.totalCount ?? "");
+const applyDisplayFromResponse = (d) => {
+  if (isMediapipe.value) {
+    applyMediapipeDigits(d);
   } else {
-    displayText.value = "";
+    handsNow.value = [];
+    leftDigit.value = null;
+    rightDigit.value = null;
+    digitText.value = "";
+  }
+
+  if (isCsl.value) {
+    detectionsNow.value = d.detections || [];
+    signText.value = d.signText != null && d.signText !== ""
+      ? String(d.signText)
+      : (isCslOnly.value && d.displayText && !String(d.displayText).includes("|")
+        ? String(d.displayText) : "");
+    if (!signText.value && detectionsNow.value.length) {
+      signText.value = String(detectionsNow.value[0].className || "");
+    }
+    labelZh.value = d.labelZh || detectionsNow.value[0]?.labelZh || "";
+  } else {
+    detectionsNow.value = [];
+    signText.value = "";
+    labelZh.value = "";
+  }
+
+  if (isBoth.value) {
+    const parts = [];
+    if (digitText.value) parts.push(digitText.value);
+    if (signText.value) parts.push(signText.value);
+    displayText.value = parts.length ? parts.join(" | ") : (d.displayText ? String(d.displayText) : "");
+  } else if (isCsl.value) {
+    displayText.value = signText.value || "";
+  } else {
+    displayText.value = digitText.value || "";
   }
 };
 
 const appendFormParams = (fd) => {
-  fd.append("recognizer", recognizer.value);
+  const list = selectedRecognizers.value.length
+    ? selectedRecognizers.value
+    : ["mediapipe"];
+  fd.append("recognizer", list.join(","));
   if (isMediapipe.value) {
     fd.append("maxHands", String(maxHands.value));
     fd.append("handConf", String(handConf.value));
-  } else {
+  }
+  if (isCsl.value) {
     fd.append("conf", String(detConf.value));
   }
 };
@@ -299,7 +442,37 @@ const loadRecognizers = async () => {
   } catch { /* 使用默认列表 */ }
 };
 
-const onRecognizerChange = () => {
+const clearVideoResult = () => {
+  if (videoPollTimer) {
+    clearInterval(videoPollTimer);
+    videoPollTimer = null;
+  }
+  if (videoBlobUrl) {
+    URL.revokeObjectURL(videoBlobUrl);
+    videoBlobUrl = null;
+  }
+  videoResultUrl.value = "";
+  videoStats.value = {};
+  videoSeqMeta.value = [];
+  videoProcessed.value = 0;
+  videoTotal.value = 0;
+};
+
+const onModeChange = () => {
+  stop();
+  imgResult.value = "";
+  resetResult();
+  clearVideoResult();
+  videoFile.value = null;
+  videoFileName.value = "";
+  digitSeq.value = [];
+};
+
+const onRecognizerChange = (val) => {
+  if (!Array.isArray(val) || !val.length) {
+    ElMessage.warning("请至少选择一种识别模型");
+    selectedRecognizers.value = ["mediapipe"];
+  }
   stop();
   resetResult();
   digitSeq.value = [];
@@ -307,6 +480,7 @@ const onRecognizerChange = () => {
   stableCnt = 0;
   lastCommitted = null;
   imgResult.value = "";
+  clearVideoResult();
 };
 
 const imgLoading = ref(false);
@@ -340,13 +514,11 @@ const listDevices = async (requestPerm = false) => {
   }
 };
 
-const onModeChange = () => {
-  stop();
-  imgResult.value = "";
-  resetResult();
-};
-
 const start = async () => {
+  if (!selectedRecognizers.value.length) {
+    ElMessage.warning("请至少选择一种识别模型");
+    return;
+  }
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       video: { deviceId: deviceId.value ? { exact: deviceId.value } : undefined, width: 960, height: 540 },
@@ -428,7 +600,32 @@ const drawOverlay = (d) => {
   const ctx = ov.getContext("2d");
   ctx.clearRect(0, 0, ov.width, ov.height);
 
-  if (d.recognizer === "csl-yolo11s" || isCsl.value) {
+  if (isMediapipe.value) {
+    for (const h of d.hands || []) {
+      const pts = h.landmarks;
+      if (!pts?.length) continue;
+      ctx.lineWidth = 2;
+      CONNECTIONS.forEach(([a, b], i) => {
+        ctx.strokeStyle = FINGER_COLORS[CONN_FINGER[i]];
+        ctx.beginPath();
+        ctx.moveTo(pts[a][0], pts[a][1]);
+        ctx.lineTo(pts[b][0], pts[b][1]);
+        ctx.stroke();
+      });
+      ctx.fillStyle = "#ff2d2d";
+      for (const p of pts) {
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const dig = h.digit != null ? h.digit : h.count;
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "#ffee00";
+      ctx.fillText(`${h.handedness === "Right" ? "右" : "左"} ${dig}`, h.bbox[0], Math.max(20, h.bbox[1] - 6));
+    }
+  }
+
+  if (isCsl.value) {
     for (const det of d.detections || []) {
       const [x1, y1, x2, y2] = det.bbox;
       ctx.strokeStyle = "#00ff88";
@@ -438,39 +635,19 @@ const drawOverlay = (d) => {
       ctx.fillStyle = "#00ff88";
       ctx.fillText(`${det.className}`, x1, Math.max(20, y1 - 6));
     }
-    return;
-  }
-
-  for (const h of d.hands || []) {
-    const pts = h.landmarks;
-    ctx.lineWidth = 2;
-    CONNECTIONS.forEach(([a, b], i) => {
-      ctx.strokeStyle = FINGER_COLORS[CONN_FINGER[i]];
-      ctx.beginPath();
-      ctx.moveTo(pts[a][0], pts[a][1]);
-      ctx.lineTo(pts[b][0], pts[b][1]);
-      ctx.stroke();
-    });
-    ctx.fillStyle = "#ff2d2d";
-    for (const p of pts) {
-      ctx.beginPath();
-      ctx.arc(p[0], p[1], 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    const dig = h.digit != null ? h.digit : h.count;
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillStyle = "#ffee00";
-    ctx.fillText(`${h.handedness === "Right" ? "右" : "左"} ${dig}`, h.bbox[0], Math.max(20, h.bbox[1] - 6));
   }
 };
 
 const trackDigit = (d) => {
   let token = null;
-  if (d.recognizer === "csl-yolo11s" || isCsl.value) {
-    token = (d.detections || []).length && d.displayText ? String(d.displayText) : null;
+  if (isBoth.value) {
+    token = displayText.value || null;
+  } else if (isCsl.value) {
+    token = (d.detections || []).length && (d.signText || d.displayText)
+      ? String(d.signText || d.displayText) : null;
   } else {
-    token = (d.hands || []).length && d.displayText != null && d.displayText !== ""
-      ? String(d.displayText) : null;
+    token = (d.hands || []).length && (d.digitText || d.displayText)
+      ? String(d.digitText || d.displayText) : null;
   }
   if (token === stableDigit) {
     stableCnt += 1;
@@ -486,14 +663,122 @@ const trackDigit = (d) => {
     lastCommitted = stableDigit;
     digitSeq.value.push(stableDigit);
     if (speakOn.value && window.speechSynthesis) {
-      const u = new SpeechSynthesisUtterance(isCsl.value ? (d.labelZh || stableDigit) : stableDigit);
+      const speak = isCslOnly.value
+        ? (d.labelZh || stableDigit)
+        : stableDigit.replace(/\s*\|\s*/g, "，");
+      const u = new SpeechSynthesisUtterance(speak);
       u.lang = "zh-CN";
       window.speechSynthesis.speak(u);
     }
   }
 };
 
+const onPickVideo = (uploadFile) => {
+  clearVideoResult();
+  videoFile.value = uploadFile.raw;
+  videoFileName.value = uploadFile.name || "已选视频";
+  digitSeq.value = [];
+  resetResult();
+};
+
+const runVideo = async () => {
+  if (!selectedRecognizers.value.length) {
+    ElMessage.warning("请至少选择一种识别模型");
+    return;
+  }
+  if (!videoFile.value) {
+    ElMessage.warning("请先选择视频");
+    return;
+  }
+  videoRunning.value = true;
+  videoProcessed.value = 0;
+  videoTotal.value = 0;
+  clearVideoResult();
+  digitSeq.value = [];
+  resetResult();
+  try {
+    const fd = new FormData();
+    fd.append("file", videoFile.value);
+    appendFormParams(fd);
+    fd.append("frameStride", String(frameStride.value));
+    const res = await handposeApi.estimateVideo(fd);
+    await pollVideo(res.data.jobId);
+  } catch (e) {
+    ElMessage.error(e.message || "视频识别失败");
+    videoRunning.value = false;
+  }
+};
+
+const pollVideo = (jobId) => new Promise((resolve) => {
+  if (videoPollTimer) clearInterval(videoPollTimer);
+  videoPollTimer = setInterval(async () => {
+    try {
+      const res = await handposeApi.videoProgress(jobId);
+      const d = res.data || {};
+      videoProcessed.value = d.processed || 0;
+      videoTotal.value = d.total || 0;
+      if (d.status === "error") {
+        clearInterval(videoPollTimer);
+        videoPollTimer = null;
+        ElMessage.error(d.error || "视频识别失败");
+        videoRunning.value = false;
+        resolve();
+        return;
+      }
+      if (d.status === "done") {
+        clearInterval(videoPollTimer);
+        videoPollTimer = null;
+        videoStats.value = d.stats || {};
+        const seq = videoStats.value.sequence || [];
+        digitSeq.value = seq.map((s) => s.text);
+        videoSeqMeta.value = seq;
+        if (seq.length) {
+          displayText.value = seq[seq.length - 1].text || "";
+          digitText.value = seq[seq.length - 1].digitText || "";
+          signText.value = seq[seq.length - 1].signText || "";
+          labelZh.value = seq[seq.length - 1].labelZh || "";
+        }
+        try {
+          const blob = await handposeApi.outputVideo(videoStats.value.output);
+          videoBlobUrl = URL.createObjectURL(blob);
+          videoResultUrl.value = videoBlobUrl;
+        } catch (e) {
+          ElMessage.warning(e.message || "结果视频获取失败");
+        }
+        videoRunning.value = false;
+        ElMessage.success(`视频识别完成，共 ${seq.length} 条手势`);
+        resolve();
+      }
+    } catch (e) {
+      clearInterval(videoPollTimer);
+      videoPollTimer = null;
+      ElMessage.error(e?.message || "视频识别失败");
+      videoRunning.value = false;
+      resolve();
+    }
+  }, 1000);
+});
+
+const downloadVideoResult = () => {
+  if (!videoResultUrl.value) return;
+  const a = document.createElement("a");
+  a.href = videoResultUrl.value;
+  a.download = videoStats.value.output || `handpose_${Date.now()}.mp4`;
+  a.click();
+};
+
+const seekVideoSeq = (i) => {
+  const meta = videoSeqMeta.value[i];
+  if (!meta || !resultVideoEl.value) return;
+  resultVideoEl.value.currentTime = Number(meta.sec) || 0;
+  resultVideoEl.value.play?.();
+};
+
 const onPickImage = async (uploadFile) => {
+  if (!selectedRecognizers.value.length) {
+    ElMessage.warning("请至少选择一种识别模型");
+    return;
+  }
   imgLoading.value = true;
   try {
     const fd = new FormData();
@@ -504,11 +789,11 @@ const onPickImage = async (uploadFile) => {
     const d = res.data || {};
     imgResult.value = d.imageBase64 || "";
     applyDisplayFromResponse(d);
-    if (isCsl.value) {
-      if (!(d.detections || []).length) ElMessage.info("未检测到手语手势");
-    } else if (!(d.hands || []).length) {
-      ElMessage.info("未检测到手部");
-    }
+    const noDigit = isMediapipe.value && !(d.hands || []).length;
+    const noSign = isCsl.value && !(d.detections || []).length;
+    if (noDigit && noSign) ElMessage.info("未检测到手势");
+    else if (isCslOnly.value && noSign) ElMessage.info("未检测到手语手势");
+    else if (isMediapipe.value && !isCsl.value && noDigit) ElMessage.info("未检测到手部");
   } catch (e) {
     ElMessage.error(e.message || "识别失败");
   } finally {
@@ -530,6 +815,7 @@ loadRecognizers();
 
 onBeforeUnmount(() => {
   stop();
+  clearVideoResult();
 });
 </script>
 
@@ -562,8 +848,11 @@ onBeforeUnmount(() => {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #94a3b8; font-size: 14px; pointer-events: none;
 }
-.img-stage { min-height: 360px; display: flex; align-items: center; justify-content: center; }
+.img-stage { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
 .result-img { max-width: 100%; max-height: 62vh; border-radius: 8px; }
+.progress-box { width: 100%; max-width: 520px; padding: 24px 16px; }
+.progress-title { text-align: center; margin-bottom: 12px; color: #606266; font-size: 14px; }
+.video-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
 .digit-big {
   font-size: 96px; font-weight: 800; line-height: 1.1; text-align: center;
@@ -573,7 +862,17 @@ onBeforeUnmount(() => {
 .digit-big.digit-csl { font-size: 72px; letter-spacing: 0.04em; }
 .digit-big.digit-none { color: #c0c4cc; }
 .digit-sub { text-align: center; color: #7a8aa5; font-size: 13px; margin-bottom: 10px; }
+.dual-panels {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;
+}
+.dual-panel {
+  background: #f5f7fa; border-radius: 8px; padding: 10px 12px; text-align: center;
+}
+.dual-title { font-size: 12px; color: #7a8aa5; margin-bottom: 4px; }
+.dual-value { font-size: 28px; font-weight: 750; color: #1f6feb; line-height: 1.2; }
+.dual-sub { font-size: 12px; color: #606266; margin-top: 2px; }
 .hand-chips { display: flex; flex-direction: column; gap: 8px; }
+.chips-gap { margin-top: 10px; }
 .hand-chip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .gesture-zh { font-size: 12px; color: #606266; min-width: 72px; }
 .finger-dots { display: inline-flex; gap: 4px; }
@@ -590,5 +889,7 @@ onBeforeUnmount(() => {
   font-size: 18px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
   padding: 0 8px;
 }
+.seq-digit.clickable { cursor: pointer; }
+.seq-digit.clickable:hover { filter: brightness(1.08); }
 .seq-actions { margin-top: 8px; display: flex; gap: 8px; }
 </style>
