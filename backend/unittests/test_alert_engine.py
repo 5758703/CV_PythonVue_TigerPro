@@ -758,3 +758,106 @@ def test_reset_runtime_clears_fall_tracker():
     out_after = _eval(rule, [_lying_det()], "fall10", 100.35, "h_after")
     assert out_after == []
     reset_runtime()
+
+
+def _collapsed_det(track_id=1, hip_y=360.0, body_span=100.0, conf=0.9):
+    """朝镜头塌缩：躯干仍近竖直（trunk 不越阈），但肩踝跨度相对站立明显变矮。"""
+    kp = [[320.0, hip_y, conf] for _ in range(17)]
+    shoulder_y = hip_y - 70.0
+    ankle_y = shoulder_y + body_span
+    kp[0] = [320.0, shoulder_y - 40.0, conf]
+    kp[5] = [300.0, shoulder_y, conf]
+    kp[6] = [340.0, shoulder_y, conf]
+    kp[11] = [305.0, hip_y, conf]
+    kp[12] = [335.0, hip_y, conf]
+    kp[15] = [305.0, ankle_y, conf]
+    kp[16] = [335.0, ankle_y, conf]
+    return {
+        "className": "person",
+        "confidence": conf,
+        "trackId": track_id,
+        "bbox": [290.0, shoulder_y - 50.0, 350.0, ankle_y + 10.0],
+        "keypoints": kp,
+    }
+
+
+def test_fall_config_stand_height_and_drop_memory_defaults():
+    from services.alert_engine import fall_config
+
+    out = fall_config({})
+    assert out["stand_height_ratio"] == 0.7
+    assert out["drop_memory_sec"] == 1.5
+    assert fall_config({"stand_height_ratio": 0})["stand_height_ratio"] >= 0.2
+    assert fall_config({"drop_memory_sec": -1})["drop_memory_sec"] == 0.0
+
+
+def test_fall_standing_collapse_plus_drop_memory_triggers():
+    """朝镜头缓慢跌倒：躯干角几乎不变，靠「站立身高塌缩 + 下坠记忆」凑满 min_score。
+
+    流程：站立建基线 → 一帧快速下坠（速度越阈）→ 随后若干帧仅塌缩无大速度，
+    仍应靠 drop_memory 粘滞速度分持续判定为跌倒。
+    """
+    reset_runtime("fall_collapse")
+    rule = _fall_rule({
+        "consecutive_frames": 1,
+        "stand_height_ratio": 0.7,
+        "drop_memory_sec": 1.5,
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 0},
+    }, rid=201)
+    for i in range(5):
+        assert _eval(rule, [_standing_det(hip_y=260.0)], "fall_collapse",
+                     100.0 + i * 0.05, f"st{i}") == []
+    # 快速下坠：髋部下移，瞬时速度越阈；塌缩身高同时命中 → 直接触发
+    drop = _collapsed_det(hip_y=340.0, body_span=110.0)
+    out1 = _eval(rule, [drop], "fall_collapse", 100.3, "drop")
+    assert len(out1) == 1
+    ind1 = out1[0]["detail"]["fallen"][0]["indicators"]
+    assert ind1.get("collapse", 1.0) < 0.7
+    assert ind1.get("speed", 0) > 0.5 or ind1.get("speedSticky")
+
+    # 记忆窗口内：髋部几乎不动（无新速度），仍应靠 sticky + collapse 维持跌倒
+    hold = _collapsed_det(hip_y=345.0, body_span=105.0)
+    out2 = _eval(rule, [hold], "fall_collapse", 100.6, "hold")
+    assert len(out2) == 1
+    assert out2[0]["detail"]["fallen"][0]["indicators"].get("speedSticky") is True
+    reset_runtime()
+
+
+def test_fall_streak_tolerates_brief_pose_gaps():
+    """连续帧确认对跌倒允许短暂空窗，避免卧地阶段姿态闪断清零 streak。"""
+    reset_runtime("fall_gap")
+    rule = _fall_rule({"consecutive_frames": 4, "cooldown_sec": 0}, rid=202)
+    for i in range(3):
+        assert _eval(rule, [_standing_det()], "fall_gap", 100.0 + i * 0.1, f"g{i}") == []
+    # 2 帧跌倒 + 3 帧空检 + 2 帧跌倒：空窗 <=4 时应跨过并凑满 consecutive
+    assert _eval(rule, [_lying_det()], "fall_gap", 100.3, "a1") == []
+    assert _eval(rule, [_lying_det()], "fall_gap", 100.4, "a2") == []
+    assert _eval(rule, [], "fall_gap", 100.5, "miss1") == []
+    assert _eval(rule, [], "fall_gap", 100.55, "miss2") == []
+    assert _eval(rule, [], "fall_gap", 100.6, "miss3") == []
+    assert _eval(rule, [_lying_det()], "fall_gap", 100.65, "a3") == []
+    out = _eval(rule, [_lying_det()], "fall_gap", 100.7, "a4")
+    assert len(out) == 1
+    reset_runtime()
+
+
+def test_fall_sustain_after_since_with_height_only():
+    """进入跌倒状态后，仅身高塌缩也应维持 fall 判定（补足 min_score）。"""
+    reset_runtime("fall_sustain")
+    rule = _fall_rule({
+        "consecutive_frames": 1,
+        "stand_height_ratio": 0.7,
+        "drop_memory_sec": 0.2,  # 极短记忆，迫使后续帧走 sustained 分支
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 0},
+    }, rid=203)
+    for i in range(5):
+        assert _eval(rule, [_standing_det(hip_y=260.0)], "fall_sustain",
+                     100.0 + i * 0.05, f"st{i}") == []
+    assert len(_eval(rule, [_collapsed_det(hip_y=340.0, body_span=110.0)],
+                     "fall_sustain", 100.3, "drop")) == 1
+    # 记忆已过期且无新速度：只靠塌缩 + sustained
+    out = _eval(rule, [_collapsed_det(hip_y=342.0, body_span=108.0)],
+                "fall_sustain", 100.8, "hold")
+    assert len(out) == 1
+    assert out[0]["detail"]["fallen"][0]["indicators"].get("sustained") is True
+    reset_runtime()

@@ -2161,7 +2161,12 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
         fall_detections,
         reset_runtime,
     )
-    from services.fall_detect import assign_track_ids, build_person_detections, fall_track_params
+    from services.fall_detect import (
+        assign_track_ids,
+        build_person_detections,
+        fall_track_params,
+        nms_person_detections,
+    )
 
     lib = (library or "ultralytics").lower()
     rules = rules or []
@@ -2233,6 +2238,7 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
             total_persons += len(persons)
 
             dets = build_person_detections(persons, w, h, kp_min_conf)
+            dets = nms_person_detections(dets)
             assign_track_ids(dets, source_key, max_age=track_max_age, kp_min_conf=kp_min_conf)
 
             now_ts = start + frames / fps

@@ -1850,6 +1850,8 @@ def seed_alert_rules():
         "centroid_speed": 0.5,
         "body_torso_ratio": 1.5,
         "head_y_ratio": 0.75,
+        "stand_height_ratio": 0.7,
+        "drop_memory_sec": 1.5,
         "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 0},
         "min_score": 2,
         "kp_min_conf": 0.3,

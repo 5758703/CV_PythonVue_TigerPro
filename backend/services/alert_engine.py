@@ -559,11 +559,17 @@ _FALL_THRESHOLD_DEFAULTS = {
     "head_y_ratio": 0.75,
     "min_score": 2.0,
     "kp_min_conf": 0.3,
+    # 朝镜头/缓慢跌倒时躯干角与瞬时速度常不够：用「相对站立身高塌缩」补身高分，
+    # 并用「下坠记忆」在真实速度越阈后的短窗口内继续计速度分，避免姿态闪断漏检。
+    "stand_height_ratio": 0.7,
+    "drop_memory_sec": 1.5,
 }
 _FALL_INT_DEFAULTS = {
     "track_max_age": 15,
 }
 _FALL_WEIGHT_KEYS = ("trunk", "speed", "height", "head")
+# 跌倒规则连续帧确认允许的短暂空窗（姿态模型在卧地阶段易闪断数帧）
+_FALL_STREAK_GAP_TOLERANCE = 4
 
 
 def _camel(key: str) -> str:
@@ -609,6 +615,9 @@ def fall_config(cfg: dict) -> dict:
     # 原点。在这唯一的配置解析入口钳一道下限，_track_anchor/build_person_detections
     # 两处消费者都自动受益，不需要各自防御。
     out["kp_min_conf"] = max(1e-6, out["kp_min_conf"])
+    # 站立身高塌缩比与下坠记忆窗口：非法值回落到默认，并钳到合理区间。
+    out["stand_height_ratio"] = min(0.95, max(0.2, out["stand_height_ratio"]))
+    out["drop_memory_sec"] = min(5.0, max(0.0, out["drop_memory_sec"]))
     return out
 
 
@@ -617,6 +626,11 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
 
     阈值与权重全部来自 rule.config()。跨帧状态按 trackId 存于 _runtime；
     同一 frame_token 重复调用直接复用缓存，避免质心被提前推进。
+
+    身高比除「肩踝跨度/躯干长」外，还可用相对站立基线的塌缩比
+    （bodyHeight / stand_body_h < stand_height_ratio）计分，覆盖朝镜头跌倒时
+    躯干角几乎不变、仅身高压缩的情形。速度分在真实越阈后的 drop_memory_sec
+    窗口内可粘滞计分，避免跌倒中段姿态闪断把连续确认打断。
     """
     from services.fall_detect import keypoint_metrics
 
@@ -643,6 +657,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
     conf = fall_config(cfg)
     weights = conf["weights"]
     total_weight = sum(weights.values()) or 1.0
+    drop_mem = conf["drop_memory_sec"]
 
     with _lock:
         st = _runtime.setdefault(
@@ -666,12 +681,23 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 continue
             live.add(tid)
             m = keypoint_metrics(kp, None, fh, conf["kp_min_conf"])
-            tr = tracks.setdefault(tid, {"hip": None, "since": None, "miss": 0, "okFrames": 0})
+            tr = tracks.setdefault(
+                tid,
+                {
+                    "hip": None,
+                    "since": None,
+                    "miss": 0,
+                    "okFrames": 0,
+                    "stand_body_h": None,
+                    "last_drop_ts": None,
+                },
+            )
             tr["miss"] = 0
 
             score = 0.0
             indicators = {}
             speed_hit = False  # 质心速度指标是否实际越阈（= 真正的「下坠证据」）
+            height_hit = False
 
             # 指标 1：躯干角（肩中点->髋中点 与垂直方向夹角）
             if weights["trunk"] and m["valid"]["trunk"]:
@@ -679,7 +705,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 if m["trunkAngle"] > conf["trunk_angle_deg"]:
                     score += weights["trunk"]
 
-            # 指标 2：质心（髋部）下降速度，单位「画面高/秒」
+            # 指标 2：质心（髋部）下降速度，单位「画面高/秒」；越阈后短窗口粘滞计分
             if m["valid"]["hip"]:
                 prev = tr.get("hip")
                 if weights["speed"] and prev and fh and now - prev[0] > 0:
@@ -688,19 +714,64 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                     if v > conf["centroid_speed"]:
                         score += weights["speed"]
                         speed_hit = True
+                        tr["last_drop_ts"] = now
                 tr["hip"] = (now, m["hipY"])
+            if (
+                weights["speed"]
+                and not speed_hit
+                and tr.get("last_drop_ts") is not None
+                and drop_mem > 0
+                and now - float(tr["last_drop_ts"]) <= drop_mem
+            ):
+                # 粘滞：最近真实下坠仍在记忆窗口内，本帧继续计速度分（冷启动门控
+                # 也认 recent_drop，否则「速度帧 score<min、下一帧才凑齐身高」会被拦）。
+                score += weights["speed"]
+                if "speed" not in indicators:
+                    indicators["speed"] = 0.0
+                indicators["speedSticky"] = True
 
-            # 指标 3：身高比（肩踝纵向跨度 / 躯干长，均取自同一帧，不依赖历史）
-            # 躯干长 = 肩中点->髋中点欧氏距离，是人体自身尺度，不受构图影响；
-            # 站立时肩踝跨度远大于躯干长（约 2.3~2.6），卧倒时骤降（约 0.6）。
+            recent_drop = bool(
+                speed_hit
+                or (
+                    tr.get("last_drop_ts") is not None
+                    and drop_mem > 0
+                    and now - float(tr["last_drop_ts"]) <= drop_mem
+                )
+            )
+
+            # 指标 3：身高比（肩踝/躯干）或相对站立基线塌缩
+            # 躯干长 = 肩中点->髋中点欧氏距离；站立约 2.3~2.6，卧倒约 0.6。
+            # 朝镜头跌倒时躯干角几乎不变，但 bodyHeight 相对站立基线会明显塌缩。
+            body_h = m["bodyHeight"]
+            torso = m["torsoLength"]
+            trunk_angle = m.get("trunkAngle")
+            if (
+                body_h
+                and torso
+                and body_h / torso >= 2.0
+                and trunk_angle is not None
+                and trunk_angle < 35.0
+            ):
+                prev_stand = tr.get("stand_body_h")
+                tr["stand_body_h"] = (
+                    float(body_h)
+                    if prev_stand is None
+                    else (0.9 * float(prev_stand) + 0.1 * float(body_h))
+                )
             if weights["height"]:
-                body_h = m["bodyHeight"]  # 关键点置信度不足时为 None，直接跳过，不用 bbox 顶替
-                torso = m["torsoLength"]
                 if body_h and torso:
                     ratio = body_h / torso
                     indicators["height"] = round(ratio, 4)
                     if ratio < conf["body_torso_ratio"]:
-                        score += weights["height"]
+                        height_hit = True
+                stand_h = tr.get("stand_body_h")
+                if body_h and stand_h and stand_h > 1.0:
+                    collapse = body_h / float(stand_h)
+                    indicators["collapse"] = round(collapse, 4)
+                    if collapse < conf["stand_height_ratio"]:
+                        height_hit = True
+                if height_hit:
+                    score += weights["height"]
 
             # 指标 4：头部离地高度
             if weights["head"] and m["valid"]["nose"] and fh:
@@ -709,10 +780,22 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 if head_ratio > conf["head_y_ratio"]:
                     score += weights["head"]
 
+            # 已进入跌倒状态后：只要身高塌缩/卧姿身高比仍越阈，就维持判定分，
+            # 避免「下坠记忆窗口结束后只剩单指标」把连续确认打断（朝镜头跌倒常见）。
+            if (
+                tr["since"] is not None
+                and score < conf["min_score"]
+                and height_hit
+                and weights["height"] > 0
+            ):
+                score = conf["min_score"]
+                indicators["sustained"] = True
+
             if score >= conf["min_score"]:
                 # 冷启动自锁防护：该 track 观察到的「非跌倒」帧数尚不足 3
                 # （okFrames < 3）且这是本次跌倒状态的首次判定（since 为空）
-                # 时，要求质心速度指标本帧确实越阈（真实下坠证据），否则不判定。
+                # 时，要求质心速度指标本帧确实越阈或仍在下坠记忆窗口内
+                # （真实下坠证据），否则不判定。
                 # 目的：避免「一直保持同一姿态」的目标（如坐在低矮沙发上、躯干角
                 # 恰好越阈）被误判为跌倒后，因为「一直被判定为跌倒」永远拿不到
                 # 非跌倒帧、okFrames 永远长不到 3，从而每次冷却后重复触发（误报自锁）。
@@ -728,7 +811,7 @@ def _eval_fall_detection(rule, cfg: dict, detections: list[dict], ctx: dict | No
                 #    无法为 True，再拿它当准入条件会让该 track 永久无法首次触发。
                 cold_start = tr["since"] is None and tr["okFrames"] < 3
                 gate_applies = cold_start and source_type != "image" and weights["speed"] > 0
-                if gate_applies and not speed_hit:
+                if gate_applies and not recent_drop:
                     tr["since"] = None
                     continue
                 if tr["since"] is None:
@@ -1132,8 +1215,17 @@ def evaluate_rules(
             )
             if detail:
                 st["streak"] += 1
+                st["miss_streak"] = 0
             else:
+                # 跌倒：卧地阶段姿态模型易闪断 1～2 帧；短空窗不清零连续计数，
+                # 否则 consecutive_frames=8 在真实跌倒视频上很难凑齐。
+                if rtype == "fall_detection" and st["streak"] > 0:
+                    miss = int(st.get("miss_streak") or 0) + 1
+                    st["miss_streak"] = miss
+                    if miss <= _FALL_STREAK_GAP_TOLERANCE:
+                        continue
                 st["streak"] = 0
+                st["miss_streak"] = 0
                 continue
 
             if st["streak"] < consecutive:
@@ -1142,6 +1234,7 @@ def evaluate_rules(
                 continue
             st["last_fire_ts"] = now
             st["streak"] = 0
+            st["miss_streak"] = 0
 
         title, message = _title_message(rule, detail)
         item = {

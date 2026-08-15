@@ -123,13 +123,46 @@ def build_person_detections(persons, width, height, kp_min_conf: float = 0.3) ->
     return out
 
 
+def nms_person_detections(detections, iou_thresh: float = 0.45) -> list[dict]:
+    """同帧 person 框去重：跌倒过程中 YOLO-pose 偶发双检，若不抑制会让
+    assign_track_ids 把真实目标换发新 trackId，从而丢掉质心速度历史与站立基线。
+
+    按 confidence 降序贪心，与已保留框 IoU >= iou_thresh 的一律丢弃。
+    """
+    dets = list(detections or [])
+    if len(dets) <= 1:
+        return dets
+    try:
+        iou_thresh = float(iou_thresh)
+    except (TypeError, ValueError):
+        iou_thresh = 0.45
+    iou_thresh = max(0.05, min(0.95, iou_thresh))
+    order = sorted(
+        range(len(dets)),
+        key=lambda i: float(dets[i].get("confidence") or 0.0),
+        reverse=True,
+    )
+    keep = []
+    suppressed = set()
+    for i in order:
+        if i in suppressed:
+            continue
+        keep.append(dets[i])
+        for j in order:
+            if j == i or j in suppressed:
+                continue
+            if _iou(dets[i].get("bbox"), dets[j].get("bbox")) >= iou_thresh:
+                suppressed.add(j)
+    return keep
+
+
 # ---------------------------------------------------------------- 轻量跨帧跟踪
 # source_key -> {"next_id": int, "tracks": {tid: {"anchor": (x,y), "bbox": [...], "miss": int}}}
 _trackers: dict[str, dict] = {}
 _tracker_lock = threading.Lock()
 
-_MATCH_MIN_IOU = 0.2
-_MATCH_DIST_FACTOR = 0.6  # 允许位移上限 = 该框长边 * 系数
+_MATCH_MIN_IOU = 0.15
+_MATCH_DIST_FACTOR = 0.9  # 允许位移上限 = 该框长边 * 系数（跌倒时髋部下移快，过严会换 ID）
 
 
 def _iou(a, b) -> float:

@@ -102,7 +102,33 @@ def test_build_person_detections_single_point_min_bbox_size():
     assert y2 - y1 > 0
 
 
-from services.fall_detect import assign_track_ids, reset_tracker
+from services.fall_detect import assign_track_ids, nms_person_detections, reset_tracker
+
+
+def test_nms_person_detections_keeps_highest_confidence_overlap():
+    """同帧高重叠双检应去掉低置信度框，避免跟踪换发新 ID。"""
+    hi = {
+        "className": "person",
+        "confidence": 0.9,
+        "bbox": [100.0, 100.0, 200.0, 300.0],
+        "keypoints": [],
+    }
+    lo = {
+        "className": "person",
+        "confidence": 0.4,
+        "bbox": [110.0, 110.0, 210.0, 310.0],
+        "keypoints": [],
+    }
+    far = {
+        "className": "person",
+        "confidence": 0.8,
+        "bbox": [400.0, 100.0, 500.0, 300.0],
+        "keypoints": [],
+    }
+    out = nms_person_detections([lo, hi, far], iou_thresh=0.45)
+    assert len(out) == 2
+    assert out[0]["confidence"] == 0.9
+    assert {round(d["bbox"][0], 1) for d in out} == {100.0, 400.0}
 
 
 def _det(cx, cy, w=60.0, h=160.0):

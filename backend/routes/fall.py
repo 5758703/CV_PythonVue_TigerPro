@@ -53,7 +53,12 @@ def detect():
     draw 是否返回骨架图 base64(默认0)。
     """
     from routes.ai_model import _resolve_pose_runtime
-    from services.fall_detect import assign_track_ids, build_person_detections, fall_track_params
+    from services.fall_detect import (
+        assign_track_ids,
+        build_person_detections,
+        fall_track_params,
+        nms_person_detections,
+    )
 
     file = request.files.get("file")
     if file is None or not file.filename:
@@ -101,6 +106,7 @@ def detect():
     kp_min_conf, track_max_age = fall_track_params(rules)
     detections = build_person_detections(
         result.get("persons") or [], width, height, kp_min_conf)
+    detections = nms_person_detections(detections)
     assign_track_ids(
         detections, source_key, max_age=track_max_age, kp_min_conf=kp_min_conf)
 
