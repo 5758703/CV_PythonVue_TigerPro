@@ -71,34 +71,60 @@
               </div>
             </div>
           </div>
-          <div v-else-if="mode === 'video'">
-            <div v-if="videoRunning" class="progress-box">
-              <div class="progress-title">处理中… {{ processed }}/{{ total || '?' }} 帧</div>
-              <el-progress :percentage="percent" :stroke-width="18" :text-inside="true" :status="percent >= 100 ? 'success' : ''" />
+
+          <div v-else-if="mode === 'video'" class="pair-wrap">
+            <div class="media-pair">
+              <div class="media-pane">
+                <div class="pane-label">原视频</div>
+                <div v-if="sourceVideoUrl" class="cam-stage pane-stage">
+                  <video :src="sourceVideoUrl" controls class="cam-video"></video>
+                </div>
+                <el-empty v-else description="选择本地视频" :image-size="56" />
+              </div>
+              <div class="media-pane">
+                <div class="pane-label">
+                  检测结果
+                  <el-button v-if="videoResultUrl && !videoRunning" link type="primary" :icon="Download" @click="downloadVideoResult">下载</el-button>
+                </div>
+                <div v-if="videoRunning" class="progress-box">
+                  <div class="progress-title">处理中… {{ processed }}/{{ total || '?' }} 帧</div>
+                  <el-progress :percentage="percent" :stroke-width="18" :text-inside="true" :status="percent >= 100 ? 'success' : ''" />
+                </div>
+                <template v-else-if="videoResultUrl">
+                  <div class="cam-stage pane-stage">
+                    <video ref="videoRef" :src="videoResultUrl" controls class="cam-video"></video>
+                  </div>
+                  <div class="stats">
+                    <el-tag type="info" effect="plain">总帧 {{ videoStats.totalFrames ?? videoStats.frames ?? '-' }}</el-tag>
+                    <el-tag type="danger" effect="dark">红框帧 {{ videoStats.fallFrames ?? 0 }}</el-tag>
+                    <el-tag type="warning" effect="dark">触发 {{ (videoStats.fallEvents || []).length }}</el-tag>
+                  </div>
+                </template>
+                <el-empty v-else description="开始检测后显示标注视频" :image-size="56" />
+              </div>
             </div>
-            <div v-else-if="videoResultUrl">
-              <div class="res-title">
-                检测结果视频（总帧数 {{ videoStats.totalFrames ?? videoStats.frames ?? '-' }}，检出人次 {{ videoStats.totalPersons ?? '-' }}）
-                <el-button link type="primary" :icon="Download" @click="downloadVideoResult">下载视频</el-button>
-              </div>
-              <div class="cam-stage">
-                <video ref="videoRef" :src="videoResultUrl" controls class="cam-video"></video>
-              </div>
-              <div class="stats">
-                <el-tag type="danger" effect="dark">红框帧数 {{ videoStats.fallFrames ?? 0 }}</el-tag>
-                <el-tag type="warning" effect="dark">触发次数 {{ (videoStats.fallEvents || []).length }}</el-tag>
-              </div>
-            </div>
-            <el-empty v-else description="选择模型与视频后开始检测" />
           </div>
-          <div v-else-if="resultImg">
-            <div class="res-title">检测结果（{{ personCount }} 人，疑似跌倒 {{ fallCount }}）</div>
-            <div class="cam-stage">
-              <img ref="stillImg" :src="resultImg" class="cam-video" @load="drawStill" />
-              <canvas ref="camCanvas" class="cam-canvas"></canvas>
+
+          <div v-else class="media-pair">
+            <div class="media-pane">
+              <div class="pane-label">原图</div>
+              <div v-if="sourceImgUrl" class="cam-stage pane-stage">
+                <img :src="sourceImgUrl" class="cam-video" alt="原图" />
+              </div>
+              <el-empty v-else description="选择图片" :image-size="56" />
+            </div>
+            <div class="media-pane">
+              <div class="pane-label">
+                检测结果
+                <span v-if="lastData" class="pane-meta">{{ personCount }} 人 · 疑似跌倒 {{ fallCount }}</span>
+              </div>
+              <div v-if="resultReady" class="cam-stage pane-stage">
+                <img ref="stillImg" :src="sourceImgUrl" class="cam-video" alt="检测结果" @load="drawStill" />
+                <canvas ref="camCanvas" class="cam-canvas"></canvas>
+              </div>
+              <el-empty v-else description="开始检测后显示标注结果" :image-size="56" />
             </div>
           </div>
-          <el-empty v-else description="选择模型与图片后开始检测" />
         </el-card>
       </el-col>
       <el-col :span="8">
@@ -155,7 +181,8 @@ const conf = ref(0.25)
 const persist = ref(true)
 const file = ref(null)
 const running = ref(false)
-const resultImg = ref('')
+const sourceImgUrl = ref('')
+const resultReady = ref(false)
 const personCount = ref(0)
 const fallCount = ref(0)
 const events = ref([])
@@ -163,6 +190,7 @@ const lastData = ref(null)
 
 // 视频模式状态
 const videoFile = ref(null)
+const sourceVideoUrl = ref('')
 const videoRunning = ref(false)
 const processed = ref(0)
 const total = ref(0)
@@ -170,6 +198,7 @@ const videoResultUrl = ref('')
 const videoStats = ref({})
 const videoRef = ref(null)
 let videoBlobUrl = null
+let sourceVideoBlobUrl = null
 let pollTimer = null
 const percent = computed(() => (total.value ? Math.min(100, Math.floor((processed.value / total.value) * 100)) : 0))
 
@@ -202,8 +231,12 @@ const loadModels = async () => {
 
 const onPick = (uploadFile) => {
   file.value = uploadFile.raw
-  if (resultImg.value) URL.revokeObjectURL(resultImg.value)
-  resultImg.value = URL.createObjectURL(uploadFile.raw)
+  resultReady.value = false
+  lastData.value = null
+  personCount.value = 0
+  fallCount.value = 0
+  if (sourceImgUrl.value) URL.revokeObjectURL(sourceImgUrl.value)
+  sourceImgUrl.value = URL.createObjectURL(uploadFile.raw)
 }
 
 const applyData = (d) => {
@@ -230,6 +263,7 @@ const buildForm = (blob, name) => {
 
 const runImage = async () => {
   running.value = true
+  resultReady.value = false
   try {
     // 图片模式每次检测前先重置该 sourceKey 的连续帧/冷却/跟踪状态：图片模式面向
     // 互不相干的独立照片，不应共享跨帧 trackId、站立基线与质心速度状态（M-3）。
@@ -237,7 +271,9 @@ const runImage = async () => {
     await fallApi.resetRuntime({ sourceKey: SOURCE_KEY_IMAGE })
     const res = await fallApi.detect(buildForm(file.value, file.value.name))
     applyData(res.data)
-    drawStill()
+    resultReady.value = true
+    // nextTick 后 canvas 才挂载；@load 也会触发，这里再补一次
+    requestAnimationFrame(() => drawStill())
   } catch (e) {
     ElMessage.error(e.response?.data?.message || '跌倒检测失败')
   } finally {
@@ -245,8 +281,21 @@ const runImage = async () => {
   }
 }
 
+const clearSourceVideo = () => {
+  if (sourceVideoBlobUrl) {
+    URL.revokeObjectURL(sourceVideoBlobUrl)
+    sourceVideoBlobUrl = null
+  }
+  sourceVideoUrl.value = ''
+}
+
 const onPickVideo = (uploadFile) => {
   videoFile.value = uploadFile.raw
+  clearVideoResult()
+  videoStats.value = {}
+  clearSourceVideo()
+  sourceVideoBlobUrl = URL.createObjectURL(uploadFile.raw)
+  sourceVideoUrl.value = sourceVideoBlobUrl
 }
 
 const clearVideoResult = () => {
@@ -427,8 +476,9 @@ const clearAll = () => {
   camStop()
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   file.value = null
-  if (resultImg.value) URL.revokeObjectURL(resultImg.value)
-  resultImg.value = ''
+  if (sourceImgUrl.value) URL.revokeObjectURL(sourceImgUrl.value)
+  sourceImgUrl.value = ''
+  resultReady.value = false
   personCount.value = 0
   fallCount.value = 0
   lastData.value = null
@@ -438,6 +488,7 @@ const clearAll = () => {
   processed.value = 0
   total.value = 0
   videoStats.value = {}
+  clearSourceVideo()
   clearVideoResult()
 }
 
@@ -448,7 +499,9 @@ onMounted(() => {
 onBeforeUnmount(() => {
   camStop()
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  clearSourceVideo()
   clearVideoResult()
+  if (sourceImgUrl.value) URL.revokeObjectURL(sourceImgUrl.value)
 })
 </script>
 
@@ -456,8 +509,8 @@ onBeforeUnmount(() => {
 .cfg-card { margin-bottom: 12px; }
 .tip-alert { margin-top: 8px; }
 .cam-wrap { display: flex; justify-content: center; }
-.cam-stage { position: relative; display: inline-block; }
-.cam-video { display: block; max-width: 100%; max-height: 480px; }
+.cam-stage { position: relative; display: inline-block; max-width: 100%; }
+.cam-video { display: block; max-width: 100%; max-height: 420px; }
 .cam-canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 .cam-hint { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #909399; }
 .cam-hud { position: absolute; left: 8px; top: 8px; display: flex; gap: 6px; }
@@ -467,5 +520,33 @@ onBeforeUnmount(() => {
 .ev-msg { font-size: 12px; color: #606266; }
 .progress-box { padding: 22px 4px; }
 .progress-title { font-weight: 600; color: #3a4a63; margin-bottom: 12px; }
-.stats { display: flex; gap: 10px; margin-top: 12px; }
+.stats { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.pair-wrap { width: 100%; }
+.media-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+}
+.media-pane {
+  min-width: 0;
+  background: #fafbfc;
+  border: 1px solid #eef0f4;
+  border-radius: 8px;
+  padding: 10px;
+}
+.pane-label {
+  font-weight: 600;
+  color: #3a4a63;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.pane-meta { font-weight: 400; font-size: 12px; color: #909399; }
+.pane-stage { width: 100%; display: flex; justify-content: center; }
+@media (max-width: 900px) {
+  .media-pair { grid-template-columns: 1fr; }
+}
 </style>

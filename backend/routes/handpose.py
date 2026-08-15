@@ -228,9 +228,9 @@ def estimate_video():
         "palm_score": _parse_float("palmScore", 0.5),
         "hand_conf": _parse_float("handConf", 0.8),
         "max_hands": int(_parse_float("maxHands", 2)),
-        "det_conf": _parse_float("conf", 0.5),
+        "det_conf": _parse_float("conf", 0.25),
         "frame_stride": frame_stride,
-        "stable_n": int(_parse_float("stableN", 3)),
+        "stable_n": int(_parse_float("stableN", 2)),
     }
 
     job_id = uuid.uuid4().hex
@@ -282,7 +282,7 @@ def _merge_results(img, selected, mp_data, csl_data, *, draw: bool) -> dict:
 def _run_csl(img) -> dict:
     from services.sign_language import detect_sign_language
 
-    conf = _parse_float("conf", 0.5)
+    conf = _parse_float("conf", 0.25)
     return detect_sign_language(
         img, _csl_dir(), conf=conf, draw=False, mediapipe_dir=_mediapipe_dir(),
     )

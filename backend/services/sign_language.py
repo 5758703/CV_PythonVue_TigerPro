@@ -115,13 +115,17 @@ def _label_zh(class_name: str) -> str:
     return _CSL_LABEL_ZH.get(class_name, f"手语 {class_name}")
 
 
-DEFAULT_CONF = 0.5
+DEFAULT_CONF = 0.25
+# 推理内部下限：YOLO 侧先用低阈值出框，再用用户 conf 做后过滤。
+# 若把用户 conf（常 0.5）直接传给 predict，0.25~0.45 的真实手势会被 NMS 直接丢掉。
+_PREDICT_CONF_FLOOR = 0.15
 # 手语字母多为近景手部；整帧误检常见为细长背景条（如家具立柱）
-_MIN_AREA_RATIO = 0.012
-_MAX_AREA_RATIO = 0.55
-_MIN_ASPECT = 0.28
-_MAX_ASPECT = 3.8
-_PALM_CROP_PAD = 0.35  # 相对手框边长外扩，避免裁掉指尖
+_MIN_AREA_RATIO = 0.008
+_MAX_AREA_RATIO = 0.65
+_MIN_ASPECT = 0.2
+_MAX_ASPECT = 4.0
+_PALM_CROP_PAD = 0.4  # 相对手框边长外扩，避免裁掉指尖
+_SQUARE_CROP_SCALE = 1.4  # 方形特写裁剪边长 = max(w,h) * scale（贴近训练构图）
 
 
 def _box_wh(bbox) -> tuple[float, float]:
@@ -152,6 +156,21 @@ def expand_bbox(bbox, img_w: int, img_h: int, pad: float = _PALM_CROP_PAD) -> li
     ny2 = int(min(img_h, y2 + py))
     if nx2 <= nx1 or ny2 <= ny1:
         return [int(x1), int(y1), int(x2), int(y2)]
+    return [nx1, ny1, nx2, ny2]
+
+
+def square_crop_bbox(bbox, img_w: int, img_h: int, scale: float = _SQUARE_CROP_SCALE) -> list[int]:
+    """以手框中心做方形特写裁剪（YOLO11s 训练多为近景方图）。"""
+    x1, y1, x2, y2 = (float(v) for v in bbox[:4])
+    cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+    side = max(x2 - x1, y2 - y1, 32.0) * float(scale)
+    half = side / 2.0
+    nx1 = int(max(0, cx - half))
+    ny1 = int(max(0, cy - half))
+    nx2 = int(min(img_w, cx + half))
+    ny2 = int(min(img_h, cy + half))
+    if nx2 <= nx1 or ny2 <= ny1:
+        return expand_bbox(bbox, img_w, img_h)
     return [nx1, ny1, nx2, ny2]
 
 
@@ -246,6 +265,42 @@ def _locate_hands(img_bgr: np.ndarray, mediapipe_dir: str | None) -> list[list[f
         return []
 
 
+def _predict_on_crop(
+    model,
+    img_bgr: np.ndarray,
+    names_map: dict[int, str],
+    region: list[int],
+    predict_kw: dict,
+) -> list[dict[str, Any]]:
+    x1, y1, x2, y2 = region
+    crop = img_bgr[y1:y2, x1:x2]
+    if crop.size == 0 or crop.shape[0] < 16 or crop.shape[1] < 16:
+        return []
+    r = model.predict(crop, **predict_kw)[0]
+    dets = _boxes_to_detections(r, names_map, ox=x1, oy=y1)
+    if dets:
+        return dets
+    # 裁剪内无框但有分类概率时，用手框区域作为检测
+    probs = getattr(r, "probs", None)
+    data = getattr(probs, "data", None) if probs is not None else None
+    if data is None:
+        return []
+    arr = data.detach().cpu().numpy() if hasattr(data, "detach") else np.asarray(data)
+    arr = np.asarray(arr, dtype=np.float32).reshape(-1)
+    if not arr.size:
+        return []
+    idx = int(arr.argmax())
+    score = float(arr[idx])
+    cname = _resolve_class_name(idx, names_map, names_map)
+    return [{
+        "className": cname,
+        "classId": idx,
+        "confidence": round(score, 4),
+        "bbox": [float(x1), float(y1), float(x2), float(y2)],
+        "labelZh": _label_zh(cname),
+    }]
+
+
 def detect_sign_language(
     img_bgr: np.ndarray,
     model_dir: str,
@@ -254,7 +309,11 @@ def detect_sign_language(
     draw: bool = False,
     mediapipe_dir: str | None = None,
 ) -> dict[str, Any]:
-    """中国手语检测：先定位手部再 YOLO 分类，避免整帧背景误检。"""
+    """中国手语检测：先定位手部再 YOLO 分类，避免整帧背景误检。
+
+    手部裁剪优先方形特写（贴近训练构图），矩形外扩为回退；裁剪无结果时再
+    整帧推理。YOLO predict 使用低置信度下限，用户 conf 仅作后过滤。
+    """
     weight_path = resolve_weight_path(model_dir)
     names_map = load_class_names_dict(model_dir)
     h, w = img_bgr.shape[:2]
@@ -263,42 +322,27 @@ def detect_sign_language(
     from inference import _get_model, _yolo_predict_kwargs
 
     model = _get_model(weight_path)
-    predict_kw = _yolo_predict_kwargs(conf=max(0.15, conf))
+    predict_kw = _yolo_predict_kwargs(conf=_PREDICT_CONF_FLOOR)
 
     hand_boxes = _locate_hands(img_bgr, mediapipe_dir)
     detections: list[dict[str, Any]] = []
 
     if hand_boxes:
-        # 模型多为手部特写训练：在手框裁剪上推理，再映射回整图
         for hb in hand_boxes:
-            x1, y1, x2, y2 = expand_bbox(hb, w, h)
-            crop = img_bgr[y1:y2, x1:x2]
-            if crop.size == 0 or crop.shape[0] < 16 or crop.shape[1] < 16:
-                continue
-            r = model.predict(crop, **predict_kw)[0]
-            crop_dets = _boxes_to_detections(r, names_map, ox=x1, oy=y1)
-            crop_dets = [d for d in crop_dets if d["confidence"] >= conf]
-            if crop_dets:
-                detections.extend(crop_dets)
-            else:
-                # 裁剪内无框但有分类概率时，用手框作为检测
-                probs = getattr(r, "probs", None)
-                data = getattr(probs, "data", None) if probs is not None else None
-                if data is not None:
-                    arr = data.detach().cpu().numpy() if hasattr(data, "detach") else np.asarray(data)
-                    arr = np.asarray(arr, dtype=np.float32).reshape(-1)
-                    if arr.size:
-                        idx = int(arr.argmax())
-                        score = float(arr[idx])
-                        if score >= conf:
-                            cname = _resolve_class_name(idx, names_map, names_map)
-                            detections.append({
-                                "className": cname,
-                                "classId": idx,
-                                "confidence": round(score, 4),
-                                "bbox": [round(float(v), 1) for v in hb[:4]],
-                                "labelZh": _label_zh(cname),
-                            })
+            # 1) 方形特写  2) 矩形外扩
+            for region in (
+                square_crop_bbox(hb, w, h),
+                expand_bbox(hb, w, h),
+            ):
+                crop_dets = _predict_on_crop(model, img_bgr, names_map, region, predict_kw)
+                crop_dets = [d for d in crop_dets if d["confidence"] >= conf]
+                if crop_dets:
+                    detections.extend(crop_dets)
+                    break
+        # 手已定位但裁剪仍无达标结果：整帧兜底（部分构图手框偏大/偏小）
+        if not detections:
+            r = model.predict(img_bgr, **predict_kw)[0]
+            detections = _boxes_to_detections(r, names_map)
     else:
         r = model.predict(img_bgr, **predict_kw)[0]
         detections = _boxes_to_detections(r, names_map)
@@ -306,7 +350,10 @@ def detect_sign_language(
     detections = [d for d in detections if d["confidence"] >= conf]
     detections = [d for d in detections if is_plausible_hand_box(d["bbox"], w, h)]
     if hand_boxes:
-        detections = filter_by_hand_regions(detections, [expand_bbox(hb, w, h) for hb in hand_boxes])
+        regions = [square_crop_bbox(hb, w, h) for hb in hand_boxes] + [
+            expand_bbox(hb, w, h) for hb in hand_boxes
+        ]
+        detections = filter_by_hand_regions(detections, regions, min_iou=0.05)
 
     detections.sort(key=lambda d: d["confidence"], reverse=True)
     # 每只手只保留最高置信度一类
@@ -314,11 +361,17 @@ def detect_sign_language(
         assigned: list[dict[str, Any]] = []
         used = set()
         for hb in hand_boxes:
-            region = expand_bbox(hb, w, h)
+            region = square_crop_bbox(hb, w, h)
             cands = [
                 (i, d) for i, d in enumerate(detections)
-                if i not in used and bbox_iou(d["bbox"], region) >= 0.08
+                if i not in used and bbox_iou(d["bbox"], region) >= 0.05
             ]
+            if not cands:
+                region = expand_bbox(hb, w, h)
+                cands = [
+                    (i, d) for i, d in enumerate(detections)
+                    if i not in used and bbox_iou(d["bbox"], region) >= 0.05
+                ]
             if not cands:
                 continue
             i, best = max(cands, key=lambda t: t[1]["confidence"])

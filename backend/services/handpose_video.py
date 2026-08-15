@@ -49,7 +49,7 @@ def run_frame_estimate(
     palm_score: float = 0.5,
     hand_conf: float = 0.8,
     max_hands: int = 2,
-    det_conf: float = 0.5,
+    det_conf: float = 0.25,
 ) -> dict[str, Any]:
     """单帧估计（视频循环复用）。"""
     use_mp = "mediapipe" in selected
@@ -94,9 +94,9 @@ def process_handpose_video(
     palm_score: float = 0.5,
     hand_conf: float = 0.8,
     max_hands: int = 2,
-    det_conf: float = 0.5,
+    det_conf: float = 0.25,
     frame_stride: int = 2,
-    stable_n: int = 3,
+    stable_n: int = 2,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """逐帧手势识别并写出标注视频。
@@ -128,7 +128,8 @@ def process_handpose_video(
     stable_cnt = 0
     frames = 0
     inferred = 0
-    last_vis: np.ndarray | None = None
+    last_hands: list = []
+    last_dets: list = []
     last_display: str | None = None
 
     try:
@@ -137,7 +138,7 @@ def process_handpose_video(
             if not ok:
                 break
             frames += 1
-            do_infer = ((frames - 1) % stride == 0) or last_vis is None
+            do_infer = ((frames - 1) % stride == 0) or inferred == 0
 
             if do_infer:
                 inferred += 1
@@ -151,13 +152,10 @@ def process_handpose_video(
                     max_hands=max_hands,
                     det_conf=det_conf,
                 )
-                hands = data.get("hands") or []
-                dets = data.get("detections") or []
+                last_hands = data.get("hands") or []
+                last_dets = data.get("detections") or []
                 display = data.get("displayText")
                 last_display = display if display not in (None, "") else None
-                vis = _draw_frame_bgr(frame, hands, dets)
-                vis = _overlay_banner(vis, last_display)
-                last_vis = vis
 
                 token = last_display
                 if token == stable_token:
@@ -179,15 +177,10 @@ def process_handpose_video(
                         "frame": frames,
                         "sec": sec,
                     })
-            else:
-                # 非推理帧：仍画上帧结果条，骨架沿用最近一帧叠加再贴到当前帧太贵；
-                # 仅贴 banner + 可选半透明提示，保持视频流畅。
-                vis = frame.copy()
-                if last_vis is not None and last_vis.shape[:2] == frame.shape[:2]:
-                    # 轻量：只复用检测框层不合适，直接用上次全帧会画面跳动；改写当前帧 banner
-                    vis = _overlay_banner(vis, last_display)
-                else:
-                    vis = _overlay_banner(vis, last_display)
+
+            # 每帧都在当前画面上重绘最近一次检测结果，避免 stride 间隔帧「看起来没检出」
+            vis = _draw_frame_bgr(frame, last_hands, last_dets)
+            vis = _overlay_banner(vis, last_display)
 
             _write_bgr(writer, vis, ew, eh)
             if progress_cb and (frames % 3 == 0 or frames == total):

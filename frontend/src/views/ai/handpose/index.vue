@@ -10,7 +10,7 @@
               <template #content>
                 <div class="help-pop">
                   <p><b>数字手势（MediaPipe）</b>：21 关键点 → 0–9（含中式 6–9）；双手「右 左」组合。</p>
-                  <p><b>中国手语（YOLO11s）</b>：先定位手部再识别 30 类字母/声母（A–Z、CH、NG、SH、ZH）。请将手靠近镜头、背景简洁。</p>
+                  <p><b>中国手语（YOLO11s）</b>：先定位手部再识别 30 类字母/声母（A–Z、CH、NG、SH、ZH）。建议手部清晰、背景简洁；默认检测置信度 0.25，过严易漏检。</p>
                   <p><b>可多选</b>：同时启用数字与手语时，结果区分别展示，主结果为「数字 | 手语」。</p>
                   <p>支持本地摄像头 / 图片 / <b>本地视频</b>。视频异步处理，完成后可播放标注结果并查看识别序列。</p>
                   <p>识别稳定约 1 秒自动记入序列，可勾选语音播报。</p>
@@ -111,7 +111,7 @@
           </el-col>
           <el-col v-if="isCsl" :xs="12" :sm="6" :md="4">
             <el-form-item label="检测置信度">
-              <el-slider v-model="detConf" :min="0.25" :max="0.9" :step="0.05" :disabled="running || videoRunning" />
+              <el-slider v-model="detConf" :min="0.15" :max="0.9" :step="0.05" :disabled="running || videoRunning" />
             </el-form-item>
           </el-col>
           <el-col :xs="12" :sm="6" :md="4">
@@ -138,23 +138,43 @@
             <canvas ref="overlayEl" class="cam-overlay" />
             <div v-if="!previewOpen" class="stage-placeholder">选择摄像头后点击「开始识别」</div>
           </div>
-          <div v-else-if="mode === 'video'" class="img-stage">
-            <div v-if="videoRunning" class="progress-box">
-              <div class="progress-title">处理中… {{ videoProcessed }}/{{ videoTotal || '?' }} 帧</div>
-              <el-progress :percentage="videoPercent" :stroke-width="16" :text-inside="true" />
-            </div>
-            <template v-else-if="videoResultUrl">
-              <video ref="resultVideoEl" :src="videoResultUrl" class="result-img" controls />
-              <div class="video-actions">
-                <el-button size="small" @click="downloadVideoResult">下载结果视频</el-button>
-                <span class="hint-inline">共 {{ videoStats.frames ?? '-' }} 帧，识别 {{ (videoStats.sequence || []).length }} 条</span>
+          <div v-else-if="mode === 'video'" class="pair-wrap">
+            <div class="media-pair">
+              <div class="media-pane">
+                <div class="pane-label">原视频</div>
+                <video v-if="sourceVideoUrl" :src="sourceVideoUrl" class="result-img" controls />
+                <el-empty v-else description="选择本地视频" :image-size="56" />
               </div>
-            </template>
-            <el-empty v-else description="选择本地视频后点击「开始识别视频」" />
+              <div class="media-pane">
+                <div class="pane-label">
+                  识别结果
+                  <el-button v-if="videoResultUrl && !videoRunning" size="small" link type="primary" @click="downloadVideoResult">下载</el-button>
+                </div>
+                <div v-if="videoRunning" class="progress-box">
+                  <div class="progress-title">处理中… {{ videoProcessed }}/{{ videoTotal || '?' }} 帧</div>
+                  <el-progress :percentage="videoPercent" :stroke-width="16" :text-inside="true" />
+                </div>
+                <template v-else-if="videoResultUrl">
+                  <video ref="resultVideoEl" :src="videoResultUrl" class="result-img" controls />
+                  <div class="video-actions">
+                    <span class="hint-inline">共 {{ videoStats.frames ?? '-' }} 帧，识别 {{ (videoStats.sequence || []).length }} 条</span>
+                  </div>
+                </template>
+                <el-empty v-else description="开始识别后显示标注视频" :image-size="56" />
+              </div>
+            </div>
           </div>
-          <div v-else class="img-stage">
-            <img v-if="imgResult" :src="'data:image/jpeg;base64,' + imgResult" class="result-img" />
-            <el-empty v-else description="选择包含手部的图片" />
+          <div v-else class="media-pair">
+            <div class="media-pane">
+              <div class="pane-label">原图</div>
+              <img v-if="sourceImgUrl" :src="sourceImgUrl" class="result-img" alt="原图" />
+              <el-empty v-else description="选择包含手部的图片" :image-size="56" />
+            </div>
+            <div class="media-pane">
+              <div class="pane-label">识别结果</div>
+              <img v-if="imgResult" :src="'data:image/jpeg;base64,' + imgResult" class="result-img" alt="识别结果" />
+              <el-empty v-else description="识别后显示标注结果" :image-size="56" />
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -259,7 +279,7 @@ const running = ref(false);
 const previewOpen = ref(false);
 const maxHands = ref(2);
 const handConf = ref(0.8);
-const detConf = ref(0.5);
+const detConf = ref(0.25);
 const frameStride = ref(2);
 const speakOn = ref(false);
 const fps = ref(0);
@@ -286,8 +306,8 @@ const videoPercent = computed(() => {
 });
 const stageTitle = computed(() => {
   if (mode.value === "camera") return "实时画面";
-  if (mode.value === "video") return "视频识别结果";
-  return "识别结果图";
+  if (mode.value === "video") return "原视频 / 识别结果";
+  return "原图 / 识别结果";
 });
 
 const videoEl = ref(null);
@@ -458,11 +478,24 @@ const clearVideoResult = () => {
   videoTotal.value = 0;
 };
 
+const clearSourceMedia = () => {
+  if (sourceImgUrl.value) {
+    URL.revokeObjectURL(sourceImgUrl.value);
+    sourceImgUrl.value = "";
+  }
+  if (sourceVideoBlobUrl) {
+    URL.revokeObjectURL(sourceVideoBlobUrl);
+    sourceVideoBlobUrl = null;
+  }
+  sourceVideoUrl.value = "";
+};
+
 const onModeChange = () => {
   stop();
   imgResult.value = "";
   resetResult();
   clearVideoResult();
+  clearSourceMedia();
   videoFile.value = null;
   videoFileName.value = "";
   digitSeq.value = [];
@@ -485,6 +518,9 @@ const onRecognizerChange = (val) => {
 
 const imgLoading = ref(false);
 const imgResult = ref("");
+const sourceImgUrl = ref("");
+const sourceVideoUrl = ref("");
+let sourceVideoBlobUrl = null;
 
 let stream = null;
 let loopTimer = null;
@@ -675,8 +711,11 @@ const trackDigit = (d) => {
 
 const onPickVideo = (uploadFile) => {
   clearVideoResult();
+  clearSourceMedia();
   videoFile.value = uploadFile.raw;
   videoFileName.value = uploadFile.name || "已选视频";
+  sourceVideoBlobUrl = URL.createObjectURL(uploadFile.raw);
+  sourceVideoUrl.value = sourceVideoBlobUrl;
   digitSeq.value = [];
   resetResult();
 };
@@ -779,6 +818,9 @@ const onPickImage = async (uploadFile) => {
     ElMessage.warning("请至少选择一种识别模型");
     return;
   }
+  if (sourceImgUrl.value) URL.revokeObjectURL(sourceImgUrl.value);
+  sourceImgUrl.value = URL.createObjectURL(uploadFile.raw);
+  imgResult.value = "";
   imgLoading.value = true;
   try {
     const fd = new FormData();
@@ -816,6 +858,7 @@ loadRecognizers();
 onBeforeUnmount(() => {
   stop();
   clearVideoResult();
+  clearSourceMedia();
 });
 </script>
 
@@ -848,11 +891,41 @@ onBeforeUnmount(() => {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #94a3b8; font-size: 14px; pointer-events: none;
 }
-.img-stage { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-.result-img { max-width: 100%; max-height: 62vh; border-radius: 8px; }
-.progress-box { width: 100%; max-width: 520px; padding: 24px 16px; }
+.pair-wrap { width: 100%; }
+.media-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: 100%;
+  min-height: 280px;
+}
+.media-pane {
+  min-width: 0;
+  background: #fafbfc;
+  border: 1px solid #eef0f4;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.pane-label {
+  font-weight: 650;
+  color: #2c3e57;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.result-img { max-width: 100%; max-height: 48vh; border-radius: 8px; object-fit: contain; align-self: center; }
+.progress-box { width: 100%; max-width: 520px; padding: 24px 16px; margin: 0 auto; }
 .progress-title { text-align: center; margin-bottom: 12px; color: #606266; font-size: 14px; }
 .video-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+@media (max-width: 900px) {
+  .media-pair { grid-template-columns: 1fr; }
+}
 
 .digit-big {
   font-size: 96px; font-weight: 800; line-height: 1.1; text-align: center;

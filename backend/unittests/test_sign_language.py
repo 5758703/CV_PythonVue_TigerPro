@@ -70,6 +70,17 @@ def test_reject_thin_background_strip():
     assert is_plausible_hand_box(hand, img_w, img_h)
 
 
+def test_square_crop_bbox_is_roughly_square():
+    from services.sign_language import square_crop_bbox
+
+    box = square_crop_bbox([100, 200, 180, 280], 640, 480, scale=1.0)
+    w = box[2] - box[0]
+    h = box[3] - box[1]
+    assert abs(w - h) <= 2
+    assert box[0] >= 0 and box[1] >= 0
+    assert box[2] <= 640 and box[3] <= 480
+
+
 def test_filter_by_hand_regions_drops_background():
     dets = [
         {"className": "B", "confidence": 0.33, "bbox": [40, 20, 55, 240]},
