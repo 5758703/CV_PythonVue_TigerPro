@@ -49,6 +49,16 @@ frontend/   Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 <img width="1920" height="869" alt="微信图片_20260717110139_502_226" src="https://github.com/user-attachments/assets/af77fd04-2eab-4994-96ab-5964b7c7529b" />
 
 
+
+
+https://github.com/user-attachments/assets/22b18f3f-fb99-4a56-a341-7fa5674215c9
+
+
+
+https://github.com/user-attachments/assets/32f917e8-108a-455a-a8fe-35f864cf1074
+
+
+
 https://github.com/user-attachments/assets/69ead2ad-c3d6-4e38-a808-3f53a44be973
 
 
