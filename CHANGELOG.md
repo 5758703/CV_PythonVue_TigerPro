@@ -11,6 +11,7 @@
 ### 新增
 
 - **双前端架构**：`frontend/frontend_home` 项目门户（:5174）+ `frontend/frontend_admin` 管理控制台（:5173）；公开接口 `GET /api/portal/summary`；门户按 Cookie `tiger_ai_token` 判断登录态跳转；控制台顶栏「项目门户」入口
+- **部署文档与 Docker 骨架**：`docs/deploy/`（本地 / Linux / Docker）；`deploy/docker-compose.yml` 实验性编排（MySQL + backend + 双前端 + Nginx 网关）
 - **行人重识别（Youtu ReID）**：OpenCV Zoo `opencv-person-reid-youtu`；独立权限 `ai:reid:*` 与表 `reid_person` / `reid_embedding(modality=appearance)`；实时「像谁/未知」、底库 Top-K、录像片段检索；可选混合近距人脸；行人检测默认优先级 `yolo26n` → `winedarksea-yolo26n_person` → `simoswish-PersonDetector_YOLO26_PRW`
 - **OpenCV YuNet+SFace 人脸后端**：与 InsightFace 并列；本地视频源；YuNet 五色关键点叠加
 - **LaMa 图像修复**（`inpainting-lama` / `/ai/inpaint`）：涂抹遮罩 + 外扩；DNN→ORT 回退
@@ -36,6 +37,7 @@
 ### 文档
 
 - 更新双前端说明：根 `README.md`、`frontend/README.md`、`frontend_home` / `frontend_admin` README、`backend/README.md`、`CONTRIBUTING.md`、`GOVERNANCE.md`、`THIRD_PARTY_NOTICES.md`
+- 新增部署体系：`docs/deploy/{README,local,linux,docker}.md`、`deploy/` Compose 与 Dockerfile；更新 Ubuntu 部署指南索引
 - 新增 `docs/person-reid.md`、`docs/opencv-zoo-models.md`；更新 `docs/face-recognition.md` / `docs/人脸识别功能汇总.md`
 - 更新 `README.md` 功能列表与文档索引、`THIRD_PARTY_NOTICES.md` OpenCV Zoo 条目
 - 更新 `人员离岗检测-功能说明.md` / `目标追踪-场景分类说明.md` / `README.md`：镜头运动补偿原理、接口与验收清单

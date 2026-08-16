@@ -79,6 +79,9 @@ npm run dev            # http://localhost:5173
 | 变量 | 说明 | 默认 |
 |------|------|------|
 | `VITE_PORTAL_URL` | 项目门户地址 | `http://localhost:5174` |
+| `VITE_BASE` | 子路径部署前缀（生产 `/console/`） | `/` |
+
+完整部署见 [`docs/deploy`](../../docs/deploy/README.md)。
 
 ## 构建与部署
 

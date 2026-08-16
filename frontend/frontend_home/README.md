@@ -67,4 +67,4 @@ npm run build
 npm run preview
 ```
 
-生产：将 `VITE_ADMIN_URL` 设为控制台公网地址后 build；站点根路径托管门户，`/console` 或子域托管控制台。
+生产部署建议：见 [`docs/deploy`](../../docs/deploy/README.md)。站点根路径托管门户；`/console` 或子域托管控制台；`/api` 与 `/openapi` 反代到 Flask。请将 `VITE_ADMIN_URL` / `VITE_PORTAL_URL` /（控制台）`VITE_BASE` 设为生产地址后重新 build。

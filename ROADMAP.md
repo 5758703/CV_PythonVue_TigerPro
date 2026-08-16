@@ -28,7 +28,8 @@ Flask + Vue3 的 **多任务视觉 / 语音 AI 管理平台**：项目门户（`
 
 | 目标 | 状态 | 建议标签 |
 |------|------|----------|
-| Docker / Compose 一键启动（backend + frontend_home + frontend_admin + mysql） | 待认领 | `devops` `feature` `help-wanted` |
+| Docker / Compose 一键启动（backend + frontend_home + frontend_admin + mysql） | 进行中（实验性骨架见 `deploy/`） | `devops` `feature` `help-wanted` |
+| 部署文档（本地 / Linux / Docker） | 进行中 | `docs` `devops` |
 | CI：lint + 基础 import/冒烟 | 待认领 | `devops` `enhancement` |
 | Windows / Linux 部署文档对齐 | 待认领 | `docs` `devops` |
 | 健康检查与就绪探针接口 | 待认领 | `backend` `devops` |

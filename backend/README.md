@@ -166,18 +166,26 @@ python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 
 ## 部署
 
-> 生产环境关闭 `debug`，用 WSGI 服务器托管，前置 Nginx（见 [`frontend/frontend_admin/README.md`](../frontend/frontend_admin/README.md) 反代示例）。
+完整步骤见 **[docs/deploy](../docs/deploy/README.md)**（本地 / Linux / Docker）。
+
+> 生产环境关闭 Flask `debug`，用 WSGI 托管，前置 Nginx。
 
 **Linux（gunicorn）**
 ```bash
 pip install gunicorn
-gunicorn -w 1 -k gthread --threads 4 -t 0 -b 0.0.0.0:5001 "app:app"
+gunicorn -w 1 -k gthread --threads 4 -t 0 -b 127.0.0.1:5001 "app:app"
 ```
 
 **Windows（waitress）**
 ```bash
 pip install waitress
 waitress-serve --listen=0.0.0.0:5001 app:app
+```
+
+**Docker Compose（实验性）**
+```bash
+cp deploy/.env.example deploy/.env
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 ```
 
 部署要点：

@@ -31,6 +31,7 @@ GitHub 是任务与决策的最终记录场所。统一流程：
 | 文档 | 说明 |
 |------|------|
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
+| [部署指南](./docs/deploy/README.md) | 本地 / Linux / Docker 详细步骤 |
 | [GOVERNANCE.md](./GOVERNANCE.md) | 角色、权限、晋升与决策 |
 | [ROADMAP.md](./ROADMAP.md) | 版本规划 |
 | [SECURITY.md](./SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
@@ -263,6 +264,10 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 
 | 文档 | 说明 |
 |------|------|
+| [部署指南总览](docs/deploy/README.md) | **本地 / Linux / Docker** 完整步骤 |
+| [本地开发部署](docs/deploy/local.md) | Windows / macOS / Linux 本机联调 |
+| [Linux 生产部署](docs/deploy/linux.md) | gunicorn + Nginx + systemd |
+| [Docker 部署](docs/deploy/docker.md) | Compose 实验性编排 |
 | [前端总览](frontend/README.md) | 门户 `frontend_home` + 控制台 `frontend_admin` |
 | [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、姿态/球模型、球场与网线、HUD、API；含 [§11 Roboflow 导出 YOLO zip 与自训指南](docs/badminton-analysis.md#11-附录roboflow-导出-yolo11--yolov8-zip-与平台自训指南) |
 | [图像/视频分割模块](docs/image-segmentation.md) | 技术栈、依赖、模型权重、API 与使用流程（RF-DETR-Seg / YOLOE 图片视频 / MobileSAM） |

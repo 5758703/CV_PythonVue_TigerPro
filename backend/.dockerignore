@@ -1,0 +1,14 @@
+# 勿把本地大文件打进镜像
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+uploads/
+!uploads/.gitkeep
+.pytest_cache/
+.idea/
+.vscode/
+*.md
+unittests/
