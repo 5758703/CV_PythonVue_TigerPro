@@ -19,7 +19,7 @@
 ## 涉及模块
 
 - [ ] backend
-- [ ] frontend
+- [ ] frontend（`frontend_admin` / `frontend_home`）
 - [ ] ai
 - [ ] devops
 - [ ] database
@@ -30,7 +30,8 @@
 <!-- 写明你怎么验证的；AI/视频类请注明模型与大概耗时 -->
 
 - [ ] 本地后端可启动
-- [ ] 本地前端可启动（如涉及）
+- [ ] 本地控制台可启动（`frontend_admin`，如涉及）
+- [ ] 本地门户可启动（`frontend_home`，如涉及）
 - [ ] 按 Issue 验收标准逐条勾选通过
 - [ ] 无密钥 / 权重 / `uploads` 被提交
 

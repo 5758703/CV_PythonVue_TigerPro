@@ -168,10 +168,18 @@ python app.py            # 默认 http://127.0.0.1:5001
 
 ### 3.3 前端
 
+前端拆为两个应用，总览见 [`frontend/README.md`](./frontend/README.md)。本机请统一使用 **localhost**。
+
 ```powershell
-cd frontend
+# 管理控制台（业务 / 登录）
+cd frontend/frontend_admin
 npm install
-npm run dev              # 默认 http://127.0.0.1:5173，代理 /api → 5001
+npm run dev              # http://localhost:5173，代理 /api → 5001
+
+# 项目门户（另开终端）
+cd frontend/frontend_home
+npm install
+npm run dev              # http://localhost:5174
 ```
 
 ### 3.4 默认账号（本地种子）
@@ -205,8 +213,9 @@ npm run dev              # 默认 http://127.0.0.1:5173，代理 /api → 5001
 ### 4.3 前端（Vue 3）
 
 - Composition API + `<script setup>`
-- 沿用 Element Plus 与现有页面布局/权限指令
-- API 调用放在 `frontend/src/api/`；不要在视图里硬编码完整后端 URL
+- **控制台**（`frontend_admin`）：沿用 Element Plus 与现有布局/权限指令；API 放在 `frontend/frontend_admin/src/api/`
+- **门户**（`frontend_home`）：保持轻量，勿引入 Element Plus；跳转控制台用 `src/config.js`（`VITE_ADMIN_URL`）
+- 不要在视图里硬编码完整后端 URL；本机勿混用 `127.0.0.1` 与 `localhost`
 - 大文件改动请拆 PR 或先 Discussion
 
 ### 4.4 数据库

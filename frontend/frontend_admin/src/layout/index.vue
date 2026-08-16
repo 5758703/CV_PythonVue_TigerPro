@@ -35,20 +35,32 @@
             <el-breadcrumb-item v-if="$route.meta.title">{{ $route.meta.title }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
-        <el-dropdown @command="onCommand">
-          <span class="user">
-            <el-avatar :size="30" class="avatar">{{ store.nickname.charAt(0) }}</el-avatar>
-            <span class="uname">{{ store.nickname }}</span>
-            <el-tag v-if="store.isAdmin" size="small" type="danger" effect="dark">超管</el-tag>
-            <el-icon><ArrowDown /></el-icon>
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="home">首页</el-dropdown-item>
-              <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <div class="header-right">
+          <a
+            class="portal-link"
+            :href="portalUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="打开项目门户"
+          >
+            <el-icon><House /></el-icon>
+            <span>项目门户</span>
+          </a>
+          <el-dropdown @command="onCommand">
+            <span class="user">
+              <el-avatar :size="30" class="avatar">{{ store.nickname.charAt(0) }}</el-avatar>
+              <span class="uname">{{ store.nickname }}</span>
+              <el-tag v-if="store.isAdmin" size="small" type="danger" effect="dark">超管</el-tag>
+              <el-icon><ArrowDown /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="home">首页</el-dropdown-item>
+                <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </el-header>
 
       <el-main class="main">
@@ -63,17 +75,19 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 
 import { useUserStore } from '../store/user'
 import { logout as logoutApi } from '../api/auth'
+import { resolvePortalUrl } from '../utils/portal'
 import MenuItem from './MenuItem.vue'
 
 const router = useRouter()
 const store = useUserStore()
 const collapse = ref(false)
+const portalUrl = computed(() => resolvePortalUrl())
 
 const onCommand = async (cmd) => {
   if (cmd === 'home') {
@@ -174,6 +188,31 @@ const onCommand = async (cmd) => {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.portal-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid #dce6f5;
+  background: #f5f8fd;
+  color: #1f4e8c;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.portal-link:hover {
+  background: #eaf2ff;
+  border-color: #9ec5ff;
+  color: #0d47a1;
 }
 .collapse-btn {
   font-size: 18px;

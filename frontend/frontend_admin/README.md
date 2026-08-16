@@ -1,146 +1,125 @@
-# Tiger AI Platform · 前端
+# Tiger AI Platform · 管理控制台（frontend_admin）
 
-多任务 / 多模态 AI 模型管理与测试平台的 Web 前端。基于 **Vue 3 + Vite + Element Plus**，
+多任务 / 多模态 AI 模型管理与测试平台的 **Web 控制台**。基于 **Vue 3 + Vite + Element Plus**，
 提供模型全生命周期管理（纳管 / 拉权重 / 在线测试）与覆盖视觉·文本·语音·多模态的任务测试页面，
 并内置 RBAC 权限管理（用户 / 角色 / 部门 / 岗位 / 菜单）。
 
-> 配套后端见 [`../backend/README.md`](../backend/README.md)。
+> 配套后端见 [`../../backend/README.md`](../../backend/README.md)。  
+> 项目门户见 [`../frontend_home/README.md`](../frontend_home/README.md)。  
+> 前端总览见 [`../README.md`](../README.md)。
 
 ---
 
 ## 技术架构
 
 ```
-浏览器 (SPA)
+浏览器 (SPA)  :5173
    │  axios（/api 前缀）
    ▼
-Vite Dev Server :5173 ── proxy /api ──▶ Flask 后端 :5001
+Vite Dev Server ── proxy /api、/openapi ──▶ Flask 后端 :5001
    │
-   ├─ Vue Router 4   路由 + 登录守卫（token 校验、动态拉取权限）
+   ├─ Vue Router 4   路由 + 登录守卫（token / redirect 深链）
    ├─ Pinia          全局状态（用户信息 / token / 角色权限）
    ├─ Element Plus   UI 组件库 + 图标
-   ├─ ECharts        首页统计图表（任务分布饼图 / 分类柱状图）
-   └─ v-permission   按钮级权限指令（基于后端返回的 perms）
+   ├─ ECharts        首页统计图表
+   └─ v-permission   按钮级权限指令
 ```
 
-- **单页应用（SPA）**：前后端分离，前端打包为静态资源，经 `/api` 调用后端 REST 接口。
-- **权限驱动 UI**：登录后从后端拉取角色 / 菜单 / 按钮权限，路由守卫与 `v-permission` 指令据此放行。
-- **任务页约定**：每个 AI 任务一个页面（`views/ai/*`），按 `library` + `task` 过滤可用模型，统一在线测试。
+- **单页应用（SPA）**：前后端分离，打包为静态资源，经 `/api` 调用后端。
+- **权限驱动 UI**：登录后拉取角色 / 菜单 / 按钮权限。
+- **与门户联动**：顶栏「项目门户」跳转 `VITE_PORTAL_URL`；登录态写入 `localStorage` + Cookie `tiger_ai_token` 供门户跨端口识别。
 
 ## 技术栈
 
 | 类别 | 选型 |
 |---|---|
-| 框架 | Vue 3.4（`<script setup>` 组合式 API） |
-| 构建 | Vite 5 |
+| 框架 | Vue 3.4（`<script setup>`） |
+| 构建 | Vite 5（`host: localhost`，端口 **5173**） |
 | UI | Element Plus 2.7 + `@element-plus/icons-vue` |
 | 状态 | Pinia 2 |
 | 路由 | Vue Router 4 |
 | HTTP | axios 1.7 |
 | 图表 | ECharts 5 |
-| 语言 | JavaScript（ESM） |
 
 ## 目录结构
 
 ```
 frontend_admin/
-├─ index.html
-├─ vite.config.js          # 端口 5173 + /api 代理到 127.0.0.1:5001
+├─ .env.example            # VITE_PORTAL_URL=http://localhost:5174
+├─ vite.config.js          # 端口 5173 + /api 代理
 ├─ package.json
 └─ src/
-   ├─ main.js              # 应用入口（挂载 Element Plus / Pinia / Router）
-   ├─ api/                 # 接口封装（ai.js 模型与推理、system.js 系统管理、request.js axios 实例）
-   ├─ composables/         # 组合式逻辑（useInferProgress 进度/ETA 等）
-   ├─ directives/          # 自定义指令（v-permission 按钮权限）
-   ├─ layout/              # 布局（侧栏 / 顶栏 / 菜单）
-   ├─ router/              # 路由表 + 全局守卫
-   ├─ store/               # Pinia（user 等）
-   └─ views/
-      ├─ Dashboard.vue     # 首页（平台介绍 + 统计图表）
-      ├─ Login.vue / Register.vue
-      ├─ ai/               # AI 任务页
-      │   ├─ model/        # 模型管理（CRUD / 拉权重 / 测试 / 来源分类）
-      │   ├─ image|video|camera/  # 目标检测：图片 / 视频 / 摄像头
-      │   ├─ imgcls/       # 图像分类
-      │   ├─ text/ generate/ ner/ qa/  # 文本：分析 / 生成 / 实体识别 / 问答
-      │   ├─ asr/          # 语音识别
-      │   ├─ tts/          # 文本转语音 / 音色克隆
-      │   └─ talker/       # 数字人合成
-      └─ system/           # 用户 / 角色 / 部门 / 岗位 / 菜单管理
+   ├─ main.js
+   ├─ api/                 # ai / system / auth / request
+   ├─ utils/               # authStorage（token+Cookie）、portal.js
+   ├─ layout/              # 侧栏 / 顶栏（含「项目门户」）
+   ├─ router/              # 含 /login?redirect= 深链
+   ├─ store/user.js
+   └─ views/               # Dashboard、Login、ai/*、system/*
 ```
 
 ## 本地运行
 
-前置：**Node.js ≥ 18**、后端已在 `http://127.0.0.1:5001` 运行（见后端 README）。
+前置：Node.js ≥ 18、后端 `http://127.0.0.1:5001` 已启动。
 
 ```bash
 cd frontend/frontend_admin
+cp .env.example .env   # 可选
 npm install
-npm run dev         # 开发服务器 http://localhost:5173（/api 自动代理到后端 5001）
+npm run dev            # http://localhost:5173
 ```
-
-打开 http://localhost:5173 ，默认账号：
 
 | 账号 | 密码 | 角色 |
 |---|---|---|
-| admin | admin123 | 超级管理员（全部权限） |
+| admin | admin123 | 超级管理员 |
 | tiger | 123456 | 普通角色（只读） |
 
-> 后端地址不是 `127.0.0.1:5001` 时，修改 `vite.config.js` 的 `server.proxy['/api'].target`。
+环境变量：
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `VITE_PORTAL_URL` | 项目门户地址 | `http://localhost:5174` |
 
 ## 构建与部署
 
 ```bash
-cd frontend/frontend_admin
-npm install
-npm run build       # 产物输出到 frontend_admin/dist/
-npm run preview     # 本地预览 dist（可选）
+npm run build       # 产物 dist/
+npm run preview
 ```
 
-### Nginx 部署（推荐）
-
-`dist/` 为纯静态资源，托管到 Nginx 并把 `/api` 反向代理到后端：
+### Nginx（门户 + 控制台同域示例）
 
 ```nginx
-server {
-    listen 80;
-    server_name your.domain.com;
+# 门户 /
+location / {
+    root /var/www/tiger-ai/portal;
+    try_files $uri $uri/ /index.html;
+}
 
-    root  /var/www/tiger-ai/dist;   # frontend/dist 部署位置
-    index index.html;
+# 控制台 /console/
+location /console/ {
+    alias /var/www/tiger-ai/admin/;
+    try_files $uri $uri/ /console/index.html;
+}
 
-    # SPA 前端路由回退（history 模式）
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
+location /api/ {
+    proxy_pass http://127.0.0.1:5001/;
+    proxy_set_header Host $host;
+    client_max_body_size 500m;
+}
 
-    # 反向代理后端 API
-    location /api/ {
-        proxy_pass         http://127.0.0.1:5001/;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-        client_max_body_size 500m;   # 模型权重 / 视频上传较大
-    }
-
-    # 开放 API 文档与对外网关（AppKey）
-    location /openapi/ {
-        proxy_pass         http://127.0.0.1:5001/openapi/;
-        proxy_set_header   Host $host;
-        proxy_set_header   X-Real-IP $remote_addr;
-        client_max_body_size 500m;
-    }
+location /openapi/ {
+    proxy_pass http://127.0.0.1:5001/openapi/;
+    proxy_set_header Host $host;
+    client_max_body_size 500m;
 }
 ```
 
-- 前端使用 **history 路由**，务必配置 `try_files ... /index.html` 回退，否则刷新子路由 404。
-- 上传权重 / 视频文件较大，`client_max_body_size` 需放大（后端单文件上限 500MB）。
-- 静态资源可加缓存头；`index.html` 建议不缓存以便发版生效。
-- 控制台「开放平台」路由：`/system/open-app`；对外文档：`/openapi/v1/docs`。
+子域部署时：门户与控制台分别 `root`；构建前设置 `VITE_PORTAL_URL` / 门户侧 `VITE_ADMIN_URL`。
 
 ## 说明
 
-- 支持门户深链：从 `frontend_home` 跳入时携带 `/login?redirect=/ai/...`，登录后进入目标页。
-- 所有后端控制台接口走 `/api` 前缀；`src/api/request.js` 统一注入 JWT、处理 401。
-- 对外 Open API 走 `/openapi/v1`（AppKey，与 JWT 分离）。
-- 在线测试为长耗时请求（拉模型 / CPU 推理），相关 axios 调用已设 `timeout: 0`。
-- 图表、进度条等为前端实时计算，无需额外服务。
+- 门户深链：`/login?redirect=/ai/fall` 登录后进入目标页（防开放重定向，仅允许站内路径）。
+- JWT 经 `src/api/request.js` 注入；401 清登录态并回登录页。
+- Open API：`/openapi/v1`（AppKey）；控制台开放平台：`/system/open-app`。
+- 长耗时推理相关 axios 已设 `timeout: 0`。

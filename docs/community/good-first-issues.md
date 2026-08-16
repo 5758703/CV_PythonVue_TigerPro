@@ -19,7 +19,8 @@
 **涉及模块：** docs  
 
 **预期结果：**  
-- README 顶部 30 秒内能看到：克隆 → 后端 → 前端 → 默认账号  
+- README 顶部 30 秒内能看到：克隆 → 后端 → 门户/控制台 → 默认账号  
+- 明确双前端路径：`frontend/frontend_home`（:5174）与 `frontend/frontend_admin`（:5173）  
 - 增加指向 `CONTRIBUTING.md` / `ROADMAP.md` / `SECURITY.md` / `THIRD_PARTY_NOTICES.md` 的链接区  
 
 **验收标准：**  
@@ -83,10 +84,10 @@
 **背景和目标：**  
 部分页面 catch 后只显示泛化「失败」；希望在 1–2 个高频页（如车辆追踪或模型列表）统一展示后端 `message`（若有）。
 
-**涉及模块：** frontend  
+**涉及模块：** frontend（`frontend/frontend_admin`）  
 
 **预期结果：**  
-- 至少两个页面的失败提示优先使用接口返回的 `message`  
+- 至少两个控制台页面的失败提示优先使用接口返回的 `message`  
 - 不改变成功路径行为  
 
 **验收标准：**  
@@ -122,7 +123,7 @@
 
 ---
 
-## GFI-06 · Docker Compose 骨架（MySQL + backend + frontend 草案）
+## GFI-06 · Docker Compose 骨架（MySQL + backend + 双前端草案）
 
 **建议标签：** `devops` `feature` `help-wanted` `good-first-issue` `ready` `P1`
 
@@ -133,6 +134,7 @@
 
 **预期结果：**  
 - 仓库根或 `deploy/` 下有 `docker-compose.yml` 草案  
+- 服务至少覆盖：MySQL、backend、`frontend_admin`、`frontend_home`（或文档说明门户可后接）  
 - `docs/deploy-docker.md` 说明已知限制（模型体积、CPU、首次拉权重等）  
 
 **验收标准：**  

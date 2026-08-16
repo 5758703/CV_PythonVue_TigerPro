@@ -10,7 +10,7 @@
 
 ## 1. 主要 Python / 前端依赖（摘要）
 
-详细版本以 `backend/requirements.txt`、`frontend/package.json` 为准。安装依赖即接受其各自许可证。
+详细版本以 `backend/requirements.txt`、`frontend/frontend_admin/package.json`、`frontend/frontend_home/package.json` 为准。安装依赖即接受其各自许可证。
 
 | 组件 | 典型用途 | 许可证（常见声明） | 备注 |
 |------|----------|-------------------|------|
@@ -29,7 +29,8 @@
 | rapidocr_onnxruntime / RapidOCR | OCR | Apache-2.0 | |
 | rfdetr | RF-DETR | Apache-2.0 | Nano–Large 常见 Apache-2.0；XL/2XL 另见 Roboflow PML |
 | MobileSAM | 交互分割 | Apache-2.0 | git 依赖 |
-| Vue 3 / Vite / Element Plus / Pinia / Axios / ECharts | 前端 | MIT 等 | 见 package.json |
+| Vue 3 / Vite / Element Plus / Pinia / Axios / ECharts | 控制台 frontend_admin | MIT 等 | 见 frontend_admin/package.json |
+| Vue 3 / Vite / lucide-vue-next | 门户 frontend_home | MIT 等 | 见 frontend_home/package.json |
 
 > **重要：** Ultralytics（YOLO）默认为 **AGPL-3.0**。若你将本项目用于闭源商业分发，请自行评估 AGPL 义务或购买 Ultralytics 企业许可，并与法务确认。
 

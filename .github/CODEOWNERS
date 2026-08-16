@@ -12,6 +12,8 @@
 
 # 前端
 /frontend/ @5758703
+/frontend/frontend_admin/ @5758703
+/frontend/frontend_home/ @5758703
 
 # 运维与脚本
 /backend/scripts/ @5758703
@@ -30,5 +32,6 @@
 # ---------------------------------------------------------------------------
 # 任命 Module Owner 后，将对应目录追加为其 GitHub 用户名，例如：
 # /backend/services/vehicle_track.py @5758703 @some-vehicle-owner
-# /frontend/src/views/ai/face/ @5758703 @some-face-owner
+# /frontend/frontend_admin/src/views/ai/face/ @5758703 @some-face-owner
+# /frontend/frontend_home/ @5758703 @some-portal-owner
 # ---------------------------------------------------------------------------

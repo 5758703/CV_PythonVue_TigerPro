@@ -45,7 +45,7 @@ GitHub 权限对照：
 | 模块 | 典型路径 | 说明 |
 |------|----------|------|
 | `backend` | `backend/routes/`, `backend/models/`, `backend/services/`（非 AI 专属） | API、RBAC、业务服务 |
-| `frontend` | `frontend/src/` | Vue 页面与交互 |
+| `frontend` | `frontend/frontend_admin/`、`frontend/frontend_home/` | 控制台与门户 Vue 应用 |
 | `ai` | `backend/inference.py`, `backend/services/*track*`, face/badminton 等, `backend/seed.py` 模型段 | 推理与模型 |
 | `devops` | `backend/scripts/`, CI、Docker（规划中）、部署文档 | 环境与发布 |
 | `database` | `backend/models/`, 迁移/种子 | 数据模型 |

@@ -10,13 +10,17 @@ Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RB
 ## 快速开始
 
 ```text
-backend/    Flask + SQLAlchemy + JWT + Ultralytics / InsightFace / OCR …
-frontend/   Vue3 + Vite + Element Plus + Pinia + ECharts
+backend/                 Flask + SQLAlchemy + JWT + Ultralytics / InsightFace / OCR …
+frontend/frontend_home/  项目门户（Vue3 + Vite）          → http://localhost:5174
+frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://localhost:5173
 ```
 
 1. 后端：见 [`backend/README.md`](./backend/README.md)（推荐 Python 3.12 + `scripts/setup_venv.ps1` / `run_backend.ps1`）
-2. 前端：`cd frontend && npm install && npm run dev`
-3. 默认账号：`admin` / `admin123`（详见下文种子说明）
+2. 控制台：`cd frontend/frontend_admin && npm install && npm run dev`（:5173）
+3. 门户：`cd frontend/frontend_home && npm install && npm run dev`（:5174）
+4. 浏览器打开 http://localhost:5174 ，点「进入控制台」；默认账号 `admin` / `admin123`
+
+> 本机请统一使用 **localhost**（勿混用 `127.0.0.1`）。前端总览见 [`frontend/README.md`](./frontend/README.md)。
 
 ## 参与贡献
 
@@ -41,8 +45,9 @@ GitHub 是任务与决策的最终记录场所。统一流程：
 ## 演示与截图
 
 ```
-backend/    Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
-frontend/   Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
+backend/                 Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
+frontend/frontend_home/  Vue3 + Vite（项目门户）
+frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 ```
 <img width="1920" height="869" alt="image" src="https://github.com/user-attachments/assets/0301e97a-85f5-441d-90cb-8d86d15efec8" />
 
@@ -219,44 +224,46 @@ python app.py            # http://127.0.0.1:5001 （启动自动建表 + 灌种�
 
 ## 前端
 
-仓库包含两个前端应用：
+仓库包含两个前端应用（总览：[`frontend/README.md`](frontend/README.md)）：
 
 | 目录 | 角色 | 开发地址 |
 |------|------|----------|
-| [`frontend/frontend_home`](frontend/frontend_home) | 项目门户（宣传 / 入口） | http://127.0.0.1:5174 |
-| [`frontend/frontend_admin`](frontend/frontend_admin) | 管理控制台（原前端） | http://127.0.0.1:5173 |
+| [`frontend/frontend_home`](frontend/frontend_home) | 项目门户（宣传 / 入口） | http://localhost:5174 |
+| [`frontend/frontend_admin`](frontend/frontend_admin) | 管理控制台 | http://localhost:5173 |
 
 ### 门户 frontend_home
 
 ```bash
 cd frontend/frontend_home
 npm install
-npm run dev              # http://127.0.0.1:5174
+npm run dev              # http://localhost:5174
 ```
 
 - 公开接口：`/api/portal/summary`、`/api/health`（经 Vite 代理 → `:5001`）
-- 「进入控制台 / 开始测试 / 场景」按登录态跳转：已登录直达目标页，未登录走 `/login?redirect=`；本机统一 `localhost`（勿混用 `127.0.0.1`）
-- 登录态：控制台把 token 写入 `localStorage` + Cookie `tiger_ai_token`，门户可跨端口读取
+- CTA 按登录态跳转：已登录直达目标页，未登录走 `/login?redirect=`；本机统一 `localhost`
+- 登录态：控制台写入 `localStorage` + Cookie `tiger_ai_token`，门户跨端口可读
 
 ### 控制台 frontend_admin
 
 ```bash
 cd frontend/frontend_admin
 npm install
-npm run dev              # http://127.0.0.1:5173
+npm run dev              # http://localhost:5173
 ```
 
-Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
+Vite 代理：`/api` → `http://127.0.0.1:5001`。
 
 - 登录后守卫调 `getInfo`+`getRouters` → 动态侧栏 + 权限标识
-- 按钮级权限：`v-permission="'system:user:add'"`，无权限移除元素
-- 页面：登录、首页(统计卡+ECharts)、系统管理(用户/角色/部门/岗位/菜单)
-- 支持门户深链：`/login?redirect=/ai/fall` 登录后进入对应任务页
+- 按钮级权限：`v-permission="'system:user:add'"`
+- 顶栏「项目门户」跳转 `VITE_PORTAL_URL`（默认 http://localhost:5174）
+- 支持门户深链：`/login?redirect=/ai/fall`
+- 页面：登录、首页、AI 任务页、系统管理（用户/角色/部门/岗位/菜单）
 
 ## 文档
 
 | 文档 | 说明 |
 |------|------|
+| [前端总览](frontend/README.md) | 门户 `frontend_home` + 控制台 `frontend_admin` |
 | [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、姿态/球模型、球场与网线、HUD、API；含 [§11 Roboflow 导出 YOLO zip 与自训指南](docs/badminton-analysis.md#11-附录roboflow-导出-yolo11--yolov8-zip-与平台自训指南) |
 | [图像/视频分割模块](docs/image-segmentation.md) | 技术栈、依赖、模型权重、API 与使用流程（RF-DETR-Seg / YOLOE 图片视频 / MobileSAM） |
 | [数据标注功能说明](docs/数据标注功能说明.md) | 视频抽帧、Canvas 标注、YOLO 格式、构建训练集、API 与 FAQ |
@@ -283,8 +290,9 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 
 1. 启动 MySQL，建库 `cv_python_tigerpro`
 2. 后端 `python app.py`（:5001，自动建表+种子）
-3. 控制台 `cd frontend/frontend_admin && npm run dev`（:5173）
-4. 门户 `cd frontend/frontend_home && npm run dev`（:5174），浏览器打开门户后点「进入控制台」，用 `admin/admin123` 登录
+3. 控制台 `cd frontend/frontend_admin && npm run dev` → http://localhost:5173
+4. 门户 `cd frontend/frontend_home && npm run dev` → http://localhost:5174  
+   打开门户后点「进入控制台」，用 `admin/admin123` 登录
 <img width="1920" height="869" alt="744ec6c19b3817d1e7c1efe5d66124e7" src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" />
 
 

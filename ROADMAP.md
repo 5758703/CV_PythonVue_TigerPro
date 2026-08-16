@@ -9,7 +9,7 @@
 
 ## 当前定位（v0.x）
 
-Flask + Vue3 的 **多任务视觉 / 语音 AI 管理平台**：模型管理、RBAC、检测/姿态/分割、人脸 1:N、行人重识别、车辆追踪、OCR/表格、羽毛球分析、训练与告警等。优先保证 **CPU 可跑、可部署、可贡献**。
+Flask + Vue3 的 **多任务视觉 / 语音 AI 管理平台**：项目门户（`frontend_home`）+ 管理控制台（`frontend_admin`）、模型管理、RBAC、检测/姿态/分割、人脸 1:N、行人重识别、车辆追踪、OCR/表格、羽毛球分析、训练与告警等。优先保证 **CPU 可跑、可部署、可贡献**。
 
 ---
 
@@ -28,7 +28,7 @@ Flask + Vue3 的 **多任务视觉 / 语音 AI 管理平台**：模型管理、R
 
 | 目标 | 状态 | 建议标签 |
 |------|------|----------|
-| Docker / Compose 一键启动（backend+frontend+mysql） | 待认领 | `devops` `feature` `help-wanted` |
+| Docker / Compose 一键启动（backend + frontend_home + frontend_admin + mysql） | 待认领 | `devops` `feature` `help-wanted` |
 | CI：lint + 基础 import/冒烟 | 待认领 | `devops` `enhancement` |
 | Windows / Linux 部署文档对齐 | 待认领 | `docs` `devops` |
 | 健康检查与就绪探针接口 | 待认领 | `backend` `devops` |

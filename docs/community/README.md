@@ -16,6 +16,7 @@
 
 | 文档 | 说明 |
 |------|------|
+| [前端总览](../../frontend/README.md) | 门户 `frontend_home` + 控制台 `frontend_admin` |
 | [行人重识别](../person-reid.md) | Youtu ReID、独立底库与混合人脸 |
 | [人脸识别](../face-recognition.md) | InsightFace + YuNet+SFace |
 | [OpenCV Zoo 轻量视觉](../opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet 等 |

@@ -4,18 +4,18 @@
 统一纳管多引擎 AI 模型，提供权重拉取（HuggingFace / ModelScope 双源）、在线推理测试，
 以及 RBAC 权限系统（用户 / 角色 / 部门 / 岗位 / 菜单）。纯 **CPU** 即可运行全部任务。
 
-> 配套前端见 [`../frontend/README.md`](../frontend/README.md)。
+> 配套前端见 [`../frontend/README.md`](../frontend/README.md)（门户 `frontend_home` + 控制台 `frontend_admin`）。
 
 ---
 
 ## 技术架构
 
 ```
-前端 (SPA)
-   │  REST /api/*  （JWT 鉴权）
+门户 frontend_home :5174  /  控制台 frontend_admin :5173
+   │  REST /api/*  （JWT 鉴权；门户另有公开 /api/portal/summary）
    ▼
 Flask 应用 :5001
-   ├─ routes/         蓝图：auth / user / role / dept / job / menu / ai_model
+   ├─ routes/         蓝图：auth / user / role / … / ai_model / portal / openapi_v1
    ├─ security.py     RBAC：JWT 解析 + 权限点(perms)校验装饰器
    ├─ models/         SQLAlchemy 实体（User/Role/Menu/... + AiModel）
    ├─ extensions.py   db / jwt / cors 实例
@@ -158,13 +158,15 @@ python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 
 ## 使用流程
 
-1. 前端「模型管理」新增模型（填 `task` / `library` / `source_url`），或用内置示例模型。
+1. 在控制台（`frontend_admin`）「模型管理」新增模型（填 `task` / `library` / `source_url`），或用内置示例模型。
 2. 点「拉取权重」从 HuggingFace / ModelScope / Roboflow 下载到 `uploads/models/<标识>/`。
 3. 到对应任务页在线测试（检测 / 分类 / 文本 / 语音识别 / 语音合成 / 数字人）。
 
+公开门户统计：`GET /api/portal/summary`（无需登录，供 `frontend_home` 使用）。
+
 ## 部署
 
-> 生产环境关闭 `debug`，用 WSGI 服务器托管，前置 Nginx（见前端 README 的反代配置）。
+> 生产环境关闭 `debug`，用 WSGI 服务器托管，前置 Nginx（见 [`frontend/frontend_admin/README.md`](../frontend/frontend_admin/README.md) 反代示例）。
 
 **Linux（gunicorn）**
 ```bash
