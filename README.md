@@ -1,3 +1,6 @@
+
+
+
 # CV Python Tigerpro
 
 Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RBAC + 模型管理 + 检测 / 姿态 / 人脸 / 车辆 / OCR 等）。
@@ -59,9 +62,14 @@ https://github.com/user-attachments/assets/32f917e8-108a-455a-a8fe-35f864cf1074
 
 
 
+https://github.com/user-attachments/assets/32b4cbfe-a0e2-4908-b570-2d85da2050ff
+
+
+
 https://github.com/user-attachments/assets/69ead2ad-c3d6-4e38-a808-3f53a44be973
 
 
+https://github.com/user-attachments/assets/22651205-df17-46a4-9142-1d5ce315ef80
 
 https://github.com/user-attachments/assets/797b89e0-3330-4c33-9315-e2d34c9c8517
 
