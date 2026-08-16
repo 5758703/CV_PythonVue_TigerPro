@@ -20,6 +20,9 @@
         <el-form-item label="记录事件">
           <el-switch v-model="persist" />
         </el-form-item>
+        <el-form-item v-if="mode === 'video' || mode === 'camera'" label="告警声音">
+          <el-switch v-model="soundOn" />
+        </el-form-item>
         <el-form-item v-if="mode === 'image'">
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick" accept="image/*">
             <el-button :icon="UploadFilled">选择图片</el-button>
@@ -53,7 +56,7 @@
       <el-alert type="info" :closable="false" class="tip-alert"
                 title="四个阈值在「检测告警」页的「跌倒检测告警」规则中配置；该规则需先启用，本页才会判定与记事件。" />
       <el-alert v-if="mode === 'video'" type="warning" :closable="false" class="tip-alert"
-                title="红框每帧画、事件列表稀疏：合成视频里每一帧只要判定为跌倒都会画红框（计入 fallFrames），但右侧「触发记录」受规则的连续帧确认与冷却时间（默认 60 秒）约束，只在满足条件时记一条，数量远少于红框帧数，并非漏检。" />
+                title="红框每帧画、事件列表稀疏：合成视频里每一帧只要判定为跌倒都会画红框（计入 fallFrames），但右侧「触发记录」受规则的连续帧确认与冷却时间（默认 60 秒）约束，只在满足条件时记一条，数量远少于红框帧数，并非漏检。开启「告警声音」后，播放结果视频并到达触发时刻时会播警告音。" />
     </el-card>
 
     <el-row :gutter="12">
@@ -92,7 +95,14 @@
                 </div>
                 <template v-else-if="videoResultUrl">
                   <div class="cam-stage pane-stage">
-                    <video ref="videoRef" :src="videoResultUrl" controls class="cam-video"></video>
+                    <video
+                      ref="videoRef"
+                      :src="videoResultUrl"
+                      controls
+                      class="cam-video"
+                      @timeupdate="onResultVideoTime"
+                      @seeked="onResultVideoTime"
+                    ></video>
                   </div>
                   <div class="stats">
                     <el-tag type="info" effect="plain">总帧 {{ videoStats.totalFrames ?? videoStats.frames ?? '-' }}</el-tag>
@@ -179,6 +189,8 @@ const modelOptions = ref([])
 const modelId = ref(null)
 const conf = ref(0.25)
 const persist = ref(true)
+/** 视频/摄像头触发跌倒事件时播放告警音（图片模式不播） */
+const soundOn = ref(true)
 const file = ref(null)
 const running = ref(false)
 const sourceImgUrl = ref('')
@@ -239,14 +251,104 @@ const onPick = (uploadFile) => {
   sourceImgUrl.value = URL.createObjectURL(uploadFile.raw)
 }
 
+let fallAudioCtx = null
+let alarmBusyUntil = 0
+/** 结果视频播放过程中已播过告警的跌倒事件下标（回退进度后可再次触发） */
+const soundedFallIdx = new Set()
+let lastPlaySec = 0
+
+/** 跌倒告警音：短促三连蜂鸣 + 语音提示「疑似跌倒」 */
+const playFallAlarm = (title, { force = false } = {}) => {
+  if (!soundOn.value) return
+  const nowMs = Date.now()
+  // 摄像头模式冷却内不重复播；视频按事件下标去重时可用 force
+  if (!force && nowMs < alarmBusyUntil) return
+  alarmBusyUntil = nowMs + 2500
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext
+    if (!AC) throw new Error('no AudioContext')
+    if (!fallAudioCtx) fallAudioCtx = new AC()
+    if (fallAudioCtx.state === 'suspended') fallAudioCtx.resume()
+    const t0 = fallAudioCtx.currentTime
+    for (let i = 0; i < 3; i++) {
+      const osc = fallAudioCtx.createOscillator()
+      const gain = fallAudioCtx.createGain()
+      osc.type = 'square'
+      osc.frequency.value = i % 2 === 0 ? 920 : 620
+      const start = t0 + i * 0.32
+      gain.gain.setValueAtTime(0.0001, start)
+      gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.2)
+      osc.connect(gain)
+      gain.connect(fallAudioCtx.destination)
+      osc.start(start)
+      osc.stop(start + 0.22)
+    }
+  } catch (_) { /* 自动播放策略等失败时静默 */ }
+  try {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel()
+      const u = new SpeechSynthesisUtterance(title || '疑似跌倒，请立即查看')
+      u.lang = 'zh-CN'
+      u.rate = 1.05
+      window.speechSynthesis.speak(u)
+    }
+  } catch (_) { /* 忽略 */ }
+}
+
+/** 播放结果视频时：到达跌倒触发时刻（frame/sec）开始告警 */
+const onResultVideoTime = () => {
+  const v = videoRef.value
+  if (!v || mode.value !== 'video') return
+  const t = Number(v.currentTime) || 0
+  const evs = videoStats.value.fallEvents || []
+  if (!evs.length) {
+    lastPlaySec = t
+    return
+  }
+  // 进度回退：清除该时刻之后事件的“已播”标记，便于重播时再次告警
+  if (t + 0.08 < lastPlaySec) {
+    for (let i = 0; i < evs.length; i++) {
+      if (Number(evs[i].sec) > t + 0.05) soundedFallIdx.delete(i)
+    }
+  }
+  const prev = lastPlaySec
+  lastPlaySec = t
+  for (let i = 0; i < evs.length; i++) {
+    if (soundedFallIdx.has(i)) continue
+    const sec = Number(evs[i].sec)
+    if (!Number.isFinite(sec)) continue
+    // 正向越过跌倒触发时刻才告警（时间线点击会先把 lastPlaySec 调到略早于目标点）
+    if (!(prev < sec && t >= sec)) continue
+    // 大跨度快进越过时只记已过、不连响
+    if (t - sec > 1.2) {
+      soundedFallIdx.add(i)
+      continue
+    }
+    soundedFallIdx.add(i)
+    const frameHint = evs[i].frame != null ? `第 ${evs[i].frame} 帧` : `${sec.toFixed(1)} 秒`
+    playFallAlarm(evs[i].title || `疑似跌倒，${frameHint}`, { force: true })
+  }
+}
+
+const resetVideoAlarmCues = () => {
+  soundedFallIdx.clear()
+  lastPlaySec = 0
+}
+
 const applyData = (d) => {
   lastData.value = d
   personCount.value = d.count || 0
   fallCount.value = (d.detections || []).filter((x) => x.className === 'fall').length
-  for (const t of d.triggered || []) {
+  const triggered = d.triggered || []
+  for (const t of triggered) {
     events.value.unshift({ time: new Date().toLocaleTimeString(), title: t.title, message: t.message })
   }
   if (events.value.length > 50) events.value.length = 50
+  // 仅摄像头实时触发播报；图片模式不播声音
+  if (mode.value === 'camera' && triggered.length) {
+    playFallAlarm(triggered[0].title || triggered[0].message)
+  }
 }
 
 const buildForm = (blob, name) => {
@@ -301,6 +403,7 @@ const onPickVideo = (uploadFile) => {
 const clearVideoResult = () => {
   if (videoBlobUrl) { URL.revokeObjectURL(videoBlobUrl); videoBlobUrl = null }
   videoResultUrl.value = ''
+  resetVideoAlarmCues()
 }
 
 const runVideo = async () => {
@@ -340,6 +443,7 @@ const pollVideo = (jobId) => new Promise((resolve) => {
       if (d.status === 'done') {
         clearInterval(pollTimer); pollTimer = null
         videoStats.value = d.stats || {}
+        resetVideoAlarmCues()
         const blob = await fallApi.outputVideo(d.stats.output)
         videoBlobUrl = URL.createObjectURL(blob)
         videoResultUrl.value = videoBlobUrl
@@ -363,7 +467,17 @@ const downloadVideoResult = () => {
 }
 
 const seekTo = (sec) => {
-  if (videoRef.value) videoRef.value.currentTime = sec
+  const v = videoRef.value
+  if (!v) return
+  // 允许再次触发该时刻告警：清除该点及之后的已播标记
+  const t = Number(sec) || 0
+  const evs = videoStats.value.fallEvents || []
+  for (let i = 0; i < evs.length; i++) {
+    if (Number(evs[i].sec) >= t - 0.05) soundedFallIdx.delete(i)
+  }
+  lastPlaySec = Math.max(0, t - 0.05)
+  v.currentTime = t
+  v.play?.().catch(() => {})
 }
 
 const drawOverlay = (ctx, w, h) => {
@@ -502,6 +616,11 @@ onBeforeUnmount(() => {
   clearSourceVideo()
   clearVideoResult()
   if (sourceImgUrl.value) URL.revokeObjectURL(sourceImgUrl.value)
+  try { window.speechSynthesis?.cancel() } catch (_) { /* 忽略 */ }
+  if (fallAudioCtx) {
+    try { fallAudioCtx.close() } catch (_) { /* 忽略 */ }
+    fallAudioCtx = null
+  }
 })
 </script>
 

@@ -18,9 +18,32 @@
               <el-tag size="small" type="info">{{ formatLabel(row.format) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="类别" min-width="160">
+          <el-table-column label="类别" min-width="200">
             <template #default="{ row }">
-              <el-tag v-for="c in row.classNames" :key="c" size="small" style="margin:2px">{{ c }}</el-tag>
+              <el-tooltip
+                v-if="(row.classNames || []).length"
+                placement="top"
+                :show-after="200"
+              >
+                <template #content>
+                  <div class="class-tip">{{ (row.classNames || []).join('、') }}</div>
+                </template>
+                <div class="class-cell">
+                  <el-tag
+                    v-for="c in (row.classNames || []).slice(0, 3)"
+                    :key="c"
+                    size="small"
+                    class="class-tag"
+                  >{{ c }}</el-tag>
+                  <el-tag
+                    v-if="(row.classNames || []).length > 3"
+                    size="small"
+                    type="info"
+                    class="class-more"
+                  >+{{ row.classNames.length - 3 }}</el-tag>
+                </div>
+              </el-tooltip>
+              <span v-else class="class-empty">—</span>
             </template>
           </el-table-column>
           <el-table-column label="样本" width="120">
@@ -1336,6 +1359,38 @@ onMounted(async () => {
 .epoch-hint { font-size: 12px; color: #909399; margin-left: 8px; }
 .mt16 { margin-top: 16px; }
 .ml8 { margin-left: 8px; }
+
+/* 数据集类别列：单行缩略，悬停看全量 */
+.class-cell {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  max-width: 100%;
+  line-height: 1;
+}
+.class-tag {
+  flex: none;
+  max-width: 4.5em;
+  overflow: hidden;
+}
+.class-tag :deep(.el-tag__content) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.class-more {
+  flex: none;
+}
+.class-empty { color: #c0c4cc; }
+.class-tip {
+  max-width: 420px;
+  line-height: 1.55;
+  word-break: break-word;
+}
 
 /* ── 训练监控抽屉 ── */
 .monitor-shell {

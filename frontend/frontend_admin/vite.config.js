@@ -6,6 +6,7 @@ const QUIET_PROXY_CODES = new Set(['ECONNRESET', 'ECONNABORTED', 'EPIPE', 'ECONN
 export default defineConfig({
   plugins: [vue()],
   server: {
+    host: 'localhost',
     port: 5173,
     proxy: {
       '/api': {

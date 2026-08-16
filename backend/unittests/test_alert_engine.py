@@ -651,6 +651,29 @@ def test_fall_image_mode_single_frame_lying_triggers_regression():
     reset_runtime()
 
 
+def test_fall_image_mode_forces_consecutive_one_despite_seed_eight():
+    """图片模式触发记录回归：seed/规则里 consecutive_frames=8 时，画面可已标
+    FALL DETECTED（fall_detections 无连续帧门槛），但 evaluate_rules 若仍要求 8
+    帧，在前端每次检测前 reset-runtime 的图片模式下永远凑不齐 → 右侧「触发记录」
+    空。图片 source_type 应强制 consecutive=1，当帧即可写入 triggered。
+    """
+    reset_runtime("fall_img_consec")
+    rule = _fall_rule({
+        "weights": {"trunk": 1, "speed": 1, "height": 1, "head": 0},
+        "consecutive_frames": 8,
+        "cooldown_sec": 0,
+    }, rid=112)
+    # 摄像头语义：单帧不应触发（仍要凑满 8）
+    assert _eval(rule, [_photo_lying_det()], "fall_img_consec", 100.0, "c0") == []
+    reset_runtime("fall_img_consec")
+    # 图片语义：同规则同姿态，当帧触发
+    out = _eval(rule, [_photo_lying_det()], "fall_img_consec", 100.0, "i0",
+                source_type="image")
+    assert len(out) == 1
+    assert out[0]["detail"]["fallenCount"] >= 1
+    reset_runtime()
+
+
 def test_fall_image_mode_single_frame_standing_does_not_trigger():
     """同样条件下站立单帧不应触发：身高比 2.5 远高于 1.5 阈值，躯干角≈1°
     远低于 60° 阈值，两指标都不命中，验证新身高比指标不会对正常站立姿态

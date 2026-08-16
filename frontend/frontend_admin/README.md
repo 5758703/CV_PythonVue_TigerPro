@@ -43,7 +43,7 @@ Vite Dev Server :5173 ── proxy /api ──▶ Flask 后端 :5001
 ## 目录结构
 
 ```
-frontend/
+frontend_admin/
 ├─ index.html
 ├─ vite.config.js          # 端口 5173 + /api 代理到 127.0.0.1:5001
 ├─ package.json
@@ -74,7 +74,7 @@ frontend/
 前置：**Node.js ≥ 18**、后端已在 `http://127.0.0.1:5001` 运行（见后端 README）。
 
 ```bash
-cd frontend
+cd frontend/frontend_admin
 npm install
 npm run dev         # 开发服务器 http://localhost:5173（/api 自动代理到后端 5001）
 ```
@@ -91,9 +91,9 @@ npm run dev         # 开发服务器 http://localhost:5173（/api 自动代理�
 ## 构建与部署
 
 ```bash
-cd frontend
+cd frontend/frontend_admin
 npm install
-npm run build       # 产物输出到 frontend/dist/
+npm run build       # 产物输出到 frontend_admin/dist/
 npm run preview     # 本地预览 dist（可选）
 ```
 
@@ -139,6 +139,7 @@ server {
 
 ## 说明
 
+- 支持门户深链：从 `frontend_home` 跳入时携带 `/login?redirect=/ai/...`，登录后进入目标页。
 - 所有后端控制台接口走 `/api` 前缀；`src/api/request.js` 统一注入 JWT、处理 401。
 - 对外 Open API 走 `/openapi/v1`（AppKey，与 JWT 分离）。
 - 在线测试为长耗时请求（拉模型 / CPU 推理），相关 axios 调用已设 `timeout: 0`。

@@ -74,13 +74,28 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const store = useUserStore()
 
+  const safeRedirect = (raw) => {
+    const value = Array.isArray(raw) ? raw[0] : raw
+    if (typeof value !== 'string') return null
+    let path = value.trim()
+    try {
+      path = decodeURIComponent(path)
+    } catch {
+      /* keep */
+    }
+    if (!path.startsWith('/') || path.startsWith('//') || path.includes('://')) return null
+    return path
+  }
+
   if (to.meta.public) {
-    if (store.token) return { path: '/index' }
+    if (store.token) {
+      return safeRedirect(to.query.redirect) || { path: '/index' }
+    }
     return true
   }
 
   if (!store.token) {
-    return { path: '/login' }
+    return { path: '/login', query: { redirect: to.fullPath } }
   }
 
   // 已登录但未加载权限 -> 拉取
@@ -89,7 +104,7 @@ router.beforeEach(async (to) => {
       await store.loadInfo()
     } catch (e) {
       store.logout()
-      return { path: '/login' }
+      return { path: '/login', query: { redirect: to.fullPath } }
     }
   }
   return true

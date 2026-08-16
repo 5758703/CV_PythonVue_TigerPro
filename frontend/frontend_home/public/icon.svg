@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="g" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4594ed"/>
+      <stop offset="1" stop-color="#6650cf"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <text x="32" y="42" text-anchor="middle" font-family="ui-monospace,monospace" font-size="22" font-weight="700" fill="#fff">CV</text>
+</svg>

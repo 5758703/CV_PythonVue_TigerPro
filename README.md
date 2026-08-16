@@ -209,10 +209,31 @@ python app.py            # http://127.0.0.1:5001 （启动自动建表 + 灌种�
 
 功能权限装饰器 `@permission_required("system:user:add")`；数据权限 `apply_user_data_scope()` 按角色 data_scope 过滤。
 
-## 前端 frontend
+## 前端
+
+仓库包含两个前端应用：
+
+| 目录 | 角色 | 开发地址 |
+|------|------|----------|
+| [`frontend/frontend_home`](frontend/frontend_home) | 项目门户（宣传 / 入口） | http://127.0.0.1:5174 |
+| [`frontend/frontend_admin`](frontend/frontend_admin) | 管理控制台（原前端） | http://127.0.0.1:5173 |
+
+### 门户 frontend_home
 
 ```bash
-cd frontend
+cd frontend/frontend_home
+npm install
+npm run dev              # http://127.0.0.1:5174
+```
+
+- 公开接口：`/api/portal/summary`、`/api/health`（经 Vite 代理 → `:5001`）
+- 「进入控制台 / 开始测试 / 场景」按登录态跳转：已登录直达目标页，未登录走 `/login?redirect=`；本机统一 `localhost`（勿混用 `127.0.0.1`）
+- 登录态：控制台把 token 写入 `localStorage` + Cookie `tiger_ai_token`，门户可跨端口读取
+
+### 控制台 frontend_admin
+
+```bash
+cd frontend/frontend_admin
 npm install
 npm run dev              # http://127.0.0.1:5173
 ```
@@ -222,6 +243,7 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 - 登录后守卫调 `getInfo`+`getRouters` → 动态侧栏 + 权限标识
 - 按钮级权限：`v-permission="'system:user:add'"`，无权限移除元素
 - 页面：登录、首页(统计卡+ECharts)、系统管理(用户/角色/部门/岗位/菜单)
+- 支持门户深链：`/login?redirect=/ai/fall` 登录后进入对应任务页
 
 ## 文档
 
@@ -253,7 +275,8 @@ Vite 代理：前端 `/api` → `http://127.0.0.1:5001`。
 
 1. 启动 MySQL，建库 `cv_python_tigerpro`
 2. 后端 `python app.py`（:5001，自动建表+种子）
-3. 前端 `npm run dev`（:5173），浏览器打开，用 `admin/admin123` 登录
+3. 控制台 `cd frontend/frontend_admin && npm run dev`（:5173）
+4. 门户 `cd frontend/frontend_home && npm run dev`（:5174），浏览器打开门户后点「进入控制台」，用 `admin/admin123` 登录
 <img width="1920" height="869" alt="744ec6c19b3817d1e7c1efe5d66124e7" src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" />
 
 

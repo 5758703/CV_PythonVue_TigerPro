@@ -1171,7 +1171,8 @@ def evaluate_rules(
     """评估规则列表；满足连续帧 + 冷却则触发并可选持久化。
 
     source_type 透传给跌倒判定：图片模式（"image"）豁免冷启动门控，
-    见 _eval_fall_detection 内注释。
+    见 _eval_fall_detection 内注释。图片模式下连续帧确认强制为 1（单帧独立
+    判定，否则默认 consecutive_frames=8 永远无法触发事件）。
     """
     now = float(now_ts) if now_ts is not None else time.time()
     triggered = []
@@ -1204,6 +1205,11 @@ def evaluate_rules(
         else:
             default_consec = 2
         consecutive = int(cfg.get("consecutive_frames", cfg.get("consecutiveFrames", default_consec)))
+        # 图片模式是独立单帧判定（前端每次 /detect 前会 reset-runtime），
+        # consecutive_frames>1 永远凑不齐，会导致画面已标 FALL DETECTED 却无触发记录。
+        # 摄像头/视频仍用规则里的连续帧确认（跌倒默认 8）。
+        if str(source_type or "").strip().lower() == "image":
+            consecutive = 1
         cooldown = float(cfg.get("cooldown_sec", cfg.get("cooldownSec", 30)))
 
         detail = _condition_met(rule, detections, eval_ctx)

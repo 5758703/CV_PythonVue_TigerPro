@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
 
 import { getInfo, getRouters } from '../api/auth'
+import { clearStoredToken, getStoredToken, setStoredToken } from '../utils/authStorage'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
-    token: localStorage.getItem('token') || '',
+    token: getStoredToken() || '',
     userInfo: null,
     roles: [],
     perms: [],
@@ -17,7 +18,7 @@ export const useUserStore = defineStore('user', {
   actions: {
     setToken(token) {
       this.token = token
-      localStorage.setItem('token', token)
+      setStoredToken(token)
     },
     // 拉取身份 + 权限 + 菜单树
     async loadInfo() {
@@ -40,8 +41,7 @@ export const useUserStore = defineStore('user', {
       this.roles = []
       this.perms = []
       this.routers = []
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+      clearStoredToken()
     }
   }
 })

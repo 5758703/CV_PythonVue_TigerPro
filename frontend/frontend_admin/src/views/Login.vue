@@ -72,7 +72,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import * as THREE from 'three'
@@ -81,7 +81,23 @@ import { login } from '../api/auth'
 import { useUserStore } from '../store/user'
 
 const router = useRouter()
+const route = useRoute()
 const store = useUserStore()
+
+/** 门户深链：仅允许站内相对路径（可含 query），防止开放重定向 */
+function safeRedirect(raw) {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (typeof value !== 'string') return '/index'
+  let path = value.trim()
+  try {
+    path = decodeURIComponent(path)
+  } catch {
+    /* keep raw */
+  }
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('://')) return '/index'
+  return path
+}
+
 const canvasRef = ref(null)
 const formRef = ref(null)
 const loading = ref(false)
@@ -116,7 +132,7 @@ const onSubmit = async () => {
     store.setToken(res.data.token)
     await store.loadInfo()
     ElMessage.success('登录成功')
-    router.push('/index')
+    router.push(safeRedirect(route.query.redirect))
   } catch {
     shaking.value = true
     setTimeout(() => (shaking.value = false), 600)
