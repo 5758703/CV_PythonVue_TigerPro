@@ -38,6 +38,8 @@
 
 - 更新双前端说明：根 `README.md`、`frontend/README.md`、`frontend_home` / `frontend_admin` README、`backend/README.md`、`CONTRIBUTING.md`、`GOVERNANCE.md`、`THIRD_PARTY_NOTICES.md`
 - 新增部署体系：`docs/deploy/{README,local,linux,docker}.md`、`deploy/` Compose 与 Dockerfile；更新 Ubuntu 部署指南索引
+- 重写 `docs/deploy/linux.md`：覆盖 Ubuntu / Debian / CentOS·RHEL 环境配置、MySQL、Python 3.12、Node、gunicorn、Nginx、防火墙与验收
+- 新增 `docs/supervision-usage.md`：汇总 RF-DETR 链路中 Supervision（`Detections` / Annotator）全部触点
 - 新增 `docs/person-reid.md`、`docs/opencv-zoo-models.md`；更新 `docs/face-recognition.md` / `docs/人脸识别功能汇总.md`
 - 更新 `README.md` 功能列表与文档索引、`THIRD_PARTY_NOTICES.md` OpenCV Zoo 条目
 - 更新 `人员离岗检测-功能说明.md` / `目标追踪-场景分类说明.md` / `README.md`：镜头运动补偿原理、接口与验收清单

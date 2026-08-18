@@ -166,7 +166,8 @@ python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 
 ## 部署
 
-完整步骤见 **[docs/deploy](../docs/deploy/README.md)**（本地 / Linux / Docker）。
+完整步骤见 **[docs/deploy](../docs/deploy/README.md)**（本地 / Linux / Docker）。  
+跨发行版生产部署（Ubuntu / Debian / CentOS·RHEL）见 **[docs/deploy/linux.md](../docs/deploy/linux.md)**。
 
 > 生产环境关闭 Flask `debug`，用 WSGI 托管，前置 Nginx。
 
