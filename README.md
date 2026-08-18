@@ -1,6 +1,4 @@
 
-
-
 # CV Python Tigerpro
 
 Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RBAC + 模型管理 + 检测 / 姿态 / 人脸 / 车辆 / OCR 等）。
@@ -50,6 +48,13 @@ backend/                 Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask
 frontend/frontend_home/  Vue3 + Vite（项目门户）
 frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 ```
+
+
+
+https://github.com/user-attachments/assets/c591bb3c-9900-4bad-b103-072fa68f995d
+
+
+
 <img width="1920" height="869" alt="image" src="https://github.com/user-attachments/assets/0301e97a-85f5-441d-90cb-8d86d15efec8" />
 
 
@@ -58,6 +63,8 @@ frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios
 
 
 <img width="1920" height="869" alt="ScreenShot_2026-07-05_122934_328" src="https://github.com/user-attachments/assets/ee916e47-bf88-4fbd-a75c-6761fd999aba" />
+
+
 
 
 https://github.com/user-attachments/assets/22b18f3f-fb99-4a56-a341-7fa5674215c9
