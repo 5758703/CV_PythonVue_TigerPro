@@ -21,6 +21,7 @@
     <el-card shadow="never">
       <div class="toolbar">
         <el-button v-permission="'camera:add'" type="primary" :icon="Plus" @click="openAdd">新增摄像头</el-button>
+        <el-button v-permission="'camera:edit'" type="warning" :icon="Monitor" @click="openScreenPush">Windows 屏幕推流</el-button>
         <el-button v-permission="'camera:remove'" type="danger" :icon="Delete" :disabled="!selectedIds.length" @click="batchRemove">批量删除{{ selectedIds.length ? `（${selectedIds.length}）` : '' }}</el-button>
       </div>
 
@@ -77,6 +78,44 @@
             <el-table-column prop="file" label="本地视频（ffmpeg 模拟）" />
             <el-table-column prop="rtsp" label="网络摄像头（RTSP）" />
           </el-table>
+        </div>
+      </el-collapse-item>
+      <el-collapse-item name="screen">
+        <template #title>
+          <span class="rtsp-guide-title">Windows 本机屏幕 RTSP 推流（gdigrab + MediaMTX）</span>
+        </template>
+        <div class="rtsp-guide-body">
+          <p class="rtsp-intro">
+            将<b>运行后端的 Windows 电脑桌面</b>实时推为 RTSP 流，供「网络摄像头（RTSP）」拉流预览与监控大屏使用。
+            可点击上方 <b>Windows 屏幕推流</b> 一键启动，或按下列步骤手动操作。
+          </p>
+
+          <div class="rtsp-step">
+            <div class="step-hd">步骤 1：安装并启动 MediaMTX</div>
+            <p>下载 <a href="https://github.com/bluenviron/mediamtx/releases" target="_blank" rel="noopener">MediaMTX Windows 版</a>，解压后在 PowerShell 中执行：</p>
+            <pre class="cmd-block">cd E:\DevelopmentEnvironment\mediamtx_v1.19.2_windows_amd64
+.\mediamtx.exe</pre>
+            <p class="step-note">默认 RTSP 监听 <code>8554</code> 端口，保持窗口运行。</p>
+          </div>
+
+          <div class="rtsp-step">
+            <div class="step-hd">步骤 2：启动屏幕推流</div>
+            <p><b>方式 A（推荐）</b>：点击工具栏 <b>Windows 屏幕推流</b> → 填写流名称（如 <code>desktop</code>）→ 启动推流。</p>
+            <p><b>方式 B（手动）</b>：在 PowerShell 执行（需本机已安装 ffmpeg，后端内置 imageio-ffmpeg 亦可）：</p>
+            <pre class="cmd-block">ffmpeg -f gdigrab -framerate 15 -draw_mouse 1 -i desktop -vf scale=640:-2 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -an -f rtsp rtsp://localhost:8554/desktop</pre>
+          </div>
+
+          <div class="rtsp-step">
+            <div class="step-hd">步骤 3：新增 RTSP 摄像头并预览</div>
+            <ul class="step-list">
+              <li>来源类型：<b>网络摄像头（RTSP）</b></li>
+              <li>RTSP 地址：<code>rtsp://localhost:8554/desktop</code>（与流名称一致）</li>
+              <li>保存后点击 <b>预览</b>，或在「实时监控大屏」中选择该路</li>
+            </ul>
+          </div>
+
+          <el-alert type="warning" :closable="false" show-icon class="rtsp-alert"
+            title="注意：屏幕推流必须在 Windows 本机运行后端；Linux 服务器部署请改用 OBS/ffmpeg 在客户端推流到 MediaMTX，再填写 RTSP 地址。" />
         </div>
       </el-collapse-item>
       <el-collapse-item name="guide">
@@ -184,6 +223,50 @@
       </template>
     </el-dialog>
 
+    <!-- Windows 屏幕 RTSP 推流 -->
+    <el-dialog v-model="screenDialog" title="Windows 本机屏幕 RTSP 推流" width="640px" @open="onScreenDialogOpen" @closed="onScreenDialogClosed">
+      <el-alert v-if="!screenStatus.supported" type="error" :closable="false" show-icon class="type-tip"
+        title="当前后端不在 Windows 环境，无法在本机启动屏幕推流。请在 Windows 开发机运行后端，或使用下方命令在客户端手动推流。" />
+      <el-alert v-else-if="screenStatus.running" type="success" :closable="false" show-icon class="type-tip"
+        :title="`推流中：${screenStatus.rtspUrl}（PID ${screenStatus.pid}）`" />
+
+      <el-form :model="screenForm" label-width="100px" class="screen-form">
+        <el-form-item label="RTSP 主机">
+          <el-input v-model="screenForm.host" placeholder="localhost" :disabled="screenStatus.running" />
+        </el-form-item>
+        <el-form-item label="RTSP 端口">
+          <el-input-number v-model="screenForm.port" :min="1" :max="65535" :disabled="screenStatus.running" />
+        </el-form-item>
+        <el-form-item label="流名称">
+          <el-input v-model="screenForm.streamName" placeholder="desktop" :disabled="screenStatus.running" />
+          <div class="file-hint muted">仅字母数字、下划线、连字符；推流地址为 rtsp://主机:端口/流名称</div>
+        </el-form-item>
+        <el-form-item label="输出宽度">
+          <el-input-number v-model="screenForm.width" :min="160" :max="1920" :step="80" :disabled="screenStatus.running" />
+        </el-form-item>
+        <el-form-item label="帧率">
+          <el-input-number v-model="screenForm.fps" :min="1" :max="30" :disabled="screenStatus.running" />
+        </el-form-item>
+        <el-form-item label="ffmpeg 命令">
+          <el-input v-model="screenCommand" type="textarea" :rows="3" readonly />
+          <div class="screen-cmd-actions">
+            <el-button size="small" :icon="DocumentCopy" @click="copyScreenCommand">复制命令</el-button>
+            <el-button size="small" :icon="Refresh" :loading="loadingScreenCmd" @click="refreshScreenCommand">刷新命令</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <el-alert type="info" :closable="false" show-icon
+        title="推流前请先启动 MediaMTX；停止推流后 RTSP 预览将中断。推流成功后可用「一键创建摄像头」快速注册。" />
+
+      <template #footer>
+        <el-button @click="screenDialog = false">关闭</el-button>
+        <el-button v-if="screenStatus.running" type="danger" :loading="screenStopping" @click="stopScreenPush">停止推流</el-button>
+        <el-button v-else type="primary" :loading="screenStarting" :disabled="!screenStatus.supported" @click="startScreenPush">启动推流</el-button>
+        <el-button type="success" :disabled="!screenStatus.running && !screenRtspUrl" @click="createCameraFromScreen">一键创建摄像头</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 预览 -->
     <el-dialog v-model="previewDialog" :title="`预览 - ${previewName}`" width="800px" @closed="closePreview">
       <div class="preview-meta">
@@ -215,7 +298,7 @@
 <script setup>
 import { ref, reactive, computed, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Refresh, Plus, Edit, Delete, UploadFilled, VideoPlay, Loading } from '@element-plus/icons-vue'
+import { Search, Refresh, Plus, Edit, Delete, UploadFilled, VideoPlay, Loading, Monitor, DocumentCopy } from '@element-plus/icons-vue'
 
 import { cameraApi } from '../../api/camera'
 
@@ -224,10 +307,10 @@ const saving = ref(false)
 const uploading = ref(false)
 const guideOpen = ref([])
 const sourceCompareRows = [
-  { item: '视频来源', file: '上传 MP4 到服务器 uploads/cameras/', rtsp: '外部 rtsp:// 地址（IPC、NVR、MediaMTX 等）' },
-  { item: '依赖服务', file: '仅需后端 ffmpeg，无需 RTSP 服务', rtsp: '需推流端持续在线（如 MediaMTX+ffmpeg）' },
+  { item: '视频来源', file: '上传 MP4 到服务器 uploads/cameras/', rtsp: '外部 rtsp:// 地址（IPC、NVR、MediaMTX、屏幕推流等）' },
+  { item: '依赖服务', file: '仅需后端 ffmpeg，无需 RTSP 服务', rtsp: '需推流端持续在线（如 MediaMTX+ffmpeg/OBS）' },
   { item: '播放方式', file: 'ffmpeg 循环读取本地文件，按原帧率模拟直播', rtsp: 'ffmpeg 以 TCP 拉取网络 RTSP 流' },
-  { item: '适用场景', file: '单机演示、离线测试、快速验证大屏', rtsp: '多路流、模拟真实监控、与第三方系统对接' },
+  { item: '适用场景', file: '单机演示、离线测试、快速验证大屏', rtsp: '多路流、模拟真实监控、屏幕共享、与第三方对接' },
   { item: '配置步骤', file: '上传视频 → 保存 → 预览', rtsp: '启动推流 → 填写 RTSP 地址 → 预览' },
 ]
 const rows = ref([])
@@ -466,6 +549,143 @@ const closePreview = () => {
 
 onBeforeUnmount(() => { clearPreviewTimer(); previewSrc.value = '' })
 load()
+
+// Windows 屏幕 RTSP 推流
+const screenDialog = ref(false)
+const screenStarting = ref(false)
+const screenStopping = ref(false)
+const loadingScreenCmd = ref(false)
+const screenCommand = ref('')
+const screenStatus = reactive({
+  supported: false,
+  running: false,
+  platform: '',
+  rtspUrl: '',
+  pid: null,
+})
+const screenForm = reactive({
+  host: 'localhost',
+  port: 8554,
+  streamName: 'desktop',
+  width: 640,
+  fps: 15,
+})
+const screenRtspUrl = computed(() => {
+  if (screenStatus.running && screenStatus.rtspUrl) return screenStatus.rtspUrl
+  const host = (screenForm.host || 'localhost').trim() || 'localhost'
+  const name = (screenForm.streamName || 'desktop').replace(/[^a-zA-Z0-9_-]/g, '') || 'desktop'
+  return `rtsp://${host}:${screenForm.port}/${name}`
+})
+
+const refreshScreenStatus = async () => {
+  try {
+    const res = await cameraApi.screenPushStatus()
+    const d = res.data || {}
+    screenStatus.supported = !!d.supported
+    screenStatus.running = !!d.running
+    screenStatus.platform = d.platform || ''
+    screenStatus.rtspUrl = d.rtspUrl || ''
+    screenStatus.pid = d.pid ?? null
+    if (d.command) screenCommand.value = d.command
+  } catch {
+    /* ignore */
+  }
+}
+
+const refreshScreenCommand = async () => {
+  loadingScreenCmd.value = true
+  try {
+    const res = await cameraApi.screenPushCommand({
+      host: screenForm.host,
+      port: screenForm.port,
+      streamName: screenForm.streamName,
+      width: screenForm.width,
+      fps: screenForm.fps,
+    })
+    screenCommand.value = res.data?.command || ''
+    if (res.data?.supported === false) {
+      ElMessage.warning(res.data.message || '当前平台不支持屏幕推流')
+    }
+  } finally {
+    loadingScreenCmd.value = false
+  }
+}
+
+const openScreenPush = async () => {
+  screenDialog.value = true
+}
+
+const onScreenDialogOpen = async () => {
+  await refreshScreenStatus()
+  if (!screenStatus.running) await refreshScreenCommand()
+}
+
+const onScreenDialogClosed = () => {
+  refreshScreenStatus()
+}
+
+const copyScreenCommand = async () => {
+  if (!screenCommand.value) {
+    await refreshScreenCommand()
+  }
+  try {
+    await navigator.clipboard.writeText(screenCommand.value)
+    ElMessage.success('命令已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败，请手动选中命令复制')
+  }
+}
+
+const startScreenPush = async () => {
+  screenStarting.value = true
+  try {
+    const res = await cameraApi.screenPushStart({ ...screenForm })
+    Object.assign(screenStatus, {
+      supported: true,
+      running: true,
+      rtspUrl: res.data?.rtspUrl || screenRtspUrl.value,
+      pid: res.data?.pid ?? null,
+    })
+    if (res.data?.command) screenCommand.value = res.data.command
+    ElMessage.success('屏幕推流已启动，请新增 RTSP 摄像头或点击「一键创建摄像头」')
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '启动推流失败')
+    await refreshScreenStatus()
+  } finally {
+    screenStarting.value = false
+  }
+}
+
+const stopScreenPush = async () => {
+  screenStopping.value = true
+  try {
+    await cameraApi.screenPushStop()
+    screenStatus.running = false
+    screenStatus.rtspUrl = ''
+    screenStatus.pid = null
+    ElMessage.success('屏幕推流已停止')
+    await refreshScreenCommand()
+  } finally {
+    screenStopping.value = false
+  }
+}
+
+const createCameraFromScreen = async () => {
+  const url = screenStatus.running ? screenStatus.rtspUrl : screenRtspUrl.value
+  if (!url.startsWith('rtsp://')) {
+    ElMessage.warning('请先启动推流或填写有效的 RTSP 地址')
+    return
+  }
+  resetForm()
+  form.sourceType = 'rtsp'
+  form.source = url
+  form.name = `屏幕-${screenForm.streamName || 'desktop'}`
+  form.location = 'Windows 本机桌面'
+  form.resolution = screenForm.width
+  form.fps = screenForm.fps
+  dialog.value = true
+  ElMessage.info('已填入 RTSP 地址，确认后保存即可预览')
+}
 </script>
 
 <style scoped>
@@ -502,6 +722,8 @@ load()
 .file-hint { margin-top: 6px; font-size: 12px; color: #67c23a; word-break: break-all; }
 .file-hint.muted { color: #909399; }
 .device-row { display: flex; gap: 8px; width: 100%; }
+.screen-form { margin-top: 8px; }
+.screen-cmd-actions { margin-top: 8px; display: flex; gap: 8px; }
 .preview-meta {
   display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
   font-size: 12px; color: #606266;

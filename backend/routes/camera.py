@@ -1,6 +1,6 @@
 """摄像头管理接口（/api/camera）。
 
-CRUD + 本地视频上传 + MJPEG 实时预览(ffmpeg 按需转流)。
+CRUD + 本地视频上传 + MJPEG 实时预览(ffmpeg 按需转流) + Windows 屏幕 RTSP 推流。
 """
 import os
 
@@ -12,6 +12,7 @@ from extensions import db
 from models import Camera
 from security import permission_required, current_user, has_perm
 from services.camera_stream import list_dshow_devices, check_source_ready
+from services import screen_rtsp_push
 
 camera_bp = Blueprint("camera", __name__, url_prefix="/api/camera")
 
@@ -40,6 +41,59 @@ def list_cameras():
     rows = (query.order_by(Camera.id.desc())
             .offset((page - 1) * size).limit(size).all())
     return jsonify(code=0, data={"rows": [_camera_dict(c) for c in rows], "total": total})
+
+
+@camera_bp.get("/screen-push")
+@permission_required("camera:query")
+def screen_push_status():
+    """Windows 本机屏幕 RTSP 推流状态。"""
+    return jsonify(code=0, data=screen_rtsp_push.get_status().to_dict())
+
+
+@camera_bp.get("/screen-push/command")
+@permission_required("camera:query")
+def screen_push_command():
+    """生成可手动复制的 ffmpeg 屏幕推流命令（不启动进程）。"""
+    args = request.args
+    data = screen_rtsp_push.preview_command(
+        rtsp_host=args.get("host", "localhost"),
+        rtsp_port=int(args.get("port", 8554)),
+        stream_name=args.get("streamName", "desktop"),
+        fps=int(args.get("fps", 15)),
+        width=int(args.get("width", 640)),
+        capture=args.get("capture", "desktop"),
+    )
+    return jsonify(code=0, data=data)
+
+
+@camera_bp.post("/screen-push/start")
+@permission_required("camera:edit")
+def screen_push_start():
+    """在本机启动 ffmpeg gdigrab → RTSP 推流（仅 Windows）。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        status = screen_rtsp_push.start_push(
+            rtsp_host=data.get("host", "localhost"),
+            rtsp_port=int(data.get("port", 8554)),
+            stream_name=data.get("streamName", "desktop"),
+            fps=int(data.get("fps", 15)),
+            width=int(data.get("width", 640)),
+            capture=data.get("capture", "desktop"),
+            offset_x=int(data.get("offsetX", 0)),
+            offset_y=int(data.get("offsetY", 0)),
+            video_size=data.get("videoSize") or None,
+        )
+    except RuntimeError as e:
+        return jsonify(code=400, message=str(e)), 400
+    return jsonify(code=0, message="屏幕推流已启动", data=status.to_dict())
+
+
+@camera_bp.post("/screen-push/stop")
+@permission_required("camera:edit")
+def screen_push_stop():
+    """停止本机屏幕 RTSP 推流。"""
+    status = screen_rtsp_push.stop_push()
+    return jsonify(code=0, message="屏幕推流已停止", data=status.to_dict())
 
 
 @camera_bp.get("/devices")
@@ -102,6 +156,13 @@ def update_camera(cid):
         return jsonify(code=400, message=err), 400
     db.session.commit()
     return jsonify(code=0, message="修改成功", data=_camera_dict(cam))
+
+
+@camera_bp.get("/<int:cid>")
+@permission_required("camera:query")
+def get_camera(cid):
+    cam = Camera.query.get_or_404(cid)
+    return jsonify(code=0, data=_camera_dict(cam))
 
 
 @camera_bp.delete("/<int:cid>")

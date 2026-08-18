@@ -19,6 +19,10 @@ export const cameraApi = {
   devices: () => request.get('/camera/devices'),
   upload: (formData) =>
     request.post('/camera/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  screenPushStatus: () => request.get('/camera/screen-push'),
+  screenPushCommand: (params) => request.get('/camera/screen-push/command', { params }),
+  screenPushStart: (data) => request.post('/camera/screen-push/start', data),
+  screenPushStop: () => request.post('/camera/screen-push/stop'),
   // MJPEG 预览：<img> 不能带 header，token 走 query
   // forCapture=true 时走同源 /api 代理，供 canvas 抓帧（避免 127.0.0.1 跨域污染画布）
   streamUrl: (id, bust = '', check = false, forCapture = false) => {

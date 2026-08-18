@@ -171,7 +171,7 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 - OpenCV Zoo 轻量能力：YuNet+SFace、Youtu Person ReID、EfficientSAM、LaMa、MobileNet V2（DNN + ORT 回退）
 - **安防检测模型包（11 个本地 ONNX）**：烟火 / 森林火灾 / 灾害扩展、PPE 与安全帽、跌倒与行为、打架、武器、车牌等，种子分类「安防检测」（`sec-*`），ONNX Runtime CPU 推理，可挂图片/视频/摄像头检测与告警规则
 - **模型权重转换（pt → onnx）**：模型管理支持异步导出（imgsz / dynamic / half），同目录存在 `.onnx` 时检测优先走 ONNX Runtime（`YOLO_PREFER_ONNX=0` 可关闭）；列表支持自定义每页条数（1–200）并本地记忆
-- 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**
+- 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**；Windows 本机可将 **桌面屏幕 RTSP 推流** 接入监控，见 [`docs/camera-screen-rtsp.md`](docs/camera-screen-rtsp.md)
 
 ## 默认账号（种子数据自动写入）
 

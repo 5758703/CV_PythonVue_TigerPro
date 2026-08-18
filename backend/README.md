@@ -202,6 +202,7 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 | 认证 | `/api/auth` | 登录 / 注册 / 用户信息（JWT） |
 | 系统管理 | `/api/system/*` | user / role / dept / job / menu / **open-app**（开放应用） |
 | AI 模型 | `/api/ai/model` | CRUD、拉权重(`/fetch`)、各任务在线测试（detect / classify / transcribe / tts / ...） |
+| 摄像头 | `/api/camera` | CRUD、本机设备枚举、MJPEG 预览、**Windows 屏幕 RTSP 推流**（见 [`../docs/camera-screen-rtsp.md`](../docs/camera-screen-rtsp.md)） |
 | **Open API v1** | `/openapi/v1` | 对外能力网关（AppKey + Scope，与控制台 JWT 分离） |
 
 所有受保护控制台接口需请求头 `Authorization: Bearer <token>`，并校验对应权限点（`perms`）。
