@@ -449,6 +449,12 @@ def seed_ai_menus():
     _ensure_ai_menu(2882, 288, "行人底库新增", "F", "ai:reid:add")
     _ensure_ai_menu(2883, 288, "行人底库修改", "F", "ai:reid:edit")
     _ensure_ai_menu(2884, 288, "行人底库删除", "F", "ai:reid:remove")
+    # 跨镜 MTMC 重识别（视觉识别 230 下）
+    _ensure_ai_menu(294, 230, "跨镜重识别", "C", "ai:mtmc:list",
+                    path="/ai/mtmc", component="ai/mtmc/index", icon="Connection",
+                    order=13, grant_common=True)
+    _ensure_ai_menu(2941, 294, "跨镜重识别查询", "F", "ai:mtmc:query", grant_common=True)
+    _ensure_ai_menu(2942, 294, "跨镜会话控制", "F", "ai:mtmc:edit")
     # 检测告警（视觉识别 230 下）
     _ensure_ai_menu(276, 230, "检测告警", "C", "ai:alert:list",
                     path="/ai/alert", component="ai/alert/index", icon="Bell",
@@ -1249,7 +1255,58 @@ def seed_ai_models():
         ),
         status="0",
     ))
+    # 强行人 ReID（OSNet / CLIP-ReID 风格 ONNX，跨镜 MTMC 并联 Youtu）
+    created |= _ensure_ai_model("osnet-x1-0", dict(
+        model_name="OSNet x1.0 Person ReID（强）", category="行人重识别",
+        task="person-reid", library="osnet", version="x1.0",
+        source_url="https://github.com/KaiyangZhou/deep-person-reid",
+        description=(
+            "OSNet 行人强 ReID（osnet_x1_0_market.onnx 已就绪于 uploads/models/base/osnet-x1-0/）。"
+            "跨镜 MTMC 中与 Youtu 并联融合；无权重时自动回退 Youtu。"
+        ),
+        status="0",
+    ))
+    created |= _ensure_ai_model("clip-reid-person", dict(
+        model_name="CLIP-ReID Person（强）", category="行人重识别",
+        task="person-reid", library="clip-reid", version="vit-b",
+        source_url="https://github.com/Syliz517/CLIP-ReID",
+        description=(
+            "CLIP-ReID 行人外观（clip_reid_person.onnx 已就绪于 uploads/models/base/clip-reid-person/）。"
+            "跨镜 MTMC 可选强 backbone；无权重时回退。"
+        ),
+        status="0",
+    ))
+    # 车辆视觉 ReID（TransReID / CLIP / ViT）
+    created |= _ensure_ai_model("transreid-vehicle", dict(
+        model_name="TransReID Vehicle（车辆视觉）", category="交通车辆",
+        task="vehicle-reid", library="transreid", version="vit",
+        source_url="https://github.com/heshuting555/TransReID",
+        description=(
+            "TransReID 车辆视觉 ReID（transreid.onnx 已就绪于 uploads/models/base/transreid-vehicle/）。"
+            "输入 128×256，512 维嵌入；与车牌 OCR 融合。"
+        ),
+        status="0",
+    ))
+    created |= _ensure_ai_model("clip-reid-vehicle", dict(
+        model_name="CLIP-ReID Vehicle", category="交通车辆",
+        task="vehicle-reid", library="clip-reid", version="vit-b",
+        source_url="https://github.com/Syliz517/CLIP-ReID",
+        description="车辆 CLIP-ReID ONNX（clip_vehicle_reid.onnx 已就绪于 uploads/models/base/clip-reid-vehicle/）。跨镜车辆外观匹配。",
+        status="0",
+    ))
+    created |= _ensure_ai_model("vehicle-vit-reid", dict(
+        model_name="Vehicle ViT ReID", category="交通车辆",
+        task="vehicle-reid", library="vit-reid", version="base",
+        source_url="https://huggingface.co/occurra/vehicle_vit_clip_reid",
+        description=(
+            "车辆 ViT ReID（vehicle_vit_reid.onnx 已就绪于 uploads/models/base/vehicle-vit-reid/）。"
+            "CLIP ViT-B/16，VeRi-776，512 维嵌入。"
+        ),
+        status="0",
+    ))
     created |= _bind_local_person_reid_weight()
+    _bind_local_strong_reid_weights()
+    _bind_local_vehicle_reid_weights()
     _bind_local_brain_tumor_weight()
     _bind_local_rocket_detect_weight()
     _bind_local_insightface()
@@ -1261,6 +1318,36 @@ def seed_ai_models():
     _ensure_handpose_model()
     _ensure_csl_model()
     return created
+
+
+def _bind_local_strong_reid_weights():
+    """若本地已有强 ReID ONNX，绑定 file_path（幂等）。"""
+    from services.strong_reid import assets_ready
+    base = os.path.dirname(os.path.abspath(__file__))
+    for key in ("osnet-x1-0", "clip-reid-person"):
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            continue
+        rel = f"models/base/{key}"
+        abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+        if assets_ready(abs_dir) and m.file_path != rel:
+            m.file_path = rel
+            db.session.commit()
+
+
+def _bind_local_vehicle_reid_weights():
+    """若本地已有车辆 ReID ONNX，绑定 file_path（幂等）。"""
+    from services.vehicle_reid_feat import assets_ready
+    base = os.path.dirname(os.path.abspath(__file__))
+    for key in ("transreid-vehicle", "clip-reid-vehicle", "vehicle-vit-reid"):
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            continue
+        rel = f"models/base/{key}"
+        abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+        if assets_ready(abs_dir) and m.file_path != rel:
+            m.file_path = rel
+            db.session.commit()
 
 
 def _ensure_csl_model():

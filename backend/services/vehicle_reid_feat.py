@@ -1,0 +1,211 @@
+"""车辆视觉 ReID（TransReID / CLIP-ReID / ViT 风格 ONNX）+ 车牌融合打分。
+
+身份键：plate|visual_key（有牌优先；无牌仅视觉；两者融合生成稳定 identity_key）。
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import threading
+from typing import Any
+
+import cv2
+import numpy as np
+
+_lock = threading.Lock()
+_sess_cache: dict[tuple, Any] = {}
+
+DEFAULT_IN_W, DEFAULT_IN_H = 256, 256
+MEAN = (0.485, 0.456, 0.406)
+STD = (0.229, 0.224, 0.225)
+
+VEHICLE_ONNX_NAMES = (
+    "transreid.onnx",
+    "clip_vehicle_reid.onnx",
+    "vehicle_vit_clip_reid.onnx",
+    "vehicle_vit_reid.onnx",
+    "veri_reid.onnx",
+    "vehicle_reid.onnx",
+)
+
+
+def resolve_vehicle_onnx(model_path: str | None) -> str | None:
+    if not model_path:
+        return None
+    if os.path.isfile(model_path) and model_path.lower().endswith(".onnx"):
+        return model_path if os.path.getsize(model_path) > 100_000 else None
+    if not os.path.isdir(model_path):
+        return None
+    for name in VEHICLE_ONNX_NAMES:
+        p = os.path.join(model_path, name)
+        if os.path.isfile(p) and os.path.getsize(p) > 100_000:
+            return p
+    for name in sorted(os.listdir(model_path)):
+        if name.lower().endswith(".onnx"):
+            fp = os.path.join(model_path, name)
+            if os.path.isfile(fp) and os.path.getsize(fp) > 100_000:
+                return fp
+    return None
+
+
+def assets_ready(model_path: str | None) -> bool:
+    return resolve_vehicle_onnx(model_path) is not None
+
+
+def _l2(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    a = np.asarray(v, dtype=np.float32).reshape(-1)
+    n = float(np.linalg.norm(a))
+    return a if n < eps else a / n
+
+
+def _get_ort(onnx_path: str):
+    import onnxruntime as ort
+
+    mtime = os.path.getmtime(onnx_path)
+    key = (onnx_path, mtime)
+    with _lock:
+        sess = _sess_cache.get(key)
+        if sess is not None:
+            return sess
+        sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+        _sess_cache[key] = sess
+        return sess
+
+
+def _input_spatial(sess) -> tuple[int, int]:
+    """从 ONNX 首输入解析 (width, height)，默认 256×256。"""
+    shape = sess.get_inputs()[0].shape
+    if len(shape) < 4:
+        return DEFAULT_IN_W, DEFAULT_IN_H
+    h, w = shape[2], shape[3]
+    if not isinstance(h, int) or h <= 0:
+        h = DEFAULT_IN_H
+    if not isinstance(w, int) or w <= 0:
+        w = DEFAULT_IN_W
+    return w, h
+
+
+def _preprocess(image_bgr: np.ndarray, width: int, height: int) -> np.ndarray:
+    img = cv2.resize(image_bgr, (width, height), interpolation=cv2.INTER_LINEAR)
+    rgb = img[:, :, ::-1].astype(np.float32) / 255.0
+    rgb = (rgb - np.asarray(MEAN, dtype=np.float32)) / np.asarray(STD, dtype=np.float32)
+    return np.transpose(rgb, (2, 0, 1))[None, ...].astype(np.float32)
+
+
+def _build_feed(sess, blob: np.ndarray) -> dict[str, np.ndarray]:
+    """构造 ONNX 输入；额外 int 输入（cam/view）填零。"""
+    feed: dict[str, np.ndarray] = {}
+    for inp in sess.get_inputs():
+        if inp.name == sess.get_inputs()[0].name:
+            feed[inp.name] = blob
+        elif "int" in inp.type:
+            feed[inp.name] = np.zeros((1,), dtype=np.int64)
+        else:
+            feed[inp.name] = np.zeros((1,), dtype=np.float32)
+    return feed
+
+
+def _color_hist_embedding(image_bgr: np.ndarray, bins: int = 16) -> np.ndarray:
+    """无专用 ONNX 时的轻量外观兜底：HSV 直方图 + 边缘统计。"""
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    feats = []
+    for i, ch in enumerate(cv2.split(hsv)):
+        hist = cv2.calcHist([ch], [0], None, [bins], [0, 256 if i else 180])
+        feats.append(hist.reshape(-1))
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 160)
+    feats.append(np.array([float(edges.mean()), float(gray.mean()), float(gray.std())], dtype=np.float32))
+    return _l2(np.concatenate(feats).astype(np.float32))
+
+
+def extract_vehicle_embedding(model_path: str | None, image_bgr: np.ndarray) -> tuple[np.ndarray, dict]:
+    onnx = resolve_vehicle_onnx(model_path)
+    if onnx:
+        try:
+            sess = _get_ort(onnx)
+            in_w, in_h = _input_spatial(sess)
+            blob = _preprocess(image_bgr, in_w, in_h)
+            out = sess.run([sess.get_outputs()[0].name], _build_feed(sess, blob))[0]
+            feat = _l2(np.asarray(out, dtype=np.float32).reshape(-1))
+            return feat, {
+                "backend": "vehicle-onnx",
+                "onnx": os.path.basename(onnx),
+                "dim": int(feat.size),
+                "inputSize": f"{in_w}x{in_h}",
+            }
+        except Exception as e:  # noqa: BLE001
+            feat = _color_hist_embedding(image_bgr)
+            return feat, {"backend": "hist-fallback", "onnxError": str(e), "dim": int(feat.size)}
+    feat = _color_hist_embedding(image_bgr)
+    return feat, {"backend": "hist-fallback", "dim": int(feat.size)}
+
+
+def visual_key_from_embedding(emb: np.ndarray, prefix: str = "V") -> str:
+    """将 embedding 量化为短视觉键（稳定聚类代理）。"""
+    q = (np.clip(_l2(emb), -1, 1) * 127).astype(np.int8).tobytes()
+    digest = hashlib.sha1(q).hexdigest()[:12]
+    return f"{prefix}{digest}"
+
+
+def fuse_plate_visual(
+    *,
+    plate: str | None,
+    plate_score: float = 0.0,
+    emb_a: np.ndarray | None = None,
+    emb_b: np.ndarray | None = None,
+    plate_weight: float = 0.7,
+    visual_weight: float = 0.3,
+) -> dict:
+    """车牌优先 + 视觉相似度融合打分，生成 identity_key。"""
+    plate_text = (plate or "").strip().upper() or None
+    visual_sim = 0.0
+    if emb_a is not None and emb_b is not None:
+        a, b = _l2(emb_a), _l2(emb_b)
+        dim = max(a.size, b.size)
+        if a.size != dim:
+            aa = np.zeros(dim, dtype=np.float32)
+            aa[: a.size] = a
+            a = aa
+        if b.size != dim:
+            bb = np.zeros(dim, dtype=np.float32)
+            bb[: b.size] = b
+            b = bb
+        visual_sim = float(np.dot(a, b))
+
+    plate_ok = bool(plate_text) and float(plate_score) >= 0.35
+    pw = float(plate_weight) if plate_ok else 0.0
+    vw = float(visual_weight) if emb_a is not None else 0.0
+    if pw + vw <= 1e-6:
+        fuse = 0.0
+    else:
+        fuse = (pw * float(plate_score) + vw * max(0.0, visual_sim)) / (pw + vw)
+
+    vkey = visual_key_from_embedding(emb_a) if emb_a is not None else None
+    if plate_ok and vkey:
+        identity = f"{plate_text}|{vkey}"
+    elif plate_ok:
+        identity = f"{plate_text}|P"
+    elif vkey:
+        identity = f"NOPLATE|{vkey}"
+    else:
+        identity = "UNKNOWN|U"
+
+    return {
+        "plate": plate_text,
+        "plateScore": round(float(plate_score or 0), 4),
+        "visualScore": round(float(visual_sim), 4),
+        "fuseScore": round(float(fuse), 4),
+        "visualKey": vkey,
+        "identityKey": identity,
+        "plateOk": plate_ok,
+    }
+
+
+def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    x, y = _l2(a), _l2(b)
+    dim = max(x.size, y.size)
+    xa = np.zeros(dim, dtype=np.float32)
+    ya = np.zeros(dim, dtype=np.float32)
+    xa[: x.size] = x
+    ya[: y.size] = y
+    return float(np.dot(xa, ya))

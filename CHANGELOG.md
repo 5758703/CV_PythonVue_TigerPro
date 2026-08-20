@@ -12,6 +12,7 @@
 
 - **双前端架构**：`frontend/frontend_home` 项目门户（:5174）+ `frontend/frontend_admin` 管理控制台（:5173）；公开接口 `GET /api/portal/summary`；门户按 Cookie `tiger_ai_token` 判断登录态跳转；控制台顶栏「项目门户」入口
 - **部署文档与 Docker 骨架**：`docs/deploy/`（本地 / Linux / Docker）；`deploy/docker-compose.yml` 实验性编排（MySQL + backend + 双前端 + Nginx 网关）
+- **跨镜 MTMC 重识别**（`/ai/mtmc`）：多路共享拉流 → 局部 Tracklet → OSNet/CLIP-ReID 并联 Youtu → 车辆视觉 ReID+车牌融合 → 拓扑约束全局 ID → 事件/过车/轨迹 → 监控墙 AI 叠加；权限 `ai:mtmc:*`
 - **行人重识别（Youtu ReID）**：OpenCV Zoo `opencv-person-reid-youtu`；独立权限 `ai:reid:*` 与表 `reid_person` / `reid_embedding(modality=appearance)`；实时「像谁/未知」、底库 Top-K、录像片段检索；可选混合近距人脸；行人检测默认优先级 `yolo26n` → `winedarksea-yolo26n_person` → `simoswish-PersonDetector_YOLO26_PRW`
 - **OpenCV YuNet+SFace 人脸后端**：与 InsightFace 并列；本地视频源；YuNet 五色关键点叠加
 - **LaMa 图像修复**（`inpainting-lama` / `/ai/inpaint`）：涂抹遮罩 + 外扩；DNN→ORT 回退

@@ -22,6 +22,7 @@ const routes = [
       { path: 'ai/camera', name: 'aiCamera', component: () => import('../views/ai/camera/index.vue'), meta: { title: '摄像头实时检测' } },
       { path: 'ai/face', name: 'aiFace', component: () => import('../views/ai/face/index.vue'), meta: { title: '人脸识别' } },
       { path: 'ai/reid', name: 'aiReid', component: () => import('../views/ai/reid/index.vue'), meta: { title: '行人重识别' } },
+      { path: 'ai/mtmc', name: 'aiMtmc', component: () => import('../views/ai/mtmc/index.vue'), meta: { title: '跨镜重识别' } },
       { path: 'ai/handpose', name: 'aiHandpose', component: () => import('../views/ai/handpose/index.vue'), meta: { title: '手势识别' } },
       { path: 'ai/fall', name: 'aiFall', component: () => import('../views/ai/fall/index.vue'), meta: { title: '跌倒检测' } },
       { path: 'ai/alert', name: 'aiAlert', component: () => import('../views/ai/alert/index.vue'), meta: { title: '检测告警' } },

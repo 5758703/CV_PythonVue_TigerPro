@@ -4,7 +4,8 @@
       <div class="bar-title">
         <span class="title">监控墙</span>
         <el-tag size="small" type="success" effect="dark">RTSP 7×24</el-tag>
-        <span class="sub">多路共享拉流 · 断线自动重连</span>
+        <el-tag v-if="aiOverlay" size="small" type="warning" effect="dark">MTMC AI</el-tag>
+        <span class="sub">多路共享拉流 · 断线自动重连{{ aiOverlay ? ' · 跨镜重识别叠加' : '' }}</span>
       </div>
       <el-radio-group v-model="layout" size="small" @change="onLayoutChange">
         <el-radio-button :value="1">1 屏</el-radio-button>
@@ -14,6 +15,15 @@
         <el-radio-button :value="16">16 屏</el-radio-button>
       </el-radio-group>
       <div class="bar-right">
+        <el-switch v-model="aiOverlay" active-text="AI 叠加" @change="onAiToggle" />
+        <el-input
+          v-if="aiOverlay"
+          v-model="mtmcSessionId"
+          size="small"
+          placeholder="MTMC 会话 ID"
+          style="width: 160px"
+          @change="reloadAll"
+        />
         <el-switch v-model="autoReconnect" active-text="自动重连" inactive-text="" />
         <el-button size="small" :icon="Refresh" @click="reloadAll">刷新列表</el-button>
         <el-button size="small" type="primary" :icon="FullScreen" @click="toggleFull">
@@ -83,28 +93,35 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, FullScreen, VideoCamera } from '@element-plus/icons-vue'
 
 import { cameraApi } from '../../../api/camera'
+import { mtmcApi } from '../../../api/mtmc'
 
 const MAX = 16
 const COLS = { 1: 1, 4: 2, 6: 3, 9: 3, 16: 4 }
 const LS_KEY = 'camera-wall'
 const MAX_BACKOFF_MS = 30000
 
+const route = useRoute()
 const wallRef = ref(null)
 const layout = ref(4)
 const isFull = ref(false)
 const singleIdx = ref(null)
 const autoReconnect = ref(true)
+const aiOverlay = ref(false)
+const mtmcSessionId = ref('')
+/** null=未校验, true/false=会话是否可用 */
+const overlaySessionActive = ref(null)
+let overlayFallbackOnce = false
 const pageAlive = ref(true)
 const cameras = ref([])
 const cells = reactive(Array.from({ length: MAX }, () => ({
   cameraId: null,
   src: '',
-  status: 'idle', // idle | live | reconnect | error
+  status: 'idle',
   retries: 0,
   timer: null,
 })))
@@ -132,6 +149,39 @@ const clearTimer = (i) => {
   }
 }
 
+const useOverlayStream = () => (
+  aiOverlay.value && mtmcSessionId.value && overlaySessionActive.value === true
+)
+
+const refreshOverlaySession = async () => {
+  if (!mtmcSessionId.value) {
+    overlaySessionActive.value = false
+    return false
+  }
+  try {
+    const res = await mtmcApi.sessionAlive(mtmcSessionId.value)
+    overlaySessionActive.value = !!res.data?.active
+  } catch (_) {
+    overlaySessionActive.value = false
+  }
+  return overlaySessionActive.value
+}
+
+const disableOverlayFallback = (msg) => {
+  if (overlayFallbackOnce || !aiOverlay.value) return
+  overlayFallbackOnce = true
+  aiOverlay.value = false
+  overlaySessionActive.value = false
+  ElMessage.warning(msg)
+  persist()
+  for (let i = 0; i < layout.value; i++) {
+    if (!cells[i].cameraId) continue
+    clearTimer(i)
+    cells[i].retries = 0
+    setSrc(i, { force: true })
+  }
+}
+
 const setSrc = (i, { force = false } = {}) => {
   if (!pageAlive.value) return
   const cell = cells[i]
@@ -143,7 +193,11 @@ const setSrc = (i, { force = false } = {}) => {
     return
   }
   const bust = force || cell.retries > 0 ? String(Date.now()) : ''
-  cell.src = cameraApi.streamUrl(cell.cameraId, bust)
+  if (useOverlayStream()) {
+    cell.src = mtmcApi.overlayUrl(mtmcSessionId.value, cell.cameraId, bust)
+  } else {
+    cell.src = cameraApi.streamUrl(cell.cameraId, bust)
+  }
   cell.status = cell.retries > 0 ? 'reconnect' : 'live'
 }
 
@@ -166,8 +220,15 @@ const onLoad = (i) => {
   clearTimer(i)
 }
 
-const onError = (i) => {
+const onError = async (i) => {
   if (!pageAlive.value) return
+  if (aiOverlay.value && mtmcSessionId.value) {
+    await refreshOverlaySession()
+    if (!overlaySessionActive.value) {
+      disableOverlayFallback('跨镜会话未运行（可能后端已重启），已切换为普通监控流')
+      return
+    }
+  }
   cells[i].status = 'error'
   if (autoReconnect.value) scheduleReconnect(i)
 }
@@ -175,6 +236,34 @@ const onError = (i) => {
 const onBind = (i) => {
   cells[i].retries = 0
   setSrc(i, { force: true })
+  persist()
+}
+
+const onAiToggle = async () => {
+  if (aiOverlay.value) {
+    overlayFallbackOnce = false
+    if (!mtmcSessionId.value) {
+      mtmcSessionId.value = localStorage.getItem('mtmc-session-id') || ''
+    }
+    if (!mtmcSessionId.value) {
+      ElMessage.warning('请先在「跨镜重识别」页启动会话，或填写会话 ID')
+      aiOverlay.value = false
+      persist()
+      return
+    }
+    await refreshOverlaySession()
+    if (!overlaySessionActive.value) {
+      ElMessage.warning('跨镜会话未运行，请先在「跨镜重识别」页启动会话')
+      aiOverlay.value = false
+      persist()
+      return
+    }
+  } else {
+    overlaySessionActive.value = null
+  }
+  for (let i = 0; i < layout.value; i++) {
+    if (cells[i].cameraId) setSrc(i, { force: true })
+  }
   persist()
 }
 
@@ -213,6 +302,8 @@ const persist = () => {
     layout: layout.value,
     binds: cells.map((c) => c.cameraId),
     autoReconnect: autoReconnect.value,
+    aiOverlay: aiOverlay.value,
+    mtmcSessionId: mtmcSessionId.value,
   }))
 }
 const restore = () => {
@@ -220,6 +311,8 @@ const restore = () => {
     const data = JSON.parse(localStorage.getItem(LS_KEY) || '{}')
     if (data.layout && COLS[data.layout]) layout.value = data.layout
     if (typeof data.autoReconnect === 'boolean') autoReconnect.value = data.autoReconnect
+    if (typeof data.aiOverlay === 'boolean') aiOverlay.value = data.aiOverlay
+    if (data.mtmcSessionId) mtmcSessionId.value = data.mtmcSessionId
     if (Array.isArray(data.binds)) {
       data.binds.forEach((id, i) => { if (i < MAX) cells[i].cameraId = id || null })
     }
@@ -233,6 +326,14 @@ const loadCameras = async () => {
 
 const reloadAll = async () => {
   await loadCameras()
+  if (aiOverlay.value && mtmcSessionId.value) {
+    overlayFallbackOnce = false
+    await refreshOverlaySession()
+    if (!overlaySessionActive.value) {
+      disableOverlayFallback('跨镜会话未运行，已切换为普通监控流')
+      return
+    }
+  }
   for (let i = 0; i < layout.value; i++) {
     if (cells[i].cameraId) setSrc(i, { force: true })
   }
@@ -251,14 +352,27 @@ const stopAll = () => {
 
 onMounted(async () => {
   pageAlive.value = true
+  overlayFallbackOnce = false
   restore()
+  if (route.query.mtmc) {
+    mtmcSessionId.value = String(route.query.mtmc)
+    aiOverlay.value = true
+  } else if (route.query.ai === '1') {
+    aiOverlay.value = true
+    if (!mtmcSessionId.value) mtmcSessionId.value = localStorage.getItem('mtmc-session-id') || ''
+  }
+  if (aiOverlay.value && mtmcSessionId.value) {
+    await refreshOverlaySession()
+    if (!overlaySessionActive.value) {
+      disableOverlayFallback('跨镜会话未运行（可能后端已重启），已切换为普通监控流')
+    }
+  }
   await loadCameras()
   for (let i = 0; i < layout.value; i++) {
     if (cells[i].cameraId) setSrc(i, { force: true })
   }
   document.addEventListener('fullscreenchange', onFsChange)
 })
-// 路由离开时立刻断流，比 unmount 更早，避免过渡动画期间继续重连
 onBeforeRouteLeave(() => {
   stopAll()
   persist()

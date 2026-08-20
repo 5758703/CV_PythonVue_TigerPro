@@ -423,6 +423,8 @@ export const reidApi = {
     }),
 }
 
+export { mtmcApi } from './mtmc'
+
 // ---------------- 检测告警
 export const alertApi = {
   listRules: () => request.get('/alerts/rules'),

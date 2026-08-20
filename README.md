@@ -167,7 +167,7 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 - 权限分类：
   - 功能权限 — 菜单(M目录/C菜单)、按钮(F，前端 `v-permission`)、API 接口(A，后端校验)
   - 数据权限 — 角色 `data_scope`：1 仅本人 / 2 本部门 / 3 本部门及下级 / 4 全部
-- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace + OpenCV YuNet+SFace）** / **行人重识别（Youtu ReID）** / **图像修复（LaMa）** / **表格识别（YOLO+RapidOCR+SLANet）** / **目标追踪（含车辆追踪、人员离岗检测场景；离岗支持多工位与移动镜头运动补偿）** 等
+- 视觉：目标检测 / 姿态 / 分割 / **人脸识别（InsightFace + OpenCV YuNet+SFace）** / **行人重识别（Youtu ReID）** / **跨镜 MTMC 重识别（强 ReID + 车辆车牌融合 + 监控墙 AI 叠加）** / **图像修复（LaMa）** / **表格识别（YOLO+RapidOCR+SLANet）** / **目标追踪（含车辆追踪、人员离岗检测场景；离岗支持多工位与移动镜头运动补偿）** 等
 - OpenCV Zoo 轻量能力：YuNet+SFace、Youtu Person ReID、EfficientSAM、LaMa、MobileNet V2（DNN + ORT 回退）
 - **安防检测模型包（11 个本地 ONNX）**：烟火 / 森林火灾 / 灾害扩展、PPE 与安全帽、跌倒与行为、打架、武器、车牌等，种子分类「安防检测」（`sec-*`），ONNX Runtime CPU 推理，可挂图片/视频/摄像头检测与告警规则
 - **模型权重转换（pt → onnx）**：模型管理支持异步导出（imgsz / dynamic / half），同目录存在 `.onnx` 时检测优先走 ONNX Runtime（`YOLO_PREFER_ONNX=0` 可关闭）；列表支持自定义每页条数（1–200）并本地记忆
@@ -271,6 +271,7 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 
 | 文档 | 说明 |
 |------|------|
+| [投资人讲解文档](docs/investor-pitch.md) | 面向 VC 的全模块定位、市场与路演讲稿 |
 | [部署指南总览](docs/deploy/README.md) | **本地 / Linux / Docker** 完整步骤 |
 | [本地开发部署](docs/deploy/local.md) | Windows / macOS / Linux 本机联调 |
 | [Linux 生产部署](docs/deploy/linux.md) | Ubuntu / Debian / CentOS·RHEL：环境配置与完整操作步骤 |
@@ -287,6 +288,7 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 | [人脸识别模块](docs/face-recognition.md) | InsightFace + YuNet+SFace、本地视频、五色关键点、底库与 API |
 | [人脸识别功能汇总](docs/人脸识别功能汇总.md) | 选型对照与本项目落地摘要 |
 | [行人重识别](docs/person-reid.md) | Youtu ReID、独立底库/权限、混合人脸、检测器优先级、API |
+| [跨镜 MTMC 重识别](docs/mtmc-cross-camera-reid.md) | 多路共享拉流、强 ReID 并联、车辆车牌融合、全局 ID、监控墙 AI 叠加 |
 | [OpenCV Zoo 轻量视觉](docs/opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet / 与人脸·行人索引 |
 | [表格识别功能汇总](docs/表格识别功能汇总.md) | YOLO 检表 → RapidOCR → SLANet_plus；模型、API、前端与代码位置 |
 | [目标追踪-场景分类说明](docs/目标追踪-场景分类说明.md) | 通用追踪 / 车辆追踪 / 人员离岗三场景架构、权限路由与扩展方式 |

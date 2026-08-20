@@ -223,6 +223,11 @@ const sceneCards = [
     to: { path: "/ai/reid" },
   },
   {
+    title: "跨镜重识别",
+    desc: "多路 MTMC · 全局 ID · 车辆车牌融合 · 监控墙 AI 叠加",
+    to: { path: "/ai/mtmc" },
+  },
+  {
     title: "检测告警",
     desc: "烟火 / 聚集 / PPE / 越线 / 跌倒规则 · 事件与叠加",
     to: { path: "/ai/alert" },

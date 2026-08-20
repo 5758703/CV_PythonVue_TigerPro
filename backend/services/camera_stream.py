@@ -388,6 +388,43 @@ class SharedMjpegHub:
             time.sleep(min(backoff, 8))
             backoff = min(backoff * 1.5, 8) if not got else 1.0
 
+    def get_latest(self) -> tuple[bytes | None, int]:
+        """返回 (jpeg_bytes, frame_seq)，供 MTMC 等非 HTTP 消费者读取。"""
+        with self._cond:
+            return self.latest, self.frame_seq
+
+    def subscribe_raw(self) -> Generator[tuple[bytes, int], None, None]:
+        """原始 JPEG 帧订阅（不打包 multipart），供跨镜 AI 引擎复用同一拉流。"""
+        with self._cond:
+            self.clients += 1
+            start_epoch = self._epoch
+            self._cond.notify_all()
+            if self._idle_timer:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+        last_seq = -1
+        try:
+            while not self._stop.is_set():
+                with self._cond:
+                    if self._epoch != start_epoch:
+                        break
+                    self._cond.wait(timeout=1.0)
+                    if self._epoch != start_epoch:
+                        break
+                    if self.latest is None or self.frame_seq == last_seq:
+                        continue
+                    frame = self.latest
+                    last_seq = self.frame_seq
+                yield frame, last_seq
+        finally:
+            with self._cond:
+                self.clients = max(0, self.clients - 1)
+                gone = self.clients <= 0
+                self._cond.notify_all()
+            if gone:
+                self._kill_proc()
+                self._schedule_idle_stop()
+
     def subscribe(self) -> Generator[bytes, None, None]:
         with self._cond:
             self.clients += 1
@@ -447,15 +484,79 @@ class SharedMjpegHub:
         self._kill_proc()
 
 
-def mjpeg_stream_shared(camera_id, source_type, source, width=640, fps=15):
-    """多路共享 MJPEG（监控墙 7×24 推荐）。"""
-    key = f"{camera_id}:{source_type}:{source}:{int(width or 640)}:{int(fps or 15)}"
+def _hub_key(camera_id, source_type, source, width=640, fps=15) -> str:
+    return f"{camera_id}:{source_type}:{source}:{int(width or 640)}:{int(fps or 15)}"
+
+
+def ensure_shared_hub(camera_id, source_type, source, width=640, fps=15) -> SharedMjpegHub:
+    """获取或创建共享拉流 Hub（监控墙与 MTMC 共用同一 ffmpeg）。"""
+    key = _hub_key(camera_id, source_type, source, width, fps)
     with _hubs_lock:
         hub = _hubs.get(key)
         if hub is None or hub._stop.is_set():
             hub = SharedMjpegHub(key, source_type, source, width or 640, fps or 15)
             _hubs[key] = hub
+        return hub
+
+
+def mjpeg_stream_shared(camera_id, source_type, source, width=640, fps=15):
+    """多路共享 MJPEG（监控墙 7×24 推荐）。"""
+    hub = ensure_shared_hub(camera_id, source_type, source, width, fps)
     yield from hub.subscribe()
+
+
+def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, source, width=640, fps=15):
+    """MTMC AI 叠加流：复用共享拉流，优先输出引擎标注帧，否则回退原帧。"""
+    from services import mtmc_engine
+
+    hub = ensure_shared_hub(camera_id, source_type, source, width, fps)
+    last_overlay_seq = -1
+    last_raw_seq = -1
+    idle_n = 0
+    with hub._cond:
+        hub.clients += 1
+        start_epoch = hub._epoch
+        hub._cond.notify_all()
+        if hub._idle_timer:
+            hub._idle_timer.cancel()
+            hub._idle_timer = None
+    try:
+        while not hub._stop.is_set():
+            if _request_disconnected():
+                break
+            overlay = mtmc_engine.get_overlay_jpeg(session_id, camera_id)
+            cam_st = None
+            sess = mtmc_engine.get_session(session_id)
+            if sess:
+                cam_st = sess.cams.get(int(camera_id))
+            if overlay and cam_st and cam_st.frame_seq != last_overlay_seq:
+                last_overlay_seq = cam_st.frame_seq
+                idle_n = 0
+                yield _pack_frame(overlay)
+                continue
+            with hub._cond:
+                if hub._epoch != start_epoch:
+                    break
+                hub._cond.wait(timeout=0.2)
+                if hub._epoch != start_epoch:
+                    break
+                raw = hub.latest
+                seq = hub.frame_seq
+            if raw is not None and seq != last_raw_seq and overlay is None:
+                last_raw_seq = seq
+                yield _pack_frame(raw)
+            else:
+                idle_n += 1
+                if idle_n > 250:
+                    break
+    finally:
+        with hub._cond:
+            hub.clients = max(0, hub.clients - 1)
+            gone = hub.clients <= 0
+            hub._cond.notify_all()
+        if gone:
+            hub._kill_proc()
+            hub._schedule_idle_stop()
 
 
 def mjpeg_stream(source_type, source, width=640, fps=15):
