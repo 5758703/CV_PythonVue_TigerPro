@@ -99,6 +99,26 @@ def test_pad_or_trim_and_cosine():
 def test_create_local_tracker_factory():
     iou = create_local_tracker("iou")
     assert isinstance(iou, LocalTracker)
+    if bytetrack_available():
+        bt = create_local_tracker("bytetrack")
+        assert isinstance(bt, ByteTrackLocalTracker)
+    else:
+        bt = create_local_tracker("iou")
+        assert isinstance(bt, LocalTracker)
+
+
+def test_make_local_tracker_default_bytetrack():
+    """引擎工厂：默认 bytetrack，缺依赖时回退 iou。"""
+    from services.mtmc_engine import MtmcConfig, _make_local_tracker
+
+    cfg = MtmcConfig(camera_ids=[1], local_track_backend="bytetrack")
+    tr = _make_local_tracker(cfg)
+    if bytetrack_available():
+        assert isinstance(tr, ByteTrackLocalTracker)
+        assert cfg.local_track_backend == "bytetrack"
+    else:
+        assert isinstance(tr, LocalTracker)
+        assert cfg.local_track_backend == "iou"
 
 
 def test_bytetrack_local_tracker_keeps_id():
@@ -112,3 +132,140 @@ def test_bytetrack_local_tracker_keeps_id():
     tid = a[0].track_id
     b = tr.update([{"bbox": [12, 12, 52, 82], "confidence": 0.9, "className": "person"}])
     assert b and b[0].track_id == tid
+
+
+def test_associator_same_frame_unique_gids():
+    """同帧两辆相似车不得共用 Global ID。"""
+    assoc = MtmcAssociator(
+        appear_thresh=0.4,
+        time_window_sec=60,
+        same_cam_min_gap=0.4,
+        same_cam_appear_thresh=0.7,
+    )
+    # 高度相似的外观（模拟同色车）
+    base = _l2(np.random.randn(64).astype(np.float32))
+    emb_a = _l2(base + 0.02 * np.random.randn(64).astype(np.float32))
+    emb_b = _l2(base + 0.02 * np.random.randn(64).astype(np.float32))
+    claimed = set()
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=emb_a,
+        local_track_id=1, exclude_gids=claimed, now=10.0,
+    )
+    claimed.add(g1.global_id)
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=emb_b,
+        local_track_id=2, exclude_gids=claimed, now=10.0,
+    )
+    claimed.add(g2.global_id)
+    assert g1.global_id != g2.global_id
+
+
+def test_associator_local_track_sticky():
+    """同一 local_track_id 跨帧续接同一 Global ID。"""
+    assoc = MtmcAssociator(appear_thresh=0.9, time_window_sec=60, local_sticky_sec=20)
+    emb1 = _l2(np.random.randn(48).astype(np.float32))
+    emb2 = _l2(np.random.randn(48).astype(np.float32))  # 外观变化很大
+    g1 = assoc.associate(
+        object_type="person", camera_id=1, embedding=emb1,
+        local_track_id=7, now=1.0,
+    )
+    g2 = assoc.associate(
+        object_type="person", camera_id=1, embedding=emb2,
+        local_track_id=7, now=1.5,
+    )
+    assert g1.global_id == g2.global_id
+
+
+def test_associator_unknown_identity_not_merge():
+    """无效 identity_key 不得把多车合并。"""
+    assoc = MtmcAssociator(appear_thresh=0.99, time_window_sec=60, same_cam_min_gap=0.4)
+    claimed = set()
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=None,
+        identity_key="UNKNOWN|U", local_track_id=1, exclude_gids=claimed, now=1.0,
+    )
+    claimed.add(g1.global_id)
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=None,
+        identity_key="UNKNOWN|U", local_track_id=2, exclude_gids=claimed, now=1.0,
+    )
+    assert g1.global_id != g2.global_id
+
+
+def test_fuse_no_shared_unknown_key():
+    r = fuse_plate_visual(plate=None, plate_score=0, emb_a=None, emb_b=None)
+    assert r["identityKey"] is None
+
+
+def test_mcbyte_sticky_skips_appearance_rematch():
+    """短时粘性：外观巨变仍保持同一 Global（不开放外观重匹配）。"""
+    from services.mtmc_associator import AssocMode
+
+    assoc = MtmcAssociator(appear_thresh=0.99, mcbyte_decouple=True, local_sticky_sec=30)
+    emb1 = _l2(np.random.randn(64).astype(np.float32))
+    emb2 = _l2(np.random.randn(64).astype(np.float32))
+    g1 = assoc.associate(
+        object_type="person", camera_id=1, embedding=emb1, local_track_id=3, now=1.0,
+    )
+    g2 = assoc.associate(
+        object_type="person", camera_id=1, embedding=emb2, local_track_id=3, now=1.2,
+    )
+    assert g1.global_id == g2.global_id
+    assert assoc.last_mode == AssocMode.STICKY
+
+
+def test_mcbyte_new_track_revives_lost_global():
+    """新生 local 在丢失一段时间后，可用外观复活旧 Global。"""
+    from services.mtmc_associator import AssocMode
+
+    assoc = MtmcAssociator(
+        appear_thresh=0.4,
+        lost_revive_sec=1.0,
+        same_cam_min_gap=0.4,
+        mcbyte_decouple=True,
+        local_sticky_sec=20,
+    )
+    emb = _l2(np.ones(32, dtype=np.float32))
+    g1 = assoc.associate(
+        object_type="person", camera_id=1, embedding=emb, local_track_id=1, now=0.0,
+    )
+    # 局部消失 → 标记 lost
+    assoc.prune_inactive_locals("person", 1, active_local_ids=[])
+    # 新生 local_track_id=9，间隔足够，外观复活
+    g2 = assoc.associate(
+        object_type="person", camera_id=1, embedding=emb, local_track_id=9, now=2.5,
+    )
+    assert g2.global_id == g1.global_id
+    assert assoc.last_mode == AssocMode.LONG_TERM
+
+
+def test_mcbyte_active_same_cam_not_stolen_by_new_track():
+    """同镜仍活跃的 Global 不可被另一新生 track 用外观抢走。"""
+    assoc = MtmcAssociator(
+        appear_thresh=0.3,
+        lost_revive_sec=2.0,
+        same_cam_min_gap=0.5,
+        mcbyte_decouple=True,
+    )
+    emb = _l2(np.random.randn(48).astype(np.float32))
+    claimed = set()
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=emb,
+        local_track_id=1, exclude_gids=claimed, now=10.0,
+    )
+    claimed.add(g1.global_id)
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=emb,
+        local_track_id=2, exclude_gids=claimed, now=10.05,
+    )
+    assert g1.global_id != g2.global_id
+
+
+def test_peek_sticky_allows_skip_reid():
+    assoc = MtmcAssociator(local_sticky_sec=20)
+    emb = _l2(np.random.randn(16).astype(np.float32))
+    g = assoc.associate(
+        object_type="person", camera_id=2, embedding=emb, local_track_id=5, now=1.0,
+    )
+    assert assoc.peek_sticky(object_type="person", camera_id=2, local_track_id=5, now=1.1) == g.global_id
+    assert assoc.peek_sticky(object_type="person", camera_id=2, local_track_id=99, now=1.1) is None

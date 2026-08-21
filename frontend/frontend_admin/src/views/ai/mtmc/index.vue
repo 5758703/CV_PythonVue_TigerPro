@@ -4,7 +4,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="跨镜 MTMC：一次拉流 → 检测 → 局部跟踪 → 强 ReID（OSNet/CLIP 并联 Youtu）→ 车辆车牌+视觉融合 → 在线全局 ID → 监控墙 AI 叠加"
+      title="跨镜 MTMC（McByte++ 解耦）：检测看到目标 → Kalman/IoU/ByteTrack 短时跟踪 → 粘性续 Global；仅新生轨迹才用 OSNet/外观长时复活；CMC 可选；Mask 钩子默认关"
       class="mb"
     />
 
@@ -31,6 +31,16 @@
           <el-form-item label="时间窗(s)">
             <el-input-number v-model="form.timeWindowSec" :min="10" :max="300" :step="5" />
           </el-form-item>
+          <el-form-item label="局部跟踪">
+            <el-select v-model="form.localTrackBackend" style="width: 180px">
+              <el-option label="ByteTrack（推荐）" value="bytetrack" />
+              <el-option label="BoT-SORT（可CMC）" value="botsort" />
+              <el-option label="IoU（轻量）" value="iou" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="CMC">
+            <el-switch v-model="form.enableCmc" />
+          </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="busy" v-permission="'ai:mtmc:edit'" @click="onStart">启动跨镜</el-button>
             <el-button type="danger" :disabled="!sessionId" v-permission="'ai:mtmc:edit'" @click="onStop">停止</el-button>
@@ -46,6 +56,9 @@
           <el-descriptions-item label="帧数">{{ session.stats?.frames }}</el-descriptions-item>
           <el-descriptions-item label="人员命中">{{ session.stats?.persons }}</el-descriptions-item>
           <el-descriptions-item label="车辆命中">{{ session.stats?.vehicles }}</el-descriptions-item>
+          <el-descriptions-item label="局部跟踪">{{ session.localTrackBackend || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="CMC">{{ session.enableCmc ? '开' : '关' }}</el-descriptions-item>
+          <el-descriptions-item label="McByte++解耦">{{ session.mcbyteDecouple === false ? '关' : '开' }}</el-descriptions-item>
         </el-descriptions>
 
         <div class="grid-preview" v-if="session?.running">
@@ -182,6 +195,9 @@ const form = reactive({
   sampleFps: 2,
   appearThresh: 0.48,
   timeWindowSec: 90,
+  localTrackBackend: 'bytetrack',
+  enableCmc: false,
+  mcbyteDecouple: true,
 })
 
 const topoForm = reactive({

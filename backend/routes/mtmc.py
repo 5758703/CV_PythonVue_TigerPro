@@ -188,6 +188,10 @@ def start_session():
 
     ocr_fn = _build_ocr_fn(data.get("ocrDetModelId"), data.get("ocrRecModelId"))
 
+    track_backend = str(data.get("localTrackBackend") or "bytetrack").strip().lower()
+    if track_backend not in ("iou", "bytetrack", "botsort"):
+        track_backend = "bytetrack"
+
     cfg = MtmcConfig(
         camera_ids=[c.id for c in cams],
         det_person_path=_abs_weight(person_m),
@@ -208,6 +212,13 @@ def start_session():
         width=int(data.get("width") or 640),
         fps=int(data.get("fps") or 10),
         persist_events=bool(data.get("persistEvents", True)),
+        local_track_backend=track_backend,
+        local_track_max_age=int(data.get("localTrackMaxAge") or 30),
+        local_track_iou_thresh=float(data.get("localTrackIouThresh") or 0.3),
+        enable_cmc=bool(data.get("enableCmc", False)),
+        enable_mask_cue=bool(data.get("enableMaskCue", False)),
+        lost_revive_sec=float(data.get("lostReviveSec") or 1.0),
+        mcbyte_decouple=bool(data.get("mcbyteDecouple", True)),
     )
     if cfg.enable_person and not cfg.det_person_path:
         return jsonify(code=400, message="人员检测模型未就绪，请先拉取 YOLO"), 400

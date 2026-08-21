@@ -156,7 +156,11 @@ def fuse_plate_visual(
     plate_weight: float = 0.7,
     visual_weight: float = 0.3,
 ) -> dict:
-    """车牌优先 + 视觉相似度融合打分，生成 identity_key。"""
+    """车牌优先 + 视觉相似度融合打分，生成 identity_key。
+
+    注意：embedding 缺失时不再返回共享键 UNKNOWN|U（会导致全车撞同一个 Global ID），
+    改为 None，由关联器走新建 ID。
+    """
     plate_text = (plate or "").strip().upper() or None
     visual_sim = 0.0
     if emb_a is not None and emb_b is not None:
@@ -188,7 +192,7 @@ def fuse_plate_visual(
     elif vkey:
         identity = f"NOPLATE|{vkey}"
     else:
-        identity = "UNKNOWN|U"
+        identity = None
 
     return {
         "plate": plate_text,

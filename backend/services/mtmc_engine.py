@@ -53,6 +53,15 @@ class MtmcConfig:
     width: int = 640
     fps: int = 10
     persist_events: bool = True
+    # 局部跟踪：bytetrack（默认）| botsort | iou
+    local_track_backend: str = "bytetrack"
+    local_track_max_age: int = 30
+    local_track_iou_thresh: float = 0.3
+    # McByte++：CMC 仅云台/抖动时开；Mask 默认关（SAM/Cutie 太重）
+    enable_cmc: bool = False
+    enable_mask_cue: bool = False
+    lost_revive_sec: float = 1.0
+    mcbyte_decouple: bool = True
 
 
 @dataclass
@@ -96,6 +105,9 @@ class MtmcSession:
             "cameraIds": list(self.cfg.camera_ids),
             "enablePerson": self.cfg.enable_person,
             "enableVehicle": self.cfg.enable_vehicle,
+            "localTrackBackend": self.cfg.local_track_backend,
+            "enableCmc": self.cfg.enable_cmc,
+            "mcbyteDecouple": self.cfg.mcbyte_decouple,
             "createdAt": self.created_at,
             "stats": dict(self.stats),
             "globals": self.associator.snapshot(),
@@ -342,8 +354,33 @@ def _persist_pass(app, row: dict):
         log.debug("persist pass failed: %s", e)
 
 
+def _make_local_tracker(cfg: MtmcConfig):
+    """按配置创建单路局部跟踪器；ByteTrack/BoT-SORT 不可用时回退 IoU。"""
+    from services.mtmc_local_track import bytetrack_available, botsort_available, create_local_tracker
+
+    backend = (cfg.local_track_backend or "bytetrack").strip().lower()
+    if backend not in ("iou", "bytetrack", "botsort"):
+        log.warning("unknown local_track_backend=%s, use bytetrack", backend)
+        backend = "bytetrack"
+    if backend == "botsort" and not botsort_available():
+        log.warning("BoT-SORT unavailable, fallback to ByteTrack")
+        backend = "bytetrack"
+    if backend == "bytetrack" and not bytetrack_available():
+        log.warning("ByteTrack deps missing (trackers/supervision), fallback to IoU LocalTracker")
+        backend = "iou"
+        cfg.local_track_backend = "iou"
+    else:
+        cfg.local_track_backend = backend
+    return create_local_tracker(
+        backend,  # type: ignore[arg-type]
+        max_age=int(cfg.local_track_max_age or 30),
+        iou_thresh=float(cfg.local_track_iou_thresh or 0.3),
+        enable_cmc=bool(cfg.enable_cmc),
+        enable_mask_cue=bool(cfg.enable_mask_cue),
+    )
+
+
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict):
-    from services.mtmc_local_track import LocalTracker
     from services.strong_reid import extract_person_embedding
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
     from services.vehicle_track import congestion_level, get_session as get_vsession
@@ -364,44 +401,59 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     cam_state.last_process_at = now
 
     if cam_state.tracker_person is None:
-        cam_state.tracker_person = LocalTracker()
+        cam_state.tracker_person = _make_local_tracker(cfg)
     if cam_state.tracker_vehicle is None:
-        cam_state.tracker_vehicle = LocalTracker()
+        cam_state.tracker_vehicle = _make_local_tracker(cfg)
 
     items = []
+    claimed_person: set[str] = set()
+    claimed_vehicle: set[str] = set()
     # ---- 人员 ----
     if cfg.enable_person and cfg.det_person_path:
         raw = _detect(cfg.det_person_path, frame, cfg.conf, [0])
-        tracks = cam_state.tracker_person.update(raw)
+        tracks = cam_state.tracker_person.update(raw, frame=frame)
+        active_person_local = {int(t.track_id) for t in tracks}
         for t in tracks:
             crop = _crop(frame, t.bbox)
             if crop is None:
                 continue
-            try:
-                emb, meta = extract_person_embedding(
-                    crop,
-                    youtu_root=cfg.youtu_root,
-                    strong_root=cfg.strong_reid_root,
-                    fuse_weight_strong=cfg.fuse_weight_strong,
-                )
-                emb = l2_normalize(emb)
-            except Exception:  # noqa: BLE001
-                emb, meta = None, {}
+            # McByte++：粘性短时不提 OSNet；仅新生 / 无粘性才长时认人
+            sticky_gid = session.associator.peek_sticky(
+                object_type="person",
+                camera_id=cam_id,
+                local_track_id=int(t.track_id),
+                now=now,
+            )
+            need_reid = sticky_gid is None or bool(getattr(t, "is_new", False))
+            emb, meta = None, {}
             gallery = {"matched": False, "name": None, "personId": None, "score": 0.0}
-            if emb is not None and cfg.youtu_root:
-                # 底库按 youtu model_key 匹配；强模型并联后仍可对 Youtu 空间做近似匹配
+            if need_reid:
                 try:
-                    gallery = _match_gallery(emb, "opencv-person-reid-youtu", cfg.appear_thresh)
+                    emb, meta = extract_person_embedding(
+                        crop,
+                        youtu_root=cfg.youtu_root,
+                        strong_root=cfg.strong_reid_root,
+                        fuse_weight_strong=cfg.fuse_weight_strong,
+                    )
+                    emb = l2_normalize(emb)
                 except Exception:  # noqa: BLE001
-                    pass
+                    emb, meta = None, {}
+                if emb is not None and cfg.youtu_root:
+                    try:
+                        gallery = _match_gallery(emb, "opencv-person-reid-youtu", cfg.appear_thresh)
+                    except Exception:  # noqa: BLE001
+                        pass
             g = session.associator.associate(
                 object_type="person",
                 camera_id=cam_id,
                 embedding=emb,
                 reid_person_id=gallery.get("personId") if gallery.get("matched") else None,
                 display_name=gallery.get("name") if gallery.get("matched") else None,
+                local_track_id=int(t.track_id),
+                exclude_gids=claimed_person,
                 now=now,
             )
+            claimed_person.add(g.global_id)
             if gallery.get("matched") and not g.display_name:
                 g.display_name = gallery.get("name")
             name = g.display_name or "匿名"
@@ -418,7 +470,12 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 "score": float(gallery.get("score") or 0),
                 "speedKmh": speed,
                 "label": label,
-                "attrs": {"reidBackend": meta.get("backend"), "cameraId": cam_id},
+                "attrs": {
+                    "reidBackend": meta.get("backend"),
+                    "cameraId": cam_id,
+                    "assocMode": getattr(g, "last_assoc_mode", None),
+                    "reidSkipped": not need_reid,
+                },
             }
             items.append(item)
             session.stats["persons"] += 1
@@ -434,14 +491,18 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     session.events = session.events[-400:]
             if cfg.persist_events:
                 _persist_event(session.app, row)
+        try:
+            session.associator.prune_inactive_locals("person", cam_id, active_person_local)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
         raw_v = _detect(cfg.det_vehicle_path, frame, cfg.conf, [1, 2, 3, 5, 7])
-        tracks_v = cam_state.tracker_vehicle.update(raw_v)
+        tracks_v = cam_state.tracker_vehicle.update(raw_v, frame=frame)
+        active_vehicle_local = {int(t.track_id) for t in tracks_v}
         cong = congestion_level(len(tracks_v))
         cam_state.congestion = cong
-        # VehicleSession 按 session 隔离
         if not cam_state.vehicle_session_id:
             cam_state.vehicle_session_id = f"{session.session_id}:cam{cam_id}"
         vsession = get_vsession(cam_state.vehicle_session_id)
@@ -450,57 +511,82 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             crop = _crop(frame, t.bbox)
             if crop is None:
                 continue
-            emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
+            sticky_gid = session.associator.peek_sticky(
+                object_type="vehicle",
+                camera_id=cam_id,
+                local_track_id=int(t.track_id),
+                now=now,
+            )
+            need_reid = sticky_gid is None or bool(getattr(t, "is_new", False))
+            emb, vmeta = None, {}
             plate_text, plate_score = None, 0.0
-            # 轻量车牌：复用 vehicle_track 启发式 + OCR（若配置）
-            if cfg.ocr_fn is not None:
-                try:
-                    from services.vehicle_track import _pick_plate_bbox, _ocr_plate
-                    pb = _pick_plate_bbox(t.bbox, frame, cfg.plate_model_path, 0.2)
-                    if pb:
-                        ocr = _ocr_plate(cfg.ocr_fn, frame, pb)
-                        plate_text = ocr.get("text")
-                        plate_score = float(ocr.get("score") or 0)
-                        if plate_text:
-                            vsession.plates[t.track_id] = {
-                                "text": plate_text, "score": plate_score, "source": "mtmc",
-                            }
-                except Exception:  # noqa: BLE001
-                    pass
-            if not plate_text and t.track_id in vsession.plates:
+            fuse = {
+                "identityKey": None, "plate": None, "visualKey": None,
+                "fuseScore": 0, "plateScore": 0, "visualScore": 0,
+            }
+            if need_reid:
+                emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
+                if cfg.ocr_fn is not None:
+                    try:
+                        from services.vehicle_track import _pick_plate_bbox, _ocr_plate
+                        pb = _pick_plate_bbox(t.bbox, frame, cfg.plate_model_path, 0.2)
+                        if pb:
+                            ocr = _ocr_plate(cfg.ocr_fn, frame, pb)
+                            plate_text = ocr.get("text")
+                            plate_score = float(ocr.get("score") or 0)
+                            if plate_text:
+                                vsession.plates[t.track_id] = {
+                                    "text": plate_text, "score": plate_score, "source": "mtmc",
+                                }
+                    except Exception:  # noqa: BLE001
+                        pass
+                if not plate_text and t.track_id in vsession.plates:
+                    plate_text = vsession.plates[t.track_id].get("text")
+                    plate_score = float(vsession.plates[t.track_id].get("score") or 0)
+
+                best_peer = None
+                best_sim = -1.0
+                with session.associator._lock:
+                    for gtrack in session.associator.tracks.values():
+                        if gtrack.object_type != "vehicle" or gtrack.embedding is None:
+                            continue
+                        if gtrack.global_id in claimed_vehicle:
+                            continue
+                        # 仅与「丢失/跨镜」候选比，避免同帧同伴污染
+                        dt = now - gtrack.last_seen
+                        if gtrack.camera_id == cam_id and dt < max(0.45, float(cfg.lost_revive_sec or 1.0)):
+                            continue
+                        from services.vehicle_reid_feat import cosine as vcos
+                        sim = vcos(emb, gtrack.embedding) if emb is not None else -1.0
+                        if sim > best_sim:
+                            best_sim = sim
+                            best_peer = gtrack.embedding
+                fuse = fuse_plate_visual(
+                    plate=plate_text,
+                    plate_score=plate_score,
+                    emb_a=emb,
+                    emb_b=best_peer if best_peer is not None else emb,
+                )
+            elif t.track_id in vsession.plates:
                 plate_text = vsession.plates[t.track_id].get("text")
                 plate_score = float(vsession.plates[t.track_id].get("score") or 0)
+                fuse = {"plate": plate_text, "plateScore": plate_score, "identityKey": None,
+                        "visualKey": None, "fuseScore": 0, "visualScore": 0}
 
-            # 与已有全局车辆做视觉对比选最佳，再融合
-            best_peer = None
-            best_sim = -1.0
-            with session.associator._lock:
-                for gtrack in session.associator.tracks.values():
-                    if gtrack.object_type != "vehicle" or gtrack.embedding is None:
-                        continue
-                    from services.vehicle_reid_feat import cosine as vcos
-                    sim = vcos(emb, gtrack.embedding)
-                    if sim > best_sim:
-                        best_sim = sim
-                        best_peer = gtrack.embedding
-            fuse = fuse_plate_visual(
-                plate=plate_text,
-                plate_score=plate_score,
-                emb_a=emb,
-                emb_b=best_peer if best_peer is not None else emb,
-            )
             g = session.associator.associate(
                 object_type="vehicle",
                 camera_id=cam_id,
                 embedding=emb,
-                identity_key=fuse["identityKey"],
-                plate=fuse.get("plate"),
+                identity_key=fuse.get("identityKey"),
+                plate=fuse.get("plate") or plate_text,
                 visual_key=fuse.get("visualKey"),
+                local_track_id=int(t.track_id),
+                exclude_gids=claimed_vehicle,
                 now=now,
             )
+            claimed_vehicle.add(g.global_id)
             speed = _speed_from_trail(t.trail, cfg.meters_per_pixel, cfg.sample_fps)
             if speed is not None:
-                # 写入会话历史点
                 cx = (t.bbox[0] + t.bbox[2]) * 0.5
                 cy = (t.bbox[1] + t.bbox[3]) * 0.5
                 hist = vsession.track_history.setdefault(t.track_id, [])
@@ -508,13 +594,13 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 if len(hist) > 90:
                     vsession.track_history[t.track_id] = hist[-90:]
 
-            plate_show = g.plate or fuse.get("plate") or "无牌"
+            plate_show = g.plate or fuse.get("plate") or plate_text or "无牌"
             label = f"{g.global_id}|{plate_show}"
             item = {
                 "objectType": "vehicle",
                 "globalId": g.global_id,
                 "localTrackId": t.track_id,
-                "plate": g.plate or fuse.get("plate"),
+                "plate": g.plate or fuse.get("plate") or plate_text,
                 "identityKey": g.identity_key or fuse.get("identityKey"),
                 "bbox": t.bbox,
                 "trail": list(t.trail),
@@ -525,7 +611,12 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 "speedKmh": speed,
                 "congestion": cong,
                 "label": label,
-                "attrs": {"vehicleReid": vmeta.get("backend"), "cameraId": cam_id},
+                "attrs": {
+                    "vehicleReid": vmeta.get("backend"),
+                    "cameraId": cam_id,
+                    "assocMode": getattr(g, "last_assoc_mode", None),
+                    "reidSkipped": not need_reid,
+                },
             }
             items.append(item)
             session.stats["vehicles"] += 1
@@ -536,7 +627,6 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     session.events = session.events[-400:]
             if cfg.persist_events:
                 _persist_event(session.app, row)
-                # 过车仅在新全局 ID 首见或换相机时落库，避免每帧刷写
                 pass_key = f"{g.global_id}:{cam_id}"
                 seen = getattr(session, "_pass_seen", None)
                 if seen is None:
@@ -562,6 +652,10 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                         if len(session.passes) > 300:
                             session.passes = session.passes[-200:]
                     _persist_pass(session.app, pass_row)
+        try:
+            session.associator.prune_inactive_locals("vehicle", cam_id, active_vehicle_local)
+        except Exception:  # noqa: BLE001
+            pass
 
     cam_state.last_dets = items
     jpeg = _draw_overlay(frame, items, cam_state.congestion)
@@ -618,9 +712,17 @@ def start_session(cfg: MtmcConfig, *, cameras: list, upload_folder: str, app=Non
     from services.mtmc_associator import MtmcAssociator
 
     sid = uuid.uuid4().hex[:16]
+    # same_cam_min_gap：略小于采样周期，保证同帧互斥，又允许目标短暂丢失后同镜续接
+    sample_gap = 1.0 / max(0.2, float(cfg.sample_fps))
     associator = MtmcAssociator(
         appear_thresh=cfg.appear_thresh,
         time_window_sec=cfg.time_window_sec,
+        same_cam_reuse=True,
+        same_cam_min_gap=max(0.35, sample_gap * 0.85),
+        lost_revive_sec=float(cfg.lost_revive_sec or max(1.0, sample_gap * 1.5)),
+        local_sticky_sec=max(12.0, cfg.time_window_sec * 0.25),
+        same_cam_appear_thresh=min(0.78, float(cfg.appear_thresh) + 0.22),
+        mcbyte_decouple=bool(cfg.mcbyte_decouple),
     )
     if topology_edges:
         associator.set_topology(topology_edges)
