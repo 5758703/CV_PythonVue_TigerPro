@@ -12,7 +12,11 @@
 
 - **双前端架构**：`frontend/frontend_home` 项目门户（:5174）+ `frontend/frontend_admin` 管理控制台（:5173）；公开接口 `GET /api/portal/summary`；门户按 Cookie `tiger_ai_token` 判断登录态跳转；控制台顶栏「项目门户」入口
 - **部署文档与 Docker 骨架**：`docs/deploy/`（本地 / Linux / Docker）；`deploy/docker-compose.yml` 实验性编排（MySQL + backend + 双前端 + Nginx 网关）
-- **跨镜 MTMC 重识别**（`/ai/mtmc`）：多路共享拉流 → 局部 Tracklet → OSNet/CLIP-ReID 并联 Youtu → 车辆视觉 ReID+车牌融合 → 拓扑约束全局 ID → 事件/过车/轨迹 → 监控墙 AI 叠加；权限 `ai:mtmc:*`
+- **跨镜 MTMC 重识别**（`/ai/mtmc`）：多路共享拉流 → 局部 Tracklet → OSNet/CLIP-ReID 并联 Youtu → 车辆视觉 ReID+车牌融合 → 拓扑约束全局 ID → 事件/过车/轨迹 → 监控墙 AI 叠加；权限 `ai:mtmc:*`；McByte++ 短时粘性 / 新生才长时 ReID
+- **跌倒检测**（`/ai/fall`）：姿态四指标、图片/视频/摄像头、异步标注视频与触发事件、告警规则 `fall_detection` 与告警音
+- **手势识别**（`/ai/handpose`）：MediaPipe 数字手势 + YOLO 中国手语，可多选同跑
+- **Windows 屏幕 RTSP 推流**：本机桌面接入摄像头管理/监控墙，见 `docs/camera-screen-rtsp.md`
+- **控制台首页「最近几天新增的功能」**卡片；文档 [`docs/articles/平台近期新增功能说明.md`](docs/articles/平台近期新增功能说明.md)
 - **行人重识别（Youtu ReID）**：OpenCV Zoo `opencv-person-reid-youtu`；独立权限 `ai:reid:*` 与表 `reid_person` / `reid_embedding(modality=appearance)`；实时「像谁/未知」、底库 Top-K、录像片段检索；可选混合近距人脸；行人检测默认优先级 `yolo26n` → `winedarksea-yolo26n_person` → `simoswish-PersonDetector_YOLO26_PRW`
 - **OpenCV YuNet+SFace 人脸后端**：与 InsightFace 并列；本地视频源；YuNet 五色关键点叠加
 - **LaMa 图像修复**（`inpainting-lama` / `/ai/inpaint`）：涂抹遮罩 + 外扩；DNN→ORT 回退
@@ -28,6 +32,10 @@
 - 模型管理 **权重格式转换（pt → onnx）**：列表新增「转换」对话框，展示 pt/onnx 权重明细并支持分别下载；异步导出（imgsz / dynamic / half 可配，Ultralytics export + simplify），完成后检测自动走 ONNX Runtime；接口 `weight-info` / `convert-weight` / `convert-progress`、下载支持 `?ext=pt|onnx`（onnx → pt 因 ONNX 为冻结推理图不支持还原，界面已说明）
 - 社区协作文件：`CONTRIBUTING.md`、`GOVERNANCE.md`、`ROADMAP.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`THIRD_PARTY_NOTICES.md`
 - GitHub Issue / PR 模板、`CODEOWNERS`、标签说明与新手任务清单
+
+### 变更
+
+- **模型管理**菜单整组提升为侧栏根级目录（模型列表 + 模型训练），置于「AI智能识别」上方
 
 ### 修复
 
@@ -45,6 +53,7 @@
 - 更新 `README.md` 功能列表与文档索引、`THIRD_PARTY_NOTICES.md` OpenCV Zoo 条目
 - 更新 `人员离岗检测-功能说明.md` / `目标追踪-场景分类说明.md` / `README.md`：镜头运动补偿原理、接口与验收清单
 - 统一贡献流程：Discussion → Issue → 认领 → PR → Squash 合并 → CHANGELOG / 发版
+- 新增 `docs/articles/平台近期新增功能说明.md`；根 README 增加「近期新增」表与文档索引
 
 ---
 

@@ -287,6 +287,7 @@ import {
 } from '../../../utils/alertModels'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
+import { syncContainCanvas, canvasOffsetToImageXY } from '../../../utils/containCanvas'
 
 const allModels = ref([])
 const modelId = ref(null)
@@ -382,12 +383,7 @@ const syncCanvas = () => {
   const img = imgEl.value
   const cv = overlayEl.value
   if (!img || !cv || !img.naturalWidth) return
-  cv.width = img.naturalWidth
-  cv.height = img.naturalHeight
-  cv.style.left = `${img.offsetLeft}px`
-  cv.style.top = `${img.offsetTop}px`
-  cv.style.width = `${img.offsetWidth}px`
-  cv.style.height = `${img.offsetHeight}px`
+  syncContainCanvas(img, cv)
   drawBoxes()
 }
 
@@ -471,9 +467,7 @@ const onRowClick = (row) => {
 
 const onCanvasClick = (e) => {
   const cv = overlayEl.value
-  const scale = cv.width / cv.clientWidth
-  const x = e.offsetX * scale
-  const y = e.offsetY * scale
+  const [x, y] = canvasOffsetToImageXY(cv, e.offsetX, e.offsetY)
   // 命中最上层（面积最小）包含点击点的框
   let hit = -1
   let best = Infinity
@@ -496,10 +490,8 @@ const onImgLoad = () => syncCanvas()
 const onResize = () => syncCanvas()
 
 const loadModels = async () => {
-  const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  allModels.value = (res.data.rows || []).filter(
-    (m) => m.task === 'object-detection' && m.filePath && m.status === '0'
-  )
+  const res = await modelApi.options({ task: 'object-detection' })
+  allModels.value = (res.data || []).filter((m) => m.filePath && m.status === '0')
   syncModelSelection()
 }
 

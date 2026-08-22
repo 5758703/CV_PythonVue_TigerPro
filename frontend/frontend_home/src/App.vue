@@ -134,12 +134,13 @@ const steps = [
 ]
 
 const scenarios = [
+  { title: '跨镜重识别', description: '多路 MTMC 全局 ID，车辆车牌融合，监控墙 AI 叠加。', tag: '跨镜追踪', tagTone: 'blue', icon: Workflow, path: '/ai/mtmc' },
   { title: '跌倒检测', description: '姿态四指标判定，支持图片、视频与实时摄像头。', tag: '安全监测', tagTone: 'red', icon: ShieldCheck, path: '/ai/fall' },
   { title: '手势识别', description: '数字手势与中国手语识别，支持多视角输入。', tag: '姿态识别', tagTone: 'pink', icon: Hand, path: '/ai/handpose' },
   { title: '人员离岗检测', description: '多工位在岗判定，支持移动镜头运动补偿。', tag: '行为分析', tagTone: 'orange', icon: Users, path: '/ai/track', query: { scenario: 'absence' } },
   { title: '车辆追踪', description: '车牌 OCR、测速抓拍、运动轨迹与过车记录。', tag: '智慧交通', tagTone: 'blue', icon: ScanLine, path: '/ai/track', query: { scenario: 'vehicle' } },
   { title: '通用目标追踪', description: 'ByteTrack 多目标追踪与区域越线进出统计。', tag: '视觉追踪', tagTone: 'green', icon: Target, path: '/ai/track', query: { scenario: 'general' } },
-  { title: '人脸识别', description: 'InsightFace 底库登记与 1:N 实时识别。', tag: '身份识别', tagTone: 'cyan', icon: ScanFace, path: '/ai/face' },
+  { title: '人脸识别', description: 'InsightFace / YuNet+SFace 底库与 1:N 实时识别。', tag: '身份识别', tagTone: 'cyan', icon: ScanFace, path: '/ai/face' },
 ]
 
 const heroTags = [

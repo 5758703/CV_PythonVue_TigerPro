@@ -102,6 +102,22 @@ def list_tasks():
     return jsonify(code=0, data=tasks)
 
 
+@ai_model_bp.get("/options")
+@permission_required("ai:model:list")
+def list_model_options():
+    """下拉选项：返回全部启用且已有权重的模型（不分页，供检测页等选择）。"""
+    task = request.args.get("task", "").strip()
+    query = AiModel.query.filter(
+        AiModel.status == "0",
+        AiModel.file_path.isnot(None),
+        AiModel.file_path != "",
+    )
+    if task:
+        query = query.filter(AiModel.task == task)
+    rows = query.order_by(AiModel.model_name.asc(), AiModel.id.asc()).all()
+    return jsonify(code=0, data=[m.to_dict() for m in rows])
+
+
 @ai_model_bp.get("/<int:mid>")
 @permission_required("ai:model:query")
 def get_model(mid):
@@ -525,16 +541,39 @@ def _looks_like_diffusers_lora_dir(path):
     return True
 
 
+_DIR_WEIGHT_LIBS = frozenset({
+    "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano",
+    "vibevoice", "voxcpm",
+})
+
+
+def _is_dir_weight_lib(lib):
+    return (lib or "").lower() in _DIR_WEIGHT_LIBS
+
+
+def _normalize_dir_model_path(upload_root, rel_path):
+    """目录型权重：若 file_path 指向目录内单文件，归一到模型目录。"""
+    base = os.path.join(upload_root, rel_path)
+    if os.path.isdir(base):
+        return base
+    if os.path.isfile(base):
+        parent = os.path.dirname(base)
+        if os.path.isdir(parent):
+            return parent
+    return base
+
+
 def _resolve_detect_runtime(m):
     """解析检测/视频检测应使用的推理库与权重路径；不可用则抛 ValueError。"""
     if not m.file_path:
         raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
     lib = _detect_lib(m)
-    base = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    upload_root = current_app.config["UPLOAD_FOLDER"]
+    base = _normalize_dir_model_path(upload_root, m.file_path) if _is_dir_weight_lib(lib) else os.path.join(upload_root, m.file_path)
 
     if os.path.isfile(base):
-        if lib == "transformers":
-            raise ValueError("transformers 检测模型应为目录，当前为单文件权重")
+        if lib in ("transformers", "modelscope"):
+            raise ValueError(f"{lib} 检测模型应为目录，当前为单文件权重")
         return lib, base
 
     if os.path.isdir(base):
@@ -542,6 +581,13 @@ def _resolve_detect_runtime(m):
             raise ValueError(
                 "该模型为 Diffusers/LoRA 文生图权重，不支持图片/视频目标检测。"
                 "请改用 YOLO 等检测模型（例如 DaniilMako-spacecraft-detection）。"
+            )
+        if lib == "modelscope":
+            from inference import is_modelscope_cv_dir
+            if is_modelscope_cv_dir(base):
+                return lib, base
+            raise ValueError(
+                "本地 ModelScope 模型目录无效（缺少 configuration.json 或 pipeline 类型不支持检测）。"
             )
         if lib == "transformers":
             if _is_valid_transformers_dir(base):
@@ -801,7 +847,7 @@ def _detect_model_path(m):
     transformers / opencv-sam / opencv-dnn 等目录型返回目录；其余挑单文件权重。
     """
     lib = _detect_lib(m)
-    if lib in ("transformers", "opencv-sam", "efficientsam", "efficient-sam",
+    if lib in ("transformers", "modelscope", "opencv-sam", "efficientsam", "efficient-sam",
                "opencv-dnn", "opencv_dnn", "opencv-face", "opencv-lama", "lama", "inpainting",
                "opencv-reid", "youtu-reid", "youtureid", "person-reid"):
         return _abs_model_path(m)
@@ -916,7 +962,7 @@ def fetch_weight(mid):
                 if repo_id is None:
                     return jsonify(code=400, message="来源地址无效，无法解析模型仓库(owner/name)"), 400
                 if hub == "modelscope":
-                    is_dir_model = lib != "ultralytics"
+                    is_dir_model = True
                     rel, size = _fetch_modelscope(repo_id, folder, sub, is_dir_model)
                 else:
                     is_dir_model = lib != "ultralytics"
@@ -1380,13 +1426,17 @@ def detect(mid):
             from inference import detect_image_hf
             result = detect_image_hf(abs_path, file.read(), conf=conf, draw=draw,
                                      task=m.task or "object-detection")
+        elif lib == "modelscope":
+            from inference import detect_image_modelscope
+            result = detect_image_modelscope(abs_path, file.read(), conf=conf, draw=draw)
         elif lib == "rfdetr":
             from inference import detect_image_rfdetr
             result = detect_image_rfdetr(abs_path, file.read(), conf=conf, draw=draw,
                                          model_key=m.model_key or "rf-detr-medium")
         else:
             from inference import detect_image
-            result = detect_image(abs_path, file.read(), conf=conf, draw=draw)
+            result = detect_image(abs_path, file.read(), conf=conf, draw=draw,
+                                  model_key=m.model_key)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"推理失败：{e}"), 500
     return jsonify(code=0, message="检测完成", data=result)
@@ -1674,6 +1724,10 @@ def _video_worker(
             from inference import detect_video_hf
             stats = detect_video_hf(abs_path, src_path, out_path, conf=conf, task=task, progress_cb=cb,
                                     alert_rules=alert_rules_payload, alert_source_key=job_id)
+        elif lib == "modelscope":
+            from inference import detect_video_modelscope
+            stats = detect_video_modelscope(abs_path, src_path, out_path, conf=conf, progress_cb=cb,
+                                            alert_rules=alert_rules_payload, alert_source_key=job_id)
         elif lib == "rfdetr":
             from inference import detect_video_rfdetr
             stats = detect_video_rfdetr(abs_path, src_path, out_path, conf=conf,

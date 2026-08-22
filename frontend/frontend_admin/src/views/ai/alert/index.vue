@@ -644,6 +644,7 @@ const openEdit = (row) => {
 
   const defaultPri = ({
     'fire-smoke': 0,
+    'smoking-detection': 3,
     'ppe-no-hardhat': 5,
     'stranger-face': 8,
     'crowd-gathering': 10,
@@ -652,6 +653,7 @@ const openEdit = (row) => {
   })[row.ruleKey] ?? 20
   const defaultFill = ({
     'fire-smoke': '#FF1A1A',
+    'smoking-detection': '#FA541C',
     'ppe-no-hardhat': '#FF7A00',
     'stranger-face': '#409EFF',
     'crowd-gathering': '#FFD400',

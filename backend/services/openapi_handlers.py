@@ -30,13 +30,16 @@ def run_vision_detect(*, model_id: int, image_bytes: bytes, conf: float = 0.25, 
         return detect_image_hf(
             abs_path, image_bytes, conf=conf, draw=draw, task=m.task or "object-detection"
         )
+    if lib == "modelscope":
+        from inference import detect_image_modelscope
+        return detect_image_modelscope(abs_path, image_bytes, conf=conf, draw=draw)
     if lib == "rfdetr":
         from inference import detect_image_rfdetr
         return detect_image_rfdetr(
             abs_path, image_bytes, conf=conf, draw=draw, model_key=m.model_key or "rf-detr-medium"
         )
     from inference import detect_image
-    return detect_image(abs_path, image_bytes, conf=conf, draw=draw)
+    return detect_image(abs_path, image_bytes, conf=conf, draw=draw, model_key=m.model_key)
 
 
 def run_vision_ocr(*, det_id: int, rec_id: int, image_bytes: bytes):

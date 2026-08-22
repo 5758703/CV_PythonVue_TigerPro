@@ -74,8 +74,8 @@
         <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
             <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath" @click="openTest(row)">测试</el-button>
-            <el-button v-if="row.filePath" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
-            <el-button v-else-if="row.sourceUrl" v-permission="'ai:model:add'" link type="warning" :icon="Download" :loading="fetchingId === row.id" @click="fetchWeight(row)">拉取权重</el-button>
+            <el-button v-if="canDownloadWeight(row)" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
+            <el-button v-if="canFetchWeight(row)" v-permission="'ai:model:add'" link type="warning" :icon="Download" :loading="fetchingId === row.id" @click="fetchWeight(row)">{{ row.filePath ? "重新拉取" : "拉取权重" }}</el-button>
             <el-button v-if="row.filePath && row.library === 'ultralytics'" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
             <el-button v-permission="'ai:model:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-permission="'ai:model:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
@@ -329,6 +329,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { Search, Refresh, Plus, Edit, Delete, UploadFilled, Download, VideoPlay, ZoomIn, Switch } from "@element-plus/icons-vue";
 
 import { modelApi } from "../../../api/ai";
+import { syncContainCanvas, canvasOffsetToImageXY } from "../../../utils/containCanvas";
 
 const router = useRouter();
 
@@ -364,6 +365,13 @@ const HUB_META = {
   other: { label: "其他", color: "#909399" }
 };
 const hubMeta = (h) => HUB_META[h] || HUB_META.other;
+
+const DIR_WEIGHT_LIBS = new Set([
+  "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm",
+]);
+const isDirWeightLib = (lib) => DIR_WEIGHT_LIBS.has((lib || "").toLowerCase());
+const canDownloadWeight = (row) => row.filePath && !isDirWeightLib(row.library);
+const canFetchWeight = (row) => row.sourceUrl && (!row.filePath || isDirWeightLib(row.library));
 
 const dialog = ref(false);
 const formRef = ref();
@@ -731,12 +739,7 @@ const tSync = () => {
   const img = tImgEl.value;
   const cv = tOverlayEl.value;
   if (!img || !cv || !img.naturalWidth) return;
-  cv.width = img.naturalWidth;
-  cv.height = img.naturalHeight;
-  cv.style.left = `${img.offsetLeft}px`;
-  cv.style.top = `${img.offsetTop}px`;
-  cv.style.width = `${img.offsetWidth}px`;
-  cv.style.height = `${img.offsetHeight}px`;
+  syncContainCanvas(img, cv);
   tDraw();
 };
 
@@ -776,9 +779,7 @@ const tSetActive = (i) => {
 const tRowClick = (row) => tSetActive(testResult.value.detections.indexOf(row));
 const tCanvasClick = (e) => {
   const cv = tOverlayEl.value;
-  const scale = cv.width / cv.clientWidth;
-  const x = e.offsetX * scale;
-  const y = e.offsetY * scale;
+  const [x, y] = canvasOffsetToImageXY(cv, e.offsetX, e.offsetY);
   let hit = -1;
   let best = Infinity;
   testResult.value.detections.forEach((d, i) => {

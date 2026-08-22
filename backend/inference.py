@@ -1170,6 +1170,17 @@ def _yolo_predict_kwargs(conf=0.25, imgsz=None, **extra):
     return kw
 
 
+# 部分 YOLO 模型训练时使用非默认输入尺寸，按 model_key 指定推理 imgsz
+_YOLO_MODEL_IMGSZ = {
+    "yolo26-smoking-detection": 800,
+    "yolo8-smoking-behavior": 1280,
+}
+
+
+def _yolo_imgsz_for_model(model_key):
+    return _YOLO_MODEL_IMGSZ.get((model_key or "").lower())
+
+
 def _prefer_onnx() -> bool:
     """是否优先使用同名 .onnx 权重（ONNX Runtime 推理，替代原生 PyTorch）。默认开。"""
     return (os.getenv("YOLO_PREFER_ONNX") or "1").strip().lower() not in ("0", "false", "off")
@@ -1379,7 +1390,7 @@ def _safe_plot(result, fallback_frame=None):
         return canvas
 
 
-def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
+def detect_image(abs_path, image_bytes, conf=0.25, draw=True, model_key=None):
     """对图片字节做检测。
 
     draw=True  返回带框 jpg(base64)；False 仅返回检测框坐标(实时场景省编码)。
@@ -1398,7 +1409,7 @@ def detect_image(abs_path, image_bytes, conf=0.25, draw=True):
     model = _get_model(abs_path)
     h, w = img.shape[:2]
 
-    results = model.predict(img, **_yolo_predict_kwargs(conf=conf))
+    results = model.predict(img, **_yolo_predict_kwargs(conf=conf, imgsz=_yolo_imgsz_for_model(model_key)))
     r = results[0]
 
     names = getattr(r, "names", None) or getattr(model, "names", None) or {}
@@ -1515,12 +1526,13 @@ def detect_video(
     tracker = _RocketTelemetryTracker(w, h, fps) if is_rocket else None
     speed_samples = []
     alert_ctx = _video_alert_ctx(alert_rules, alert_source_key)
+    yolo_imgsz = _yolo_imgsz_for_model(model_key)
     try:
         while True:
             ok, frame = cap.read()
             if not ok:
                 break
-            r = model.predict(frame, **_yolo_predict_kwargs(conf=conf))[0]
+            r = model.predict(frame, **_yolo_predict_kwargs(conf=conf, imgsz=yolo_imgsz))[0]
             if is_rocket:
                 detections = _yolo_result_to_detections(r)
                 detections = _refine_rocket_detect_detections(detections, w, h)
@@ -2761,6 +2773,133 @@ def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detec
         cap.release()
         writer.close()
 
+    result = {"frames": frames, "totalFrames": total, "totalDetections": total_det,
+              "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
+    result.update(_video_alert_stats(alert_ctx))
+    return result
+
+
+# ------------------------------------------------------------ ModelScope CV 检测（DAMO-YOLO tinynas-detection 等）
+_ms_cv_pipe_cache = {}
+
+
+def is_modelscope_cv_dir(model_dir):
+    """目录是否为 ModelScope tinynas-detection 等 CV 检测模型。"""
+    cfg_path = os.path.join(model_dir, "configuration.json")
+    if not os.path.isfile(cfg_path):
+        return False
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            data = json.load(f)
+        pipeline_type = (data.get("pipeline") or {}).get("type", "")
+        task = (data.get("task") or "").lower()
+        return pipeline_type == "tinynas-detection" or "object-detection" in task
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _get_ms_cv_pipe(model_dir):
+    mtime = os.path.getmtime(model_dir)
+    cache_key = (model_dir, mtime)
+    with _lock:
+        if cache_key in _ms_cv_pipe_cache:
+            return _ms_cv_pipe_cache[cache_key]
+        from modelscope.pipelines import pipeline
+        from modelscope.utils.constant import Tasks
+        pipe = pipeline(
+            Tasks.domain_specific_object_detection,
+            model=model_dir,
+            trust_remote_code=True,
+        )
+        _ms_cv_pipe_cache[cache_key] = pipe
+        return pipe
+
+
+def _ms_cv_to_detections(out, conf=0.25):
+    """ModelScope CV 检测输出 -> 标准 detections 列表。"""
+    dets = []
+    scores = out.get("scores")
+    labels = out.get("labels") or []
+    boxes = out.get("boxes")
+    if scores is None or boxes is None:
+        return dets
+    scores = np.asarray(scores).reshape(-1)
+    boxes = np.asarray(boxes).reshape(-1, 4)
+    if len(labels) < len(scores):
+        labels = list(labels) + [str(i) for i in range(len(labels), len(scores))]
+    label2id = {}
+    for sc, box, lbl in zip(scores, boxes, labels):
+        if float(sc) < float(conf):
+            continue
+        lbl = str(lbl)
+        cid = label2id.setdefault(lbl, len(label2id))
+        x1, y1, x2, y2 = box.tolist()
+        dets.append({
+            "className": lbl,
+            "classId": cid,
+            "confidence": round(float(sc), 4),
+            "bbox": [round(float(x1), 1), round(float(y1), 1),
+                     round(float(x2), 1), round(float(y2), 1)],
+        })
+    return dets
+
+
+def detect_image_modelscope(model_dir, image_bytes, conf=0.25, draw=True):
+    """ModelScope DAMO-YOLO 等 CV 目标检测，输出与 YOLO 同格式。"""
+    if os.path.isfile(model_dir):
+        model_dir = os.path.dirname(model_dir)
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    pipe = _get_ms_cv_pipe(model_dir)
+    detections = _ms_cv_to_detections(pipe(img), conf)
+
+    image_b64 = None
+    if draw:
+        _draw_dets(img, detections)
+        ok, buf = cv2.imencode(".jpg", img)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    h, w = img.shape[:2]
+    return {"detections": detections, "count": len(detections),
+            "imageBase64": image_b64, "width": w, "height": h}
+
+
+def detect_video_modelscope(model_dir, src_path, dst_path, conf=0.25, progress_cb=None,
+                            *, alert_rules=None, alert_source_key=None):
+    """ModelScope CV 检测逐帧处理视频。"""
+    if os.path.isfile(model_dir):
+        model_dir = os.path.dirname(model_dir)
+    pipe = _get_ms_cv_pipe(model_dir)
+    cap = cv2.VideoCapture(src_path)
+    if not cap.isOpened():
+        raise ValueError("无法打开视频文件")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    writer, ew, eh = _open_h264(dst_path, fps, w, h)
+    class_counts, total_det, frames = {}, 0, 0
+    alert_ctx = _video_alert_ctx(alert_rules, alert_source_key)
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            dets = _ms_cv_to_detections(pipe(frame), conf)
+            for d in dets:
+                class_counts[d["className"]] = class_counts.get(d["className"], 0) + 1
+                total_det += 1
+            _draw_dets(frame, dets)
+            frame = _apply_frame_video_alerts(frame, dets, alert_ctx, frames, fps)
+            _write_bgr(writer, frame, ew, eh)
+            frames += 1
+            if progress_cb:
+                progress_cb(frames, total)
+    finally:
+        cap.release()
+        writer.close()
     result = {"frames": frames, "totalFrames": total, "totalDetections": total_det,
               "classCounts": class_counts, "fps": round(float(fps), 2), "width": ew, "height": eh}
     result.update(_video_alert_stats(alert_ctx))

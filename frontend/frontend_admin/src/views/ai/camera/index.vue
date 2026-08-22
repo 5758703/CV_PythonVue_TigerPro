@@ -280,10 +280,8 @@ const evaluateAlerts = async (detections) => {
 }
 
 const loadModels = async () => {
-  const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  allModels.value = (res.data.rows || []).filter(
-    (m) => m.task === 'object-detection' && m.filePath && m.status === '0'
-  )
+  const res = await modelApi.options({ task: 'object-detection' })
+  allModels.value = (res.data || []).filter((m) => m.filePath && m.status === '0')
   syncModelSelection()
 }
 

@@ -3,6 +3,7 @@ import request from './request'
 // ---------------- AI 检测模型
 export const modelApi = {
   list: (params) => request.get('/ai/model', { params }),
+  options: (params) => request.get('/ai/model/options', { params }),
   categories: () => request.get('/ai/model/categories'),
   tasks: () => request.get('/ai/model/tasks'),
   get: (id) => request.get(`/ai/model/${id}`),

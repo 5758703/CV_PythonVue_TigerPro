@@ -33,6 +33,8 @@ imageio==2.37.3
 imageio-ffmpeg==0.6.0
 # modelscope 1.37.1：voxcpm 依赖会升到此版本，已验证 snapshot_download/HubApi 与 funasr 仍正常。
 modelscope==1.37.1
+# ModelScope DAMO-YOLO（tinynas-detection）等 CV 检测模型依赖
+easydict==1.13
 # 语音识别(SenseVoice)：funasr 框架 + torchaudio 加载音频。
 # 注意 torch 全家桶须对齐：torch/torchaudio 2.11.0、torchvision 0.26.0（CPU 版，pytorch cpu 源）。
 torch==2.11.0

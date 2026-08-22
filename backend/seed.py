@@ -135,17 +135,25 @@ def _regroup_ai_menus():
 
 
 def _regroup_model_menus():
-    """「模型管理」升级为目录：下挂模型列表(2010) + 模型训练(260)。"""
+    """「模型管理」升级为根级目录（与 AI智能识别 同级、排在其上方）：下挂模型列表(2010) + 模型训练(260)。"""
     changed = False
     m201 = Menu.query.get(201)
     if not m201:
         return
 
-    if m201.menu_type != "M" or m201.path != "/ai/model-center":
+    # 整组提到根级：parent_id=0，排在 AI智能识别(200) 上方
+    if (
+        m201.parent_id != 0
+        or m201.menu_type != "M"
+        or m201.path != "/ai/model-center"
+        or m201.order_num != 0
+    ):
+        m201.parent_id = 0
         m201.menu_type = "M"
         m201.path = "/ai/model-center"
         m201.component = None
         m201.perms = None
+        m201.order_num = 0
         m201.icon = m201.icon or "Files"
         changed = True
 
@@ -189,6 +197,20 @@ def _regroup_model_menus():
         m260.order_num = 2
         changed = True
 
+    # 根级排序：模型管理(0) → AI智能识别(1) → 视频监控(2) → 系统管理(3)
+    m200 = Menu.query.get(200)
+    if m200 and m200.order_num != 1:
+        m200.order_num = 1
+        changed = True
+    m245 = Menu.query.get(245)
+    if m245 and m245.order_num != 2:
+        m245.order_num = 2
+        changed = True
+    m1 = Menu.query.get(1)
+    if m1 and m1.order_num != 3:
+        m1.order_num = 3
+        changed = True
+
     if changed:
         db.session.commit()
 
@@ -201,16 +223,17 @@ def _patch_video_surveillance_menu():
         if m245.menu_name != "视频监控":
             m245.menu_name = "视频监控"
             changed = True
-        if m245.order_num != 1:
-            m245.order_num = 1
+        # 根级顺序由 _regroup_model_menus 统一：模型管理(0) / AI(1) / 视频监控(2) / 系统(3)
+        if m245.order_num != 2:
+            m245.order_num = 2
             changed = True
     m241 = Menu.query.get(241)
     if m241 and m241.menu_name != "监控墙":
         m241.menu_name = "监控墙"
         changed = True
     m1 = Menu.query.get(1)
-    if m1 and m1.order_num != 2:
-        m1.order_num = 2
+    if m1 and m1.order_num != 3:
+        m1.order_num = 3
         changed = True
     if changed:
         db.session.commit()
@@ -851,6 +874,38 @@ def seed_ai_models():
         source_url="https://huggingface.co/SalahALHaismawi/yolov26-fire-detection",
         description="基于 YOLO 的烟雾/火焰检测模型，用于火灾隐患预警。", status="0",
     ))
+    created |= _ensure_ai_model("damoyolo-cigarette", dict(
+        model_name="实时香烟检测-通用", category="安防检测",
+        task="object-detection", library="modelscope", version="v1",
+        source_url="https://modelscope.cn/models/iic/cv_tinynas_object-detection_damoyolo_cigarette",
+        description=(
+            "阿里达摩院 DAMO-YOLO TinyNAS 香烟检测（cigarette 单类），"
+            "ModelScope tinynas-detection pipeline。适用于禁烟区监控、明烟识别预警。"
+            "复杂实拍场景建议优先使用 yolo26-smoking-detection。"
+        ),
+        status="0",
+    ))
+    created |= _ensure_ai_model("yolo26-smoking-detection", dict(
+        model_name="吸烟行为检测（YOLO26s）", category="安防检测",
+        task="object-detection", library="ultralytics", version="26s",
+        source_url="https://huggingface.co/basant18/Smoking-detection-YOLO26s#best.pt",
+        description=(
+            "基于 Roboflow cigarettes-reality 数据集微调的 YOLO26s 吸烟/香烟检测（类别 smoke），"
+            "mAP@50 87.96%、Recall 88.14%，适合禁烟区监控与吸烟行为识别。"
+            "推荐推理 imgsz=800、conf≥0.25。"
+        ),
+        status="0",
+    ))
+    created |= _ensure_ai_model("yolo8-smoking-behavior", dict(
+        model_name="吸烟行为多类检测（YOLOv8）", category="安防检测",
+        task="object-detection", library="ultralytics", version="v8",
+        source_url="https://huggingface.co/cadilak/smoking-detection-yolov8#best_smoking_detect_2class.pt",
+        description=(
+            "Roboflow Smoking Person 四分类：Smoke / Person / Cigarette / Vape，"
+            "适合吸烟行为与人员关联分析。推荐 imgsz=1280、conf≥0.15。"
+        ),
+        status="0",
+    ))
     created |= _ensure_ai_model("ppe-detection", dict(
         model_name="PPE穿戴识别", category="安全防护",
         task="object-detection", library="ultralytics", version="v1",
@@ -1317,7 +1372,39 @@ def seed_ai_models():
     _ensure_fish_detector_model()
     _ensure_handpose_model()
     _ensure_csl_model()
+    _patch_dir_weight_model_paths()
     return created
+
+
+def _patch_dir_weight_model_paths():
+    """目录型权重：file_path 应指向模型目录，修正误记为目录内单文件的路径。"""
+    dir_libs = ("modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm")
+    base = os.path.dirname(os.path.abspath(__file__))
+    uploads = os.path.join(base, "uploads")
+    changed = False
+    for m in AiModel.query.filter(AiModel.library.in_(dir_libs)).all():
+        if not m.file_path:
+            continue
+        abs_p = os.path.join(uploads, m.file_path.replace("/", os.sep))
+        if not os.path.isfile(abs_p):
+            continue
+        parent = os.path.dirname(abs_p)
+        if not os.path.isdir(parent):
+            continue
+        rel_dir = os.path.relpath(parent, uploads).replace(os.sep, "/")
+        size = 0
+        for root, _dirs, files in os.walk(parent):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
+        if m.file_path != rel_dir or m.file_size != size:
+            m.file_path = rel_dir
+            m.file_size = size
+            changed = True
+    if changed:
+        db.session.commit()
+    return changed
 
 
 def _bind_local_strong_reid_weights():
@@ -1949,6 +2036,32 @@ def seed_alert_rules():
         "message_template": "",
         "overlay": fall_overlay,
     }
+    smoking_overlay = {
+        "enabled": True,
+        "priority": 3,
+        "fillColor": "#FA541C",
+        "borderColor": "#D4380D",
+        "textColor": "#FFFFFF",
+        "titleLines": ["SMOKING"],
+        "subtitleLines": ["禁烟区", "检测到吸烟"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#D4380D",
+    }
+    smoking_cfg = {
+        "classes": [
+            "smoke", "cigarette", "Cigarette", "Smoke", "Vape", "vape", "smoking", "Smoking",
+        ],
+        "min_confidence": 0.25,
+        "consecutive_frames": 2,
+        "cooldown_sec": 45,
+        "title_template": "禁烟区吸烟：检测到 {classes}",
+        "message_template": "立即核实现场并劝离；保存录像留证，必要时联动安保处置。",
+        "overlay": smoking_overlay,
+    }
     defaults = [
         dict(
             rule_key="fire-smoke",
@@ -2013,6 +2126,15 @@ def seed_alert_rules():
             severity="high",
             status="1",
         ),
+        dict(
+            rule_key="smoking-detection",
+            name="吸烟行为告警",
+            description="检测到 smoke/cigarette 等吸烟相关目标时触发（建议配合 yolo26-smoking-detection 模型）",
+            rule_type="class_presence",
+            config_json=json.dumps(smoking_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
     ]
     created = False
     updated = False
@@ -2024,6 +2146,7 @@ def seed_alert_rules():
         "zone-intrusion": zone_cfg,
         "stranger-face": stranger_cfg,
         "fall-detection": fall_cfg,
+        "smoking-detection": smoking_cfg,
     }
     for fields in defaults:
         existing = AlertRule.query.filter_by(rule_key=fields["rule_key"]).first()

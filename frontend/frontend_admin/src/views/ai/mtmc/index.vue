@@ -152,6 +152,88 @@
           </el-table-column>
         </el-table>
       </el-tab-pane>
+
+      <el-tab-pane label="操作说明" name="guide">
+        <div class="guide-wrap">
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            title="跨镜 MTMC 用于多路摄像头下给人员/车辆分配稳定全局 ID，并可与监控墙 AI 叠加联动。建议首次使用先通读本页，再按步骤操作。"
+            class="mb"
+          />
+
+          <h3 class="guide-h3">一、推荐使用流程</h3>
+          <el-steps :active="6" align-center finish-status="success" class="guide-steps mb">
+            <el-step title="准备摄像头" description="摄像头管理录入 RTSP，流可预览" />
+            <el-step title="准备权重" description="检测 + ReID / 车牌模型已拉取" />
+            <el-step title="配置拓扑" description="相机拓扑 Tab 添加通行边" />
+            <el-step title="启动会话" description="会话控制 Tab 选路并启动" />
+            <el-step title="查看全局 ID" description="预览与全局身份表" />
+            <el-step title="监控墙叠加" description="可选：大屏 AI 叠加" />
+          </el-steps>
+
+          <h3 class="guide-h3">二、会话控制 · 参数说明</h3>
+          <el-table :data="paramGuide" size="small" border stripe class="mb">
+            <el-table-column prop="name" label="参数" width="120" />
+            <el-table-column prop="desc" label="说明" min-width="280" />
+            <el-table-column prop="suggest" label="建议值" width="160" />
+          </el-table>
+
+          <h3 class="guide-h3">三、相机拓扑</h3>
+          <p class="guide-p">
+            在「相机拓扑」Tab 为相邻摄像头添加有向边 <code>From → To</code>，并设置最短/最长通行秒数。
+            跨镜关联时，若候选轨迹不在该时间窗内会被拒绝，避免「瞬移」误合并。
+            园区典型配置：门口 → 走廊（5～30s）、走廊 → 出口（10～60s）。
+          </p>
+
+          <h3 class="guide-h3">四、监控墙 AI 叠加</h3>
+          <ol class="guide-ol mb">
+            <li>在本页「会话控制」启动跨镜并选中摄像头。</li>
+            <li>点击「打开监控墙叠加」，或手动进入 <b>视频监控 → 监控墙</b>。</li>
+            <li>开启「AI 叠加」，填写会话 ID（本页启动后会写入本地缓存）。</li>
+            <li>各画面切换为带框与 Global ID 的 MJPEG 流；若叠加失败会自动回退普通监控流。</li>
+          </ol>
+
+          <h3 class="guide-h3">五、模型与权重依赖</h3>
+          <el-descriptions :column="1" border size="small" class="mb">
+            <el-descriptions-item label="人员检测">YOLO 行人检测（如 yolo26n），模型管理启用</el-descriptions-item>
+            <el-descriptions-item label="人员强 ReID">osnet-x1-0 / clip-reid-person ONNX（可选，无则回退 Youtu）</el-descriptions-item>
+            <el-descriptions-item label="人员底库">行人重识别页登记后，命中可显示姓名</el-descriptions-item>
+            <el-descriptions-item label="车辆检测">YOLO 车辆检测 + 车牌检测/OCR</el-descriptions-item>
+            <el-descriptions-item label="车辆视觉 ReID">transreid-vehicle / clip-reid-vehicle（可选，无牌时兜底）</el-descriptions-item>
+          </el-descriptions>
+
+          <h3 class="guide-h3">六、注意事项（必读）</h3>
+          <div class="guide-alerts">
+            <el-alert type="warning" :closable="false" show-icon title="后端重启后会话失效" description="跨镜会话保存在后端内存中。重启 Flask 后旧 sessionId 无效，监控墙叠加会 404；请重新启动会话，或关闭 AI 叠加。" />
+            <el-alert type="warning" :closable="false" show-icon title="CPU 与路数" description="建议 2～4 路摄像头、采样 FPS ≤ 2、检测分辨率约 640。路数或 FPS 过高会导致延迟堆积、全局 ID 抖动。" />
+            <el-alert type="warning" :closable="false" show-icon title="局部跟踪与 CMC" description="默认 ByteTrack + McByte++ 解耦（粘性续 Global、仅新生才长时 ReID）。镜头抖动明显可试 BoT-SORT 并开启 CMC；静止机位不必开 CMC。" />
+            <el-alert type="error" :closable="false" show-icon title="合规与隐私" description="人脸、行人外观、车牌属于敏感信息。请确保采集与展示已获授权，生产环境应限制访问权限并遵守当地法规。" />
+            <el-alert type="info" :closable="false" show-icon title="排障顺序" description="权重是否就绪 → 摄像头流是否可预览 → 会话是否 running → sessionAlive 是否通过 → 拓扑时间窗是否合理 → 外观阈值是否过严/过松。" />
+          </div>
+
+          <h3 class="guide-h3">七、常见问题</h3>
+          <el-collapse class="mb">
+            <el-collapse-item title="监控墙开了 AI 叠加但没有框？" name="q1">
+              <p>先确认跨镜会话仍在运行（本页状态为「是」）；后端重启后需重新启动。监控墙会先调 alive 接口，失败则回退普通流。</p>
+            </el-collapse-item>
+            <el-collapse-item title="全局 ID 频繁切换？" name="q2">
+              <p>适当降低采样 FPS、检查检测是否稳定；调高外观阈值或缩短时间窗；确认拓扑边的时间范围符合实际通行时间；强 ReID 权重未就绪时会更多依赖 Youtu/直方图，跨镜稳定性会下降。</p>
+            </el-collapse-item>
+            <el-collapse-item title="车辆有牌仍串车？" name="q3">
+              <p>检查车牌 OCR 置信度与检测框质量；夜间/污损车牌会退回视觉键。可在事件/过车 Tab 查看 identityKey 与 fuseScore。</p>
+            </el-collapse-item>
+            <el-collapse-item title="无 edit 权限无法启动？" name="q4">
+              <p>启动/停止跨镜、维护拓扑需要 <code>ai:mtmc:edit</code>。只读角色可查看会话与事件。</p>
+            </el-collapse-item>
+          </el-collapse>
+
+          <p class="guide-foot">
+            更完整的技术说明见项目文档 <code>docs/mtmc-cross-camera-reid.md</code>。
+          </p>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <el-drawer v-model="trajOpen" title="跨镜轨迹" size="40%">
@@ -212,6 +294,17 @@ const passQ = reactive({ plate: '' })
 
 const trajOpen = ref(false)
 const trajEvents = ref([])
+
+/** 操作说明 Tab：参数对照表 */
+const paramGuide = [
+  { name: '摄像头', desc: '参与跨镜的多路视频源，须已在「摄像头管理」配置且可预览', suggest: '先 2 路联调' },
+  { name: '人员 / 车辆', desc: '是否启用人员 MTMC、车辆 MTMC（含车牌融合）', suggest: '按场景开关' },
+  { name: '采样 FPS', desc: '每路每秒处理帧数，越高越耗 CPU', suggest: '1～2' },
+  { name: '外观阈值', desc: '跨镜外观匹配置信下限，过高易断联，过低易串 ID', suggest: '0.45～0.55' },
+  { name: '时间窗(s)', desc: '全局身份在线缓存秒数，影响跨镜关联范围', suggest: '60～120' },
+  { name: '局部跟踪', desc: 'ByteTrack 推荐；BoT-SORT 可配合 CMC 抗抖动', suggest: 'bytetrack' },
+  { name: 'CMC', desc: '镜头运动补偿，移动/云台摄像头可开', suggest: '静止机关' },
+]
 
 const overlaySrc = (cid) => {
   if (!sessionId.value || !session.value?.running) return ''
@@ -377,4 +470,14 @@ onBeforeUnmount(() => {
 .cell-h { color: #cfe0ff; font-size: 12px; padding: 4px 8px; background: #152238; }
 .cell-v { width: 100%; display: block; min-height: 160px; object-fit: contain; background: #060c18; }
 .hint { color: #8899aa; font-size: 12px; }
+.guide-wrap { padding: 4px 8px 16px; max-width: 960px; }
+.guide-h3 { margin: 18px 0 10px; font-size: 15px; font-weight: 700; color: #1f2d3d; }
+.guide-h3:first-of-type { margin-top: 4px; }
+.guide-p, .guide-ol { font-size: 13px; line-height: 1.7; color: #5a6b87; margin: 0 0 12px; }
+.guide-ol { padding-left: 20px; }
+.guide-ol li { margin-bottom: 6px; }
+.guide-steps { margin: 12px 0 20px; }
+.guide-alerts { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.guide-foot { font-size: 12px; color: #8a9bb5; margin-top: 8px; }
+.guide-wrap code { font-size: 12px; background: #f0f4f8; padding: 1px 5px; border-radius: 4px; }
 </style>
