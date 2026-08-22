@@ -50,31 +50,6 @@
       </div>
     </div>
 
-    <!-- 最近几天新增的功能 -->
-    <el-card shadow="hover" class="recent-card">
-      <template #header>
-        <div class="loop-hd">
-          <span class="loop-title">最近几天新增的功能</span>
-          <el-tag type="danger" effect="dark" size="small">NEW</el-tag>
-        </div>
-      </template>
-      <div class="recent-grid">
-        <router-link
-          v-for="r in recentFeatures"
-          :key="r.title"
-          :to="r.to"
-          class="recent-item"
-        >
-          <div class="recent-top">
-            <span class="recent-title">{{ r.title }}</span>
-            <el-tag size="small" :type="r.tagType || 'danger'" effect="plain">{{ r.tag }}</el-tag>
-          </div>
-          <div class="recent-desc">{{ r.desc }}</div>
-          <div class="recent-meta">{{ r.meta }}</div>
-        </router-link>
-      </div>
-    </el-card>
-
     <!-- 训练闭环快捷入口 -->
     <el-card shadow="hover" class="loop-card">
       <template #header>
@@ -184,100 +159,43 @@ const heroTags = [
   { label: "RBAC 权限", color: "#52c41a" },
 ];
 
-/** 首页「最近几天新增」卡片（与 README / 功能文章保持一致） */
-const recentFeatures = [
-  {
-    title: "跨镜 MTMC 重识别",
-    tag: "重点",
-    tagType: "danger",
-    desc: "多路共享拉流 → 局部 Tracklet → 强 ReID 并联 Youtu → 车辆车牌融合 → 全局 ID；监控墙可开 AI 叠加。",
-    meta: "入口：视觉识别 → 跨镜重识别 · /ai/mtmc",
-    to: { path: "/ai/mtmc" },
-  },
-  {
-    title: "McByte++ 关联解耦",
-    tag: "优化",
-    tagType: "warning",
-    desc: "短时粘性关联与新生才走长时 ReID，降低无效特征提取；可选 BoT-SORT + CMC，跨镜更稳。",
-    meta: "配套：跨镜会话 · 监控墙叠加",
-    to: { path: "/ai/mtmc" },
-  },
-  {
-    title: "跌倒检测（含视频模式）",
-    tag: "NEW",
-    tagType: "danger",
-    desc: "姿态四指标判定；图片 / 视频 / 摄像头；异步出标注视频与触发事件；告警页规则 + 告警音。",
-    meta: "入口：/ai/fall · 告警规则 fall_detection",
-    to: { path: "/ai/fall" },
-  },
-  {
-    title: "手势识别 · 中国手语",
-    tag: "NEW",
-    tagType: "danger",
-    desc: "MediaPipe 数字手势 + YOLO 中国手语；可多选同跑；视频序列输出，适合指令与演示场景。",
-    meta: "入口：/ai/handpose",
-    to: { path: "/ai/handpose" },
-  },
-  {
-    title: "项目门户（双前端）",
-    tag: "架构",
-    tagType: "success",
-    desc: "frontend_home :5174 宣传入口 + 控制台深链；Cookie 登录态互通；顶栏可回跳门户。",
-    meta: "本机 http://localhost:5174",
-    to: { path: "/index" },
-  },
-  {
-    title: "Windows 屏幕 RTSP",
-    tag: "运维",
-    tagType: "info",
-    desc: "本机桌面推流进摄像头管理 / 监控墙，方便无实体摄像头时联调检测与跨镜。",
-    meta: "文档：docs/camera-screen-rtsp.md",
-    to: { path: "/camera" },
-  },
-];
-
-const TASK_LABELS = {
-  "object-detection": "目标检测",
-  "instance-segmentation": "实例分割",
-  "interactive-segmentation": "交互分割",
-  "pose-estimation": "姿态估计",
-  "image-classification": "图像分类",
-  "ocr": "OCR(端到端)",
-  "text-detection": "文本检测",
-  "text-recognition": "文本识别(行)",
-  "table-structure": "表格结构",
-  "text-classification": "文本分类",
-  "zero-shot-classification": "零样本分类",
-  "fill-mask": "完形填空",
-  translation: "翻译",
-  summarization: "摘要",
-  "text-generation": "文本生成",
-  "token-classification": "实体识别",
-  "question-answering": "问答",
-  "automatic-speech-recognition": "语音识别",
-  "text-to-speech": "语音合成",
-  "talking-head": "数字人",
-};
-const taskLabel = (t) => TASK_LABELS[t] || t || "其他";
-
+/** 首页「热门场景」快捷入口（含近期新增能力，精简展示） */
 const sceneCards = [
   {
     title: "跨镜重识别",
     badge: "NEW",
-    desc: "多路 MTMC · 全局 ID · 车辆车牌融合 · 监控墙 AI 叠加",
+    desc: "多路 MTMC · McByte++ 关联 · 全局 ID · 车牌融合 · 监控墙 AI 叠加",
     to: { path: "/ai/mtmc" },
   },
   {
     title: "跌倒检测",
     badge: "NEW",
-    desc: "姿态四指标判定 · 图片/视频/摄像头 · 触发记录与结果视频同步告警音",
+    desc: "姿态四指标判定 · 图片/视频/摄像头 · 告警规则与告警音",
     to: { path: "/ai/fall" },
   },
   {
     title: "手势识别",
     badge: "NEW",
-    desc: "数字手势 MediaPipe · 中国手语 YOLO · 可多选同跑 · 视频识别序列",
+    desc: "MediaPipe 数字手势 · 中国手语 YOLO · 可多选同跑",
     to: { path: "/ai/handpose" },
+  },
+  {
+    title: "吸烟行为检测",
+    badge: "NEW",
+    desc: "YOLO26s 禁烟区监控 · 吸烟告警规则 · 图片/视频/摄像头",
+    to: { path: "/ai/image" },
+  },
+  {
+    title: "项目门户",
+    badge: "NEW",
+    desc: "frontend_home 宣传入口 · Cookie 登录态互通 · 控制台深链",
+    to: { path: "/index" },
+  },
+  {
+    title: "屏幕 RTSP 推流",
+    badge: "NEW",
+    desc: "Windows 桌面推流进摄像头/监控墙 · 无实体摄像头联调",
+    to: { path: "/camera" },
   },
   {
     title: "人员离岗检测",
@@ -306,7 +224,7 @@ const sceneCards = [
   },
   {
     title: "检测告警",
-    desc: "烟火 / 聚集 / PPE / 越线 / 跌倒规则 · 事件与叠加",
+    desc: "烟火 / 聚集 / PPE / 越线 / 跌倒 / 吸烟规则 · 事件与叠加",
     to: { path: "/ai/alert" },
   },
   {
@@ -315,6 +233,30 @@ const sceneCards = [
     to: { path: "/ai/model" },
   },
 ];
+
+const TASK_LABELS = {
+  "object-detection": "目标检测",
+  "instance-segmentation": "实例分割",
+  "interactive-segmentation": "交互分割",
+  "pose-estimation": "姿态估计",
+  "image-classification": "图像分类",
+  "ocr": "OCR(端到端)",
+  "text-detection": "文本检测",
+  "text-recognition": "文本识别(行)",
+  "table-structure": "表格结构",
+  "text-classification": "文本分类",
+  "zero-shot-classification": "零样本分类",
+  "fill-mask": "完形填空",
+  translation: "翻译",
+  summarization: "摘要",
+  "text-generation": "文本生成",
+  "token-classification": "实体识别",
+  "question-answering": "问答",
+  "automatic-speech-recognition": "语音识别",
+  "text-to-speech": "语音合成",
+  "talking-head": "数字人",
+};
+const taskLabel = (t) => TASK_LABELS[t] || t || "其他";
 
 const trainSteps = [
   { title: "新建数据集", desc: "yolo_flat 格式，配置检测类别" },
@@ -562,51 +504,6 @@ onBeforeUnmount(() => {
   line-height: 22px;
   padding: 0 8px;
 }
-.recent-card {
-  margin-bottom: 16px;
-}
-.recent-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-}
-.recent-item {
-  display: block;
-  padding: 14px 16px;
-  border-radius: 10px;
-  border: 1px solid #e8eef8;
-  background: #f8fafc;
-  text-decoration: none;
-  color: inherit;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
-}
-.recent-item:hover {
-  border-color: #9ec5ff;
-  box-shadow: 0 4px 14px rgba(31, 111, 235, 0.12);
-  transform: translateY(-1px);
-}
-.recent-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.recent-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #1f2d3d;
-}
-.recent-desc {
-  font-size: 13px;
-  line-height: 1.55;
-  color: #5a6b87;
-  margin-bottom: 8px;
-}
-.recent-meta {
-  font-size: 12px;
-  color: #8a9bb5;
-}
 .loop-card {
   margin-bottom: 16px;
 }
@@ -757,9 +654,6 @@ onBeforeUnmount(() => {
   .scene-grid {
     grid-template-columns: repeat(3, 1fr);
   }
-  .recent-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
 }
 @media (max-width: 900px) {
   .scene-grid {
@@ -771,9 +665,6 @@ onBeforeUnmount(() => {
     grid-template-columns: repeat(2, 1fr);
   }
   .scene-grid {
-    grid-template-columns: 1fr;
-  }
-  .recent-grid {
     grid-template-columns: 1fr;
   }
   .loop-step {
