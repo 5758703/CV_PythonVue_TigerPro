@@ -841,16 +841,18 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
                 if cfg.ocr_fn is not None:
                     try:
-                        from services.vehicle_track import _pick_plate_bbox, _ocr_plate
-                        pb = _pick_plate_bbox(t.bbox, frame, cfg.plate_model_path, 0.2)
-                        if pb:
-                            ocr = _ocr_plate(cfg.ocr_fn, frame, pb)
+                        from services.vehicle_track import _plate_candidates, _ocr_plate
+                        for pb, _src, _q, warp in _plate_candidates(
+                            t.bbox, frame, cfg.plate_model_path, 0.2,
+                        ):
+                            ocr = _ocr_plate(cfg.ocr_fn, frame, pb, warped=warp)
                             plate_text = ocr.get("text")
                             plate_score = float(ocr.get("score") or 0)
                             if plate_text:
                                 vsession.plates[t.track_id] = {
                                     "text": plate_text, "score": plate_score, "source": "mtmc",
                                 }
+                                break
                     except Exception:  # noqa: BLE001
                         pass
                 if not plate_text and t.track_id in vsession.plates:

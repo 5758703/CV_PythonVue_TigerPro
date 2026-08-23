@@ -186,13 +186,22 @@ class MtmcAssociator:
         identity_key: str | None,
         target: GlobalTrack,
     ) -> bool:
-        """硬冲突：高置信车牌/身份键不一致时拒绝合并。"""
+        """硬冲突：高置信车牌不一致时拒绝合并。
+
+        NOPLATE|* 仅为无牌视觉代理，跨视角 hash 必然不同，不得视为冲突。
+        """
         if object_type != "vehicle":
             return False
         ik = _valid_identity_key(identity_key)
         g_ik = _valid_identity_key(target.identity_key)
         if ik and g_ik and ik != g_ik:
-            return True
+            if ik.startswith("NOPLATE|") or g_ik.startswith("NOPLATE|"):
+                pass
+            else:
+                p1 = ik.split("|", 1)[0]
+                p2 = g_ik.split("|", 1)[0]
+                if p1 != p2:
+                    return True
         p = (plate or "").strip().upper()
         gp = (target.plate or "").strip().upper()
         if p and gp and p != gp and p not in _INVALID_IDENTITY_KEYS and gp not in _INVALID_IDENTITY_KEYS:
@@ -209,12 +218,24 @@ class MtmcAssociator:
         plate: str | None = None,
         identity_key: str | None = None,
     ):
+        seen: set[str] = set()
+        plate_norm = (plate or "").strip().upper()
+        if plate_norm:
+            for gid, g in self.tracks.items():
+                if gid in excluded or g.object_type != object_type:
+                    continue
+                gp = (g.plate or "").strip().upper()
+                if gp and gp == plate_norm:
+                    seen.add(gid)
+                    yield g
         has_id_signal = bool(
             reid_person_id
-            or plate
-            or _valid_identity_key(identity_key)
+            or plate_norm
+            or (
+                _valid_identity_key(identity_key)
+                and not str(identity_key).startswith("NOPLATE|")
+            )
         )
-        seen: set[str] = set()
         if (
             not has_id_signal
             and self.use_faiss_gallery
@@ -447,6 +468,8 @@ class MtmcAssociator:
         appear_need = self.same_cam_appear_thresh if same_cam else self.appear_thresh
         if object_type == "vehicle":
             appear_need = max(appear_need, self.vehicle_appear_thresh)
+            if not same_cam:
+                appear_need = min(appear_need, max(0.42, self.vehicle_appear_thresh - 0.06))
         if same_cam:
             appear_need = max(appear_need, self.appear_thresh + 0.12)
 

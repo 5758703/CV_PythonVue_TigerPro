@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.mtmc_associator import MtmcAssociator
+from services.mtmc_associator import MtmcAssociator, AssocMode
 from services.mtmc_local_track import LocalTracker, ByteTrackLocalTracker, bytetrack_available, create_local_tracker
 from services.vehicle_reid_feat import fuse_plate_visual, visual_key_from_embedding, _color_hist_embedding
 from services.strong_reid import cosine, _pad_or_trim, _l2
@@ -339,6 +339,26 @@ def test_hard_conflict_plate_reject():
         local_track_id=2, exclude_gids=claimed, now=5.0,
     )
     assert g2.global_id != g1.global_id
+
+
+def test_vehicle_cross_cam_noplate_visual_merge():
+    """无牌时 NOPLATE|* 视觉键跨视角不同，但 embedding 相似应跨镜合并。"""
+    assoc = MtmcAssociator(appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48)
+    emb = _l2(np.random.randn(64).astype(np.float32))
+    noise = _l2(emb + np.random.randn(64).astype(np.float32) * 0.05)
+    fuse_a = fuse_plate_visual(plate=None, plate_score=0, emb_a=emb, emb_b=emb)
+    fuse_b = fuse_plate_visual(plate=None, plate_score=0, emb_a=noise, emb_b=noise)
+    assert fuse_a["identityKey"] != fuse_b["identityKey"]
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb,
+        identity_key=fuse_a["identityKey"], local_track_id=1, exclude_gids=set(), now=100.0,
+    )
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=noise,
+        identity_key=fuse_b["identityKey"], local_track_id=3, exclude_gids=set(), now=100.01,
+    )
+    assert g1.global_id == g2.global_id
+    assert assoc.last_mode == AssocMode.LONG_TERM
 
 
 def test_active_gallery_faiss_search():

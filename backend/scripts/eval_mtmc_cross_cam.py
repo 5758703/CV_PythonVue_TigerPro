@@ -78,7 +78,7 @@ class EvalState:
 def load_models():
     from app import create_app
     from models import AiModel
-    from routes.mtmc import _abs_weight
+    from routes.mtmc import _abs_weight, _pick_model, _build_ocr_fn
     from services.vehicle_reid_feat import assets_ready
 
     app = create_app()
@@ -94,6 +94,8 @@ def load_models():
         if strong_m is None:
             strong_m = AiModel.query.filter_by(model_key="clip-reid-person", status="0").first()
         vreid_m = AiModel.query.filter_by(model_key="transreid-vehicle", status="0").first()
+        plate_m = _pick_model(None, keys=["yolo26s-plate-pose", "yolo26n-plate"])
+        ocr_fn = _build_ocr_fn(None, None)
         det_person = _abs_weight(person_m)
         det_vehicle = _abs_weight(vehicle_m)
         youtu_root = _abs_weight(youtu_m)
@@ -106,8 +108,38 @@ def load_models():
             "youtu_root": youtu_root,
             "strong_reid_root": strong_root,
             "vehicle_reid_root": vehicle_reid_root,
+            "plate_model_path": _abs_weight(plate_m),
+            "ocr_fn": ocr_fn,
             "has_vehicle_reid": has_vehicle_reid,
         }
+
+
+def _vehicle_fuse_from_track(t, frame, models: dict):
+    from services.mtmc_engine import _crop
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
+    from services.vehicle_track import _plate_candidates, _ocr_plate
+
+    crop = _crop(frame, t.bbox)
+    if crop is None:
+        return None, {}
+    emb, _ = extract_vehicle_embedding(models["vehicle_reid_root"], crop)
+    plate_text, plate_score = None, 0.0
+    if models.get("ocr_fn") and models.get("plate_model_path"):
+        try:
+            for pb, _src, _q, warp in _plate_candidates(
+                t.bbox, frame, models["plate_model_path"], 0.2,
+            ):
+                ocr = _ocr_plate(models["ocr_fn"], frame, pb, warped=warp)
+                if ocr.get("text"):
+                    plate_text = ocr.get("text")
+                    plate_score = float(ocr.get("score") or 0)
+                    break
+        except Exception:
+            pass
+    fuse = fuse_plate_visual(
+        plate=plate_text, plate_score=plate_score, emb_a=emb, emb_b=emb,
+    )
+    return emb, fuse
 
 
 def build_session(models: dict, sample_fps: float):
@@ -331,16 +363,15 @@ def process_video_fast(
                 })
 
         for t in tracks_v:
-            crop = _crop(small, t.bbox)
-            if crop is None:
+            emb, fuse = _vehicle_fuse_from_track(t, small, models)
+            if emb is None:
                 continue
-            emb, _ = extract_vehicle_embedding(models["vehicle_reid_root"], crop)
-            fuse = fuse_plate_visual(plate=None, plate_score=0, emb_a=emb, emb_b=emb)
             g = associator.associate(
                 object_type="vehicle",
                 camera_id=cid,
                 embedding=emb,
                 identity_key=fuse.get("identityKey"),
+                plate=fuse.get("plate"),
                 local_track_id=int(t.track_id),
                 exclude_gids=claimed_v,
                 now=now,
@@ -471,16 +502,14 @@ def run_interleaved_eval(
                         "transitSec": round(t, 2), "ts": now,
                     })
             for tr in tracks_v:
-                crop = _crop(small, tr.bbox)
-                if crop is None:
+                emb, fuse = _vehicle_fuse_from_track(tr, small, models)
+                if emb is None:
                     continue
-                emb, _ = extract_vehicle_embedding(models["vehicle_reid_root"], crop)
-                fuse = fuse_plate_visual(plate=None, plate_score=0, emb_a=emb, emb_b=emb)
                 cams_before = set(eval_state.global_cams.get("", set()))
                 g = session.associator.associate(
                     object_type="vehicle", camera_id=cid, embedding=emb,
-                    identity_key=fuse.get("identityKey"), local_track_id=int(tr.track_id),
-                    exclude_gids=claimed_v, now=now,
+                    identity_key=fuse.get("identityKey"), plate=fuse.get("plate"),
+                    local_track_id=int(tr.track_id), exclude_gids=claimed_v, now=now,
                 )
                 claimed_v.add(g.global_id)
                 cams_before = set(eval_state.global_cams.get(g.global_id, set()))

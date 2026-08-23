@@ -54,7 +54,32 @@ def _pick_model(mid: int | None, *, task=None, library=None, keys=None):
     return m
 
 
+def _pick_ocr_models():
+    det = _pick_model(
+        None,
+        task="ocr",
+        keys=["paddleocr-det", "PP-OCRv6_small_det_onnx", "pp-ocrv6-det"],
+    )
+    rec = _pick_model(
+        None,
+        task="ocr",
+        keys=["paddleocr-rec", "PP-OCRv6_small_rec_onnx", "pp-ocrv6-rec"],
+    )
+    return det, rec
+
+
 def _build_ocr_fn(det_id, rec_id):
+    if det_id and rec_id:
+        fn = _build_ocr_fn_from_ids(det_id, rec_id)
+        if fn:
+            return fn
+    det_m, rec_m = _pick_ocr_models()
+    if det_m and rec_m:
+        return _build_ocr_fn_from_ids(det_m.id, rec_m.id)
+    return None
+
+
+def _build_ocr_fn_from_ids(det_id, rec_id):
     if not det_id or not rec_id:
         return None
     det_m = AiModel.query.get(det_id)

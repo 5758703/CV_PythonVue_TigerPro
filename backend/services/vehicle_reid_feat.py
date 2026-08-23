@@ -191,7 +191,7 @@ def fuse_plate_visual(
     if plate_ok and vkey:
         identity = f"{plate_text}|{vkey}"
     elif plate_ok:
-        identity = f"{plate_text}|P"
+        identity = plate_text
     elif vkey:
         identity = f"NOPLATE|{vkey}"
     else:
