@@ -567,3 +567,26 @@ def test_active_gallery_faiss_search():
         return
     hits = gal.search("person", emb, topk=3)
     assert hits and hits[0][0] == "P000001" and hits[0][1] > 0.99
+
+
+def test_public_live_det_omits_full_trail():
+    from services.mtmc_engine import _public_live_det
+
+    raw = {
+        "objectType": "person",
+        "globalId": "P000001-abc",
+        "localTrackId": 3,
+        "trackletId": "t1",
+        "label": "P000001-abc|匿名",
+        "bbox": [1, 2, 3, 4],
+        "score": 0.55,
+        "displayName": "匿名",
+        "trail": [[10, 10], [12, 12], [14, 14]],
+        "attrs": {"assocMode": "long_term", "cameraId": 71},
+    }
+    out = _public_live_det(raw)
+    assert "trail" not in out
+    assert out["trailTip"] == [14, 14]
+    assert out["assocMode"] == "long_term"
+    assert out["globalId"] == "P000001-abc"
+    assert out["localTrackId"] == 3

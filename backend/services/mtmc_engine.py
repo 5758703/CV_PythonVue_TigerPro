@@ -84,6 +84,32 @@ class CamState:
     vehicle_builders: dict = field(default_factory=dict)
 
 
+def _public_live_det(d: dict) -> dict:
+    """Compact current-frame detection for session snapshot / UI (no full trail)."""
+    attrs = d.get("attrs") or {}
+    trail = d.get("trail") or []
+    tip = trail[-1] if trail else None
+    return {
+        "objectType": d.get("objectType"),
+        "globalId": d.get("globalId"),
+        "localTrackId": d.get("localTrackId"),
+        "trackletId": d.get("trackletId"),
+        "label": d.get("label"),
+        "bbox": d.get("bbox"),
+        "score": d.get("score"),
+        "displayName": d.get("displayName"),
+        "reidPersonId": d.get("reidPersonId"),
+        "plate": d.get("plate"),
+        "identityKey": d.get("identityKey"),
+        "plateScore": d.get("plateScore"),
+        "visualScore": d.get("visualScore"),
+        "fuseScore": d.get("fuseScore"),
+        "speedKmh": d.get("speedKmh"),
+        "assocMode": attrs.get("assocMode"),
+        "trailTip": tip,
+    }
+
+
 class MtmcSession:
     def __init__(self, session_id: str, cfg: MtmcConfig, associator, app=None):
         self.session_id = session_id
@@ -133,6 +159,8 @@ class MtmcSession:
                     "frameSeq": st.frame_seq,
                     "detCount": len(st.last_dets),
                     "congestion": st.congestion,
+                    "updatedAt": st.last_process_at,
+                    "detections": [_public_live_det(d) for d in (st.last_dets or [])],
                 }
                 for cid, st in self.cams.items()
             },
