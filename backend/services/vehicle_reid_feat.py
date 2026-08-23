@@ -150,6 +150,43 @@ def visual_key_from_embedding(emb: np.ndarray, prefix: str = "V") -> str:
     return f"{prefix}{digest}"
 
 
+_VEHICLE_LARGE = frozenset({"truck", "bus"})
+_VEHICLE_CAR = frozenset({"car"})
+_VEHICLE_MOTOR = frozenset({"motorcycle", "motorbike"})
+
+
+def vehicle_class_bucket(class_name: str | None) -> str:
+    """YOLO 细类 → 粗桶（large/car/motor/unknown），用于跨镜类别门控。"""
+    n = (class_name or "").strip().lower()
+    if n in _VEHICLE_LARGE:
+        return "large"
+    if n in _VEHICLE_CAR:
+        return "car"
+    if n in _VEHICLE_MOTOR:
+        return "motor"
+    return "unknown"
+
+
+def vehicle_class_conflict(a: str | None, b: str | None) -> bool:
+    """双方类别均可判定时，truck/bus 与 car 等互斥。"""
+    ba, bb = vehicle_class_bucket(a), vehicle_class_bucket(b)
+    if ba == "unknown" or bb == "unknown":
+        return False
+    return ba != bb
+
+
+def plate_reliable(plate: str | None, score: float | None = None) -> bool:
+    """车牌 OCR 是否可信：低分或过短视为噪声，不参与硬冲突/身份键。"""
+    p = (plate or "").strip().upper()
+    if not p or p in ("UNKNOWN", "NONE", "NULL"):
+        return False
+    if score is not None and float(score) < 0.55:
+        return False
+    if len(p) < 6:
+        return False
+    return any(c.isalnum() for c in p)
+
+
 def fuse_plate_visual(
     *,
     plate: str | None,
@@ -179,7 +216,7 @@ def fuse_plate_visual(
             b = bb
         visual_sim = float(np.dot(a, b))
 
-    plate_ok = bool(plate_text) and float(plate_score) >= 0.35
+    plate_ok = plate_reliable(plate_text, plate_score)
     pw = float(plate_weight) if plate_ok else 0.0
     vw = float(visual_weight) if emb_a is not None else 0.0
     if pw + vw <= 1e-6:

@@ -361,6 +361,73 @@ def test_vehicle_cross_cam_noplate_visual_merge():
     assert assoc.last_mode == AssocMode.LONG_TERM
 
 
+def test_garbage_plate_no_hard_conflict_merge():
+    """OCR 噪声车牌不得阻断高相似视觉跨镜合并。"""
+    assoc = MtmcAssociator(appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48)
+    emb = _l2(np.random.randn(64).astype(np.float32))
+    noise = _l2(emb + np.random.randn(64).astype(np.float32) * 0.04)
+    fuse_a = fuse_plate_visual(plate="UNEC", plate_score=0.88, emb_a=emb, emb_b=emb)
+    fuse_b = fuse_plate_visual(plate="LMM", plate_score=0.88, emb_a=noise, emb_b=noise)
+    assert not fuse_a["plateOk"]
+    assert not fuse_b["plateOk"]
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb,
+        identity_key=fuse_a["identityKey"], plate=fuse_a["plate"],
+        local_track_id=1, exclude_gids=set(), now=100.0,
+    )
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=noise,
+        identity_key=fuse_b["identityKey"], plate=fuse_b["plate"],
+        local_track_id=3, exclude_gids=set(), now=101.0,
+    )
+    assert g1.global_id == g2.global_id
+
+
+def test_vehicle_cross_cam_takeover_same_cam_sibling():
+    """同镜误占 Global 时，新 local 应能通过跨镜原型接管正确 Global。"""
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48,
+        vehicle_sticky_warmup_sec=0.0,
+    )
+    emb_cam81 = _l2(np.random.randn(64).astype(np.float32))
+    emb_wrong71 = _l2(emb_cam81 + np.random.randn(64).astype(np.float32) * 0.05)
+    emb_right71 = _l2(emb_cam81 + np.random.randn(64).astype(np.float32) * 0.02)
+
+    g81 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=emb_cam81,
+        local_track_id=4, exclude_gids=set(), now=200.0,
+    )
+    assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb_wrong71,
+        local_track_id=3, exclude_gids=set(), now=200.5,
+    )
+    assert assoc._local_bind.get(("vehicle", 71, 3)) == g81.global_id
+
+    g_new = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb_right71,
+        local_track_id=5, exclude_gids=set(), now=201.0,
+    )
+    assert g_new.global_id == g81.global_id
+    assert assoc._local_bind.get(("vehicle", 71, 5)) == g81.global_id
+    assert ("vehicle", 71, 3) not in assoc._local_bind
+
+
+def test_vehicle_class_mismatch_blocks_cross_cam_merge():
+    """货车与轿车类别互斥时，即使视觉相似也不应跨镜合并。"""
+    assoc = MtmcAssociator(appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48)
+    emb_truck = _l2(np.random.randn(64).astype(np.float32))
+    emb_car_like = _l2(emb_truck + np.random.randn(64).astype(np.float32) * 0.03)
+    g_truck = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb_truck,
+        vehicle_class="truck", local_track_id=1, exclude_gids=set(), now=100.0,
+    )
+    g_car = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=emb_car_like,
+        vehicle_class="car", local_track_id=2, exclude_gids=set(), now=101.0,
+    )
+    assert g_truck.global_id != g_car.global_id
+
+
 def test_active_gallery_faiss_search():
     from services.mtmc_active_gallery import MtmcActiveGallery
 

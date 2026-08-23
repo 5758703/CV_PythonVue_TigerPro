@@ -19,6 +19,8 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from services.vehicle_reid_feat import plate_reliable, vehicle_class_conflict
+
 _INVALID_IDENTITY_KEYS = frozenset({"", "UNKNOWN|U", "UNKNOWN", "NONE", "NULL"})
 
 
@@ -73,6 +75,7 @@ class GlobalTrack:
     plate: str | None = None
     identity_key: str | None = None
     visual_key: str | None = None
+    vehicle_class: str | None = None
     hit_count: int = 1
     trail_by_cam: dict[int, list] = field(default_factory=dict)
     local_track_id: int | None = None
@@ -135,6 +138,8 @@ class MtmcAssociator:
         candidate_thresh: float | None = None,
         use_faiss_gallery: bool = True,
         gallery_model_key: str | None = None,
+        # 车辆：local 绑定后短时内仍允许外观重匹配（避免首帧误绑 sticky）
+        vehicle_sticky_warmup_sec: float = 2.0,
     ):
         self.appear_thresh = float(appear_thresh)
         self.vehicle_appear_thresh = float(
@@ -159,10 +164,12 @@ class MtmcAssociator:
         self.lost_revive_sec = float(lost_revive_sec)
         self.local_sticky_sec = float(local_sticky_sec)
         self.mcbyte_decouple = bool(mcbyte_decouple)
+        self.vehicle_sticky_warmup_sec = float(vehicle_sticky_warmup_sec)
         self._lock = threading.Lock()
         self.tracks: dict[str, GlobalTrack] = {}
         # (object_type, camera_id, local_track_id) -> global_id
         self._local_bind: dict[tuple[str, int, int], str] = {}
+        self._local_bind_at: dict[tuple[str, int, int], float] = {}
         self._seq = 0
         self.last_mode: AssocMode = AssocMode.NEW
         self.last_evidence: AssocEvidence | None = None
@@ -173,7 +180,12 @@ class MtmcAssociator:
 
     def _gallery_upsert(self, g: GlobalTrack) -> None:
         if g.embedding is not None:
-            self._gallery.upsert(g.object_type, g.global_id, g.embedding)
+            self._gallery.upsert(
+                g.object_type,
+                g.global_id,
+                g.embedding,
+                camera_id=g.camera_id,
+            )
 
     def _gallery_remove(self, object_type: str, global_id: str) -> None:
         self._gallery.remove(object_type, global_id)
@@ -184,6 +196,7 @@ class MtmcAssociator:
         *,
         plate: str | None,
         identity_key: str | None,
+        vehicle_class: str | None = None,
         target: GlobalTrack,
     ) -> bool:
         """硬冲突：高置信车牌不一致时拒绝合并。
@@ -192,6 +205,8 @@ class MtmcAssociator:
         """
         if object_type != "vehicle":
             return False
+        if vehicle_class_conflict(vehicle_class, target.vehicle_class):
+            return True
         ik = _valid_identity_key(identity_key)
         g_ik = _valid_identity_key(target.identity_key)
         if ik and g_ik and ik != g_ik:
@@ -200,11 +215,15 @@ class MtmcAssociator:
             else:
                 p1 = ik.split("|", 1)[0]
                 p2 = g_ik.split("|", 1)[0]
-                if p1 != p2:
+                if p1 != p2 and plate_reliable(p1) and plate_reliable(p2):
                     return True
         p = (plate or "").strip().upper()
         gp = (target.plate or "").strip().upper()
-        if p and gp and p != gp and p not in _INVALID_IDENTITY_KEYS and gp not in _INVALID_IDENTITY_KEYS:
+        if (
+            plate_reliable(p)
+            and plate_reliable(gp)
+            and p != gp
+        ):
             return True
         return False
 
@@ -256,9 +275,23 @@ class MtmcAssociator:
                 continue
             yield g
 
-    def _prefer_on_tie(self, g_new: GlobalTrack, g_old: GlobalTrack, camera_id: int) -> bool:
-        """同分 tie-break：优先跨镜 Global，避免同镜误建重复 ID 抢占。"""
+    def _prefer_on_tie(
+        self,
+        g_new: GlobalTrack,
+        g_old: GlobalTrack,
+        camera_id: int,
+        *,
+        vehicle_class: str | None = None,
+        cross_proto_new: float = -1.0,
+        cross_proto_old: float = -1.0,
+    ) -> bool:
+        """同分 tie-break：跨镜 Global > 类别一致 > 更高 cross_proto。"""
+        if vehicle_class and g_new.vehicle_class and not vehicle_class_conflict(vehicle_class, g_new.vehicle_class):
+            if not g_old.vehicle_class or vehicle_class_conflict(vehicle_class, g_old.vehicle_class):
+                return True
         if g_new.camera_id != camera_id and g_old.camera_id == camera_id:
+            return True
+        if cross_proto_new >= 0 and cross_proto_old >= 0 and cross_proto_new > cross_proto_old + 1e-6:
             return True
         return False
 
@@ -322,6 +355,22 @@ class MtmcAssociator:
     def _bind_key(self, object_type: str, camera_id: int, local_track_id: int) -> tuple[str, int, int]:
         return (object_type, int(camera_id), int(local_track_id))
 
+    def _evict_same_cam_sibling_binds(
+        self,
+        object_type: str,
+        camera_id: int,
+        local_track_id: int,
+        global_id: str,
+    ) -> None:
+        """同镜另一 local 误占同一 Global 时解除粘性，让外观重匹配。"""
+        keep = self._bind_key(object_type, camera_id, int(local_track_id))
+        for k in list(self._local_bind.keys()):
+            if k == keep:
+                continue
+            if k[0] == object_type and k[1] == int(camera_id) and self._local_bind.get(k) == global_id:
+                self._local_bind.pop(k, None)
+                self._local_bind_at.pop(k, None)
+
     def peek_sticky(
         self,
         *,
@@ -379,6 +428,7 @@ class MtmcAssociator:
         face_person_id: int | None,
         display_name: str | None,
         visual_key: str | None,
+        vehicle_class: str | None,
         local_track_id: int | None,
         now: float,
         mode: AssocMode,
@@ -417,6 +467,8 @@ class MtmcAssociator:
             g.identity_key = ik
         if visual_key:
             g.visual_key = visual_key
+        if vehicle_class:
+            g.vehicle_class = str(vehicle_class).strip().lower()
         return g
 
     def _is_lost_for_revive(self, g: GlobalTrack, camera_id: int, now: float) -> bool:
@@ -433,6 +485,26 @@ class MtmcAssociator:
             pass
         return dt >= self.lost_revive_sec
 
+    def _same_cam_sibling_occupied(
+        self,
+        object_type: str,
+        camera_id: int,
+        global_id: str,
+        local_track_id: int | None,
+    ) -> bool:
+        if local_track_id is None:
+            return False
+        want = int(local_track_id)
+        for bkey, bgid in self._local_bind.items():
+            if (
+                bgid == global_id
+                and bkey[0] == object_type
+                and bkey[1] == int(camera_id)
+                and bkey[2] != want
+            ):
+                return True
+        return False
+
     def _score_long_term(
         self,
         g: GlobalTrack,
@@ -443,6 +515,8 @@ class MtmcAssociator:
         identity_key: str | None,
         plate: str | None,
         reid_person_id: int | None,
+        local_track_id: int | None = None,
+        vehicle_class: str | None = None,
         now: float,
     ) -> tuple[float | None, dict]:
         """仅用于新生 local track 的长时/跨镜外观匹配。返回 (final_score, breakdown)。"""
@@ -453,7 +527,27 @@ class MtmcAssociator:
             return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
 
         same_cam = g.camera_id == camera_id
-        if self.mcbyte_decouple:
+        cross_proto = -1.0
+        if object_type == "vehicle" and embedding is not None:
+            cross_proto = self._gallery.max_similarity(
+                object_type,
+                g.global_id,
+                embedding,
+                exclude_camera_id=camera_id,
+            )
+
+        sibling_occupied = self._same_cam_sibling_occupied(
+            object_type, camera_id, g.global_id, local_track_id,
+        )
+        cross_takeover = (
+            object_type == "vehicle"
+            and cross_proto >= 0
+            and (sibling_occupied or (same_cam and not self._is_lost_for_revive(g, camera_id, now)))
+        )
+
+        if cross_takeover:
+            pass
+        elif self.mcbyte_decouple:
             if not self._is_lost_for_revive(g, camera_id, now):
                 return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
             if same_cam and not self.same_cam_reuse:
@@ -468,9 +562,9 @@ class MtmcAssociator:
         appear_need = self.same_cam_appear_thresh if same_cam else self.appear_thresh
         if object_type == "vehicle":
             appear_need = max(appear_need, self.vehicle_appear_thresh)
-            if not same_cam:
+            if not same_cam or cross_takeover:
                 appear_need = min(appear_need, max(0.42, self.vehicle_appear_thresh - 0.06))
-        if same_cam:
+        if same_cam and not cross_takeover:
             appear_need = max(appear_need, self.appear_thresh + 0.12)
 
         score = 0.0
@@ -479,7 +573,12 @@ class MtmcAssociator:
         g_ik = _valid_identity_key(g.identity_key)
 
         if object_type == "vehicle":
-            if ik and g_ik and ik == g_ik:
+            if cross_takeover:
+                reid_raw = cross_proto
+                score = reid_raw
+                if score < appear_need:
+                    return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
+            elif ik and g_ik and ik == g_ik:
                 cos = _cos(embedding, g.embedding)
                 min_cos = appear_need
                 if cos >= 0 and cos < min_cos:
@@ -491,7 +590,16 @@ class MtmcAssociator:
                     return None, {"topology": topo_w, "time": time_w, "reid": cos, "final": None}
                 score, reid_raw = 0.92, cos if cos >= 0 else None
             else:
-                reid_raw = _cos(embedding, g.embedding)
+                centroid_cos = _cos(embedding, g.embedding)
+                if not same_cam and cross_proto >= 0:
+                    if vehicle_class_conflict(vehicle_class, g.vehicle_class):
+                        return None, {
+                            "topology": topo_w, "time": time_w,
+                            "reid": centroid_cos, "final": None, "classConflict": True,
+                        }
+                    reid_raw = cross_proto
+                else:
+                    reid_raw = centroid_cos
                 score = reid_raw
                 if score < appear_need:
                     return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
@@ -506,6 +614,7 @@ class MtmcAssociator:
         final = float(score * topo_w)
         return final, {
             "reid": reid_raw,
+            "crossProto": cross_proto if cross_proto >= 0 else None,
             "topology": topo_w,
             "time": time_w,
             "final": final,
@@ -524,6 +633,7 @@ class MtmcAssociator:
         face_person_id: int | None = None,
         display_name: str | None = None,
         visual_key: str | None = None,
+        vehicle_class: str | None = None,
         local_track_id: int | None = None,
         exclude_gids: Iterable[str] | None = None,
         now: float | None = None,
@@ -538,6 +648,7 @@ class MtmcAssociator:
         now = float(now if now is not None else time.time())
         excluded = set(exclude_gids or ())
         identity_key = _valid_identity_key(identity_key)
+        vc = str(vehicle_class).strip().lower() if vehicle_class else None
 
         with self._lock:
             self._purge_expired(now)
@@ -550,7 +661,49 @@ class MtmcAssociator:
                 if sticky_gid and sticky_gid not in excluded:
                     g = self.tracks.get(sticky_gid)
                     if g is not None and g.object_type == object_type:
-                        if now - g.last_seen <= self.local_sticky_sec:
+                        skip_sticky = False
+                        if (
+                            object_type == "vehicle"
+                            and embedding is not None
+                            and self.vehicle_sticky_warmup_sec > 0
+                        ):
+                            bind_at = self._local_bind_at.get(bkey)
+                            if bind_at is not None and (now - bind_at) < self.vehicle_sticky_warmup_sec:
+                                skip_sticky = True
+                        if (
+                            not skip_sticky
+                            and object_type == "vehicle"
+                            and embedding is not None
+                            and g.embedding is not None
+                        ):
+                            cur_cos = _cos(embedding, g.embedding)
+                            drift_need = max(0.40, self.vehicle_appear_thresh - 0.08)
+                            if cur_cos >= 0 and cur_cos < drift_need:
+                                skip_sticky = True
+                            elif (
+                                self.use_faiss_gallery
+                                and self._gallery.size(object_type) > 0
+                            ):
+                                best_cross = -1.0
+                                for alt_gid, _sim in self._gallery.search(
+                                    object_type, embedding, topk=12,
+                                ):
+                                    if alt_gid == g.global_id:
+                                        continue
+                                    cp = self._gallery.max_similarity(
+                                        object_type,
+                                        alt_gid,
+                                        embedding,
+                                        exclude_camera_id=camera_id,
+                                    )
+                                    if cp > best_cross:
+                                        best_cross = cp
+                                if (
+                                    best_cross >= self.vehicle_appear_thresh
+                                    and best_cross > cur_cos + 0.06
+                                ):
+                                    skip_sticky = True
+                        if not skip_sticky and now - g.last_seen <= self.local_sticky_sec:
                             self.last_mode = AssocMode.STICKY
                             self.last_evidence = AssocEvidence(
                                 decision=AssocMode.STICKY.value,
@@ -569,6 +722,7 @@ class MtmcAssociator:
                                 face_person_id=face_person_id,
                                 display_name=display_name,
                                 visual_key=visual_key,
+                                vehicle_class=vc,
                                 local_track_id=int(local_track_id),
                                 now=now,
                                 mode=AssocMode.STICKY,
@@ -608,6 +762,7 @@ class MtmcAssociator:
                         object_type,
                         plate=plate,
                         identity_key=identity_key,
+                        vehicle_class=vc,
                         target=g,
                     ):
                         continue
@@ -619,10 +774,13 @@ class MtmcAssociator:
                         identity_key=identity_key,
                         plate=plate,
                         reid_person_id=reid_person_id,
+                        local_track_id=int(local_track_id) if local_track_id is not None else None,
+                        vehicle_class=vc,
                         now=now,
                     )
                     if score is None:
                         continue
+                    cp = float(breakdown.get("crossProto") or -1.0)
                     if score > best_score:
                         best_score = score
                         best_gid = g.global_id
@@ -630,7 +788,14 @@ class MtmcAssociator:
                     elif (
                         score == best_score
                         and best_gid is not None
-                        and self._prefer_on_tie(g, self.tracks[best_gid], camera_id)
+                        and self._prefer_on_tie(
+                            g,
+                            self.tracks[best_gid],
+                            camera_id,
+                            vehicle_class=vc,
+                            cross_proto_new=cp,
+                            cross_proto_old=float(best_breakdown.get("crossProto") or -1.0),
+                        )
                     ):
                         best_gid = g.global_id
                         best_breakdown = breakdown
@@ -667,6 +832,7 @@ class MtmcAssociator:
                     face_person_id=face_person_id,
                     display_name=display_name,
                     visual_key=visual_key,
+                    vehicle_class=vc,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     now=now,
                     mode=AssocMode.LONG_TERM,
@@ -699,6 +865,7 @@ class MtmcAssociator:
                     plate=plate,
                     identity_key=identity_key,
                     visual_key=visual_key,
+                    vehicle_class=vc,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     last_assoc_mode=AssocMode.CANDIDATE.value,
                 )
@@ -743,6 +910,7 @@ class MtmcAssociator:
                     plate=plate,
                     identity_key=identity_key,
                     visual_key=visual_key,
+                    vehicle_class=vc,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     last_assoc_mode=AssocMode.NEW.value,
                 )
@@ -759,7 +927,17 @@ class MtmcAssociator:
                 )
 
             if local_track_id is not None:
-                self._local_bind[self._bind_key(object_type, camera_id, int(local_track_id))] = g.global_id
+                bkey = self._bind_key(object_type, camera_id, int(local_track_id))
+                if (
+                    object_type == "vehicle"
+                    and self.last_mode == AssocMode.LONG_TERM
+                ):
+                    self._evict_same_cam_sibling_binds(
+                        object_type, camera_id, int(local_track_id), g.global_id,
+                    )
+                if bkey not in self._local_bind_at:
+                    self._local_bind_at[bkey] = now
+                self._local_bind[bkey] = g.global_id
             return g
 
     def merge_globals(self, keep_gid: str, drop_gid: str, now: float | None = None) -> GlobalTrack | None:
@@ -794,6 +972,8 @@ class MtmcAssociator:
                 keep.identity_key = drop.identity_key
             if drop.visual_key and not keep.visual_key:
                 keep.visual_key = drop.visual_key
+            if drop.vehicle_class and not keep.vehicle_class:
+                keep.vehicle_class = drop.vehicle_class
             keep.last_seen = max(keep.last_seen, drop.last_seen)
             keep.first_seen = min(keep.first_seen, drop.first_seen)
             keep.camera_id = drop.camera_id
@@ -870,6 +1050,7 @@ class MtmcAssociator:
                     "plate": g.plate,
                     "identityKey": g.identity_key,
                     "visualKey": g.visual_key,
+                    "vehicleClass": g.vehicle_class,
                     "localTrackId": g.local_track_id,
                     "hitCount": g.hit_count,
                     "lastSeen": g.last_seen,

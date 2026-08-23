@@ -174,6 +174,10 @@ def build_session(models: dict, sample_fps: float):
         appear_thresh=cfg.appear_thresh,
         vehicle_appear_thresh=v_appear,
         time_window_sec=cfg.time_window_sec,
+        topology={
+            (71, 81): (0.5, 20.0),
+            (81, 71): (0.5, 20.0),
+        },
         same_cam_reuse=True,
         same_cam_min_gap=max(0.35, (1.0 / sample_fps) * 0.85),
         lost_revive_sec=cfg.lost_revive_sec,
@@ -290,7 +294,7 @@ def process_video_fast(
     conf: float = 0.28,
 ):
     """高效跨镜评估：YOLO + ByteTrack + ReID + MtmcAssociator（与线上一致的核心关联逻辑）。"""
-    from services.mtmc_engine import _detect, _crop
+    from services.mtmc_engine import _detect, _crop, _sort_vehicle_tracks_for_assoc
     from services.mtmc_local_track import create_local_tracker
     from services.strong_reid import extract_person_embedding
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
@@ -362,7 +366,7 @@ def process_video_fast(
                     "ts": now,
                 })
 
-        for t in tracks_v:
+        for t in _sort_vehicle_tracks_for_assoc(tracks_v, associator, cid, now):
             emb, fuse = _vehicle_fuse_from_track(t, small, models)
             if emb is None:
                 continue
@@ -372,6 +376,7 @@ def process_video_fast(
                 embedding=emb,
                 identity_key=fuse.get("identityKey"),
                 plate=fuse.get("plate"),
+                vehicle_class=getattr(t, "class_name", None),
                 local_track_id=int(t.track_id),
                 exclude_gids=claimed_v,
                 now=now,
@@ -430,6 +435,8 @@ def run_interleaved_eval(
     from services.strong_reid import extract_person_embedding
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
     from services.reid_gallery import l2_normalize
+
+    from services.mtmc_engine import _sort_vehicle_tracks_for_assoc
 
     trackers = {
         v["camera_id"]: (
@@ -501,7 +508,7 @@ def run_interleaved_eval(
                         "fromCameraId": other, "toCameraId": cid,
                         "transitSec": round(t, 2), "ts": now,
                     })
-            for tr in tracks_v:
+            for tr in _sort_vehicle_tracks_for_assoc(tracks_v, session.associator, cid, now):
                 emb, fuse = _vehicle_fuse_from_track(tr, small, models)
                 if emb is None:
                     continue
@@ -509,6 +516,7 @@ def run_interleaved_eval(
                 g = session.associator.associate(
                     object_type="vehicle", camera_id=cid, embedding=emb,
                     identity_key=fuse.get("identityKey"), plate=fuse.get("plate"),
+                    vehicle_class=getattr(tr, "class_name", None),
                     local_track_id=int(tr.track_id), exclude_gids=claimed_v, now=now,
                 )
                 claimed_v.add(g.global_id)

@@ -542,6 +542,7 @@ def _associate_tracklet(
     identity_key=None,
     plate=None,
     visual_key=None,
+    vehicle_class=None,
     exclude_gids: set,
     now: float,
     force: bool = False,
@@ -559,6 +560,7 @@ def _associate_tracklet(
         identity_key=identity_key,
         plate=plate,
         visual_key=visual_key,
+        vehicle_class=vehicle_class,
         display_name=display_name,
         local_track_id=int(builder.local_track_id),
         exclude_gids=exclude_gids,
@@ -621,6 +623,21 @@ def _finalize_removed_builders(
             _finalize_tracklet(session, builder, exclude_gids=set())
         except Exception as e:  # noqa: BLE001
             log.debug("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
+
+
+def _sort_vehicle_tracks_for_assoc(tracks, associator, camera_id: int, now: float):
+    """未绑定 Global 的 local 优先关联，避免旧 sticky 占坑阻断跨镜匹配。"""
+
+    def _key(tr):
+        sticky = associator.peek_sticky(
+            object_type="vehicle",
+            camera_id=camera_id,
+            local_track_id=int(tr.track_id),
+            now=now,
+        )
+        return (0 if sticky is None else 1, -float(getattr(tr, "conf", 0) or 0))
+
+    return sorted(tracks, key=_key)
 
 
 def _make_local_tracker(cfg: MtmcConfig):
@@ -813,7 +830,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             cam_state.vehicle_session_id = f"{session.session_id}:cam{cam_id}"
         vsession = get_vsession(cam_state.vehicle_session_id)
 
-        for t in tracks_v:
+        for t in _sort_vehicle_tracks_for_assoc(tracks_v, session.associator, cam_id, now):
             crop = _crop(frame, t.bbox)
             if crop is None:
                 continue
@@ -902,6 +919,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     identity_key=fuse.get("identityKey"),
                     plate=fuse.get("plate") or plate_text,
                     visual_key=fuse.get("visualKey"),
+                    vehicle_class=getattr(t, "class_name", None),
                     exclude_gids=claimed_vehicle,
                     now=now,
                 )
