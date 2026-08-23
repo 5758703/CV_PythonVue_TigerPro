@@ -141,6 +141,8 @@ class MtmcAssociator:
         gallery_model_key: str | None = None,
         # 车辆：local 绑定后短时内仍允许外观重匹配（避免首帧误绑 sticky）
         vehicle_sticky_warmup_sec: float = 2.0,
+        # 分数接近时仍走 tie-break（同类多 Global / 跨镜优先）
+        cross_cam_tie_band: float = 0.025,
     ):
         self.appear_thresh = float(appear_thresh)
         self.vehicle_appear_thresh = float(
@@ -166,6 +168,7 @@ class MtmcAssociator:
         self.local_sticky_sec = float(local_sticky_sec)
         self.mcbyte_decouple = bool(mcbyte_decouple)
         self.vehicle_sticky_warmup_sec = float(vehicle_sticky_warmup_sec)
+        self.cross_cam_tie_band = float(cross_cam_tie_band)
         self._lock = threading.Lock()
         self.tracks: dict[str, GlobalTrack] = {}
         # (object_type, camera_id, local_track_id) -> global_id
@@ -198,13 +201,33 @@ class MtmcAssociator:
             return peer[-1]
         return g.vehicle_class
 
+    def _cameras_for_global(self, g: GlobalTrack) -> set[int]:
+        return self._gallery.cameras_for_global(g.object_type, g.global_id)
+
+    def _cross_cam_established(self, g: GlobalTrack, camera_id: int) -> bool:
+        """Global 在对侧相机已有原型（可跨镜续接）。"""
+        peer = {c for c in self._cameras_for_global(g) if int(c) != int(camera_id)}
+        return len(peer) > 0
+
     def _cross_cam_recency_weight(self, g: GlobalTrack, camera_id: int, now: float) -> float:
         """跨镜：优先刚在对侧相机出现的 Global；本侧 centroid 已污染则略降权。"""
-        if g.camera_id == camera_id:
+        if int(g.camera_id or -1) == int(camera_id):
             return 0.90
         dt = now - g.last_seen
         if dt <= 5.0:
             return 1.0 + 0.05 * max(0.0, (5.0 - dt) / 5.0)
+        return 1.0
+
+    def _cross_cam_established_boost(self, g: GlobalTrack, camera_id: int) -> float:
+        cams = self._cameras_for_global(g)
+        cur = int(camera_id)
+        peer = {c for c in cams if int(c) != cur}
+        if peer and cur not in cams:
+            return 1.08
+        if peer:
+            return 1.04
+        if int(g.camera_id or -1) != cur:
+            return 1.02
         return 1.0
 
     def _hard_conflict(
@@ -308,13 +331,33 @@ class MtmcAssociator:
         cross_proto_new: float = -1.0,
         cross_proto_old: float = -1.0,
     ) -> bool:
-        """同分 tie-break：跨镜 Global > 类别一致 > 更高 cross_proto。"""
+        """同分/近分 tie-break：已有跨镜 Global > 对侧原型更高 > 类别一致。"""
+        new_x = self._cross_cam_established(g_new, camera_id)
+        old_x = self._cross_cam_established(g_old, camera_id)
+        new_peer_only = int(camera_id) not in self._cameras_for_global(g_new) and bool(
+            {c for c in self._cameras_for_global(g_new) if int(c) != int(camera_id)}
+        )
+        old_peer_only = int(camera_id) not in self._cameras_for_global(g_old) and bool(
+            {c for c in self._cameras_for_global(g_old) if int(c) != int(camera_id)}
+        )
+        if new_peer_only and not old_peer_only:
+            return True
+        if old_peer_only and not new_peer_only:
+            return False
+        if new_x and not old_x:
+            return True
+        if old_x and not new_x:
+            return False
         if vehicle_class and g_new.vehicle_class and not vehicle_class_conflict(vehicle_class, g_new.vehicle_class):
             if not g_old.vehicle_class or vehicle_class_conflict(vehicle_class, g_old.vehicle_class):
                 return True
-        if g_new.camera_id != camera_id and g_old.camera_id == camera_id:
-            return True
         if cross_proto_new >= 0 and cross_proto_old >= 0 and cross_proto_new > cross_proto_old + 1e-6:
+            return True
+        if int(g_new.camera_id or -1) != int(camera_id) and int(g_old.camera_id or -1) == int(camera_id):
+            return True
+        new_peers = len({c for c in self._cameras_for_global(g_new) if int(c) != int(camera_id)})
+        old_peers = len({c for c in self._cameras_for_global(g_old) if int(c) != int(camera_id)})
+        if new_peers > old_peers:
             return True
         return False
 
@@ -553,7 +596,7 @@ class MtmcAssociator:
 
         same_cam = g.camera_id == camera_id
         cross_proto = -1.0
-        if object_type == "vehicle" and embedding is not None:
+        if embedding is not None:
             cross_proto = self._gallery.max_similarity(
                 object_type,
                 g.global_id,
@@ -589,6 +632,14 @@ class MtmcAssociator:
             appear_need = max(appear_need, self.vehicle_appear_thresh)
             if not same_cam or cross_takeover:
                 appear_need = min(appear_need, max(0.42, self.vehicle_appear_thresh - 0.06))
+        elif not same_cam:
+            appear_need = min(appear_need, max(0.40, self.appear_thresh - 0.06))
+            if (
+                object_type == "person"
+                and cross_proto >= 0.38
+                and self._cross_cam_established(g, camera_id)
+            ):
+                appear_need = min(appear_need, max(0.36, cross_proto - 0.02))
         if same_cam and not cross_takeover:
             appear_need = max(appear_need, self.appear_thresh + 0.12)
 
@@ -633,22 +684,32 @@ class MtmcAssociator:
             if reid_person_id and g.reid_person_id and reid_person_id == g.reid_person_id:
                 score, reid_raw = 0.99, 1.0
             else:
-                reid_raw = _cos(embedding, g.embedding)
+                centroid_cos = _cos(embedding, g.embedding)
+                if not same_cam and cross_proto >= 0:
+                    reid_raw = cross_proto
+                else:
+                    reid_raw = centroid_cos
                 score = reid_raw
                 if score < appear_need:
                     return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
         recency_w = (
             self._cross_cam_recency_weight(g, camera_id, now)
-            if object_type == "vehicle" and g.camera_id != camera_id
+            if not same_cam
             else 1.0
         )
-        final = float(score * topo_w * recency_w)
+        xcam_boost = (
+            self._cross_cam_established_boost(g, camera_id)
+            if not same_cam
+            else 1.0
+        )
+        final = float(score * topo_w * recency_w * xcam_boost)
         return final, {
             "reid": reid_raw,
             "crossProto": cross_proto if cross_proto >= 0 else None,
             "topology": topo_w,
             "time": time_w,
             "recency": recency_w,
+            "xcamBoost": xcam_boost,
             "final": final,
             "candidateGlobalId": g.global_id,
         }
@@ -827,8 +888,8 @@ class MtmcAssociator:
                         best_gid = g.global_id
                         best_breakdown = breakdown
                     elif (
-                        score == best_score
-                        and best_gid is not None
+                        best_gid is not None
+                        and (best_score - score) <= self.cross_cam_tie_band
                         and self._prefer_on_tie(
                             g,
                             self.tracks[best_gid],

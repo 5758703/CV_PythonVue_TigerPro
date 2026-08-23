@@ -451,6 +451,49 @@ def test_vehicle_class_mismatch_blocks_cross_cam_merge():
     assert g_truck.global_id != g_car.global_id
 
 
+def test_cross_cam_tie_band_prefers_established_global():
+    """分数接近时优先已有对侧原型的 Global（白色 SUV 多车干扰）。"""
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48,
+        cross_cam_tie_band=0.03,
+    )
+    emb71 = _l2(np.random.randn(64).astype(np.float32))
+    emb81_a = _l2(emb71 + np.random.randn(64).astype(np.float32) * 0.04)
+    emb81_b = _l2(emb71 + np.random.randn(64).astype(np.float32) * 0.035)
+
+    g71 = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb71,
+        vehicle_class="car", local_track_id=1, exclude_gids=set(), now=100.0,
+    )
+    g_other = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=_l2(np.random.randn(64).astype(np.float32)),
+        vehicle_class="car", local_track_id=2, exclude_gids=set(), now=100.5,
+    )
+    assert g_other.global_id != g71.global_id
+
+    g81 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=emb81_a,
+        vehicle_class="car", local_track_id=5, exclude_gids=set(), now=101.0,
+    )
+    assert g81.global_id == g71.global_id
+
+
+def test_person_cross_cam_uses_peer_prototype():
+    """行人跨镜应合并到对侧已有 Global（cross_proto）。"""
+    assoc = MtmcAssociator(appear_thresh=0.48, confirm_thresh=0.48, cross_cam_tie_band=0.02)
+    emb = _l2(np.random.randn(64).astype(np.float32))
+    noise = _l2(emb + np.random.randn(64).astype(np.float32) * 0.05)
+    g1 = assoc.associate(
+        object_type="person", camera_id=71, embedding=emb,
+        local_track_id=1, exclude_gids=set(), now=200.0,
+    )
+    g2 = assoc.associate(
+        object_type="person", camera_id=81, embedding=noise,
+        local_track_id=2, exclude_gids=set(), now=201.0,
+    )
+    assert g1.global_id == g2.global_id
+
+
 def test_active_gallery_faiss_search():
     from services.mtmc_active_gallery import MtmcActiveGallery
 

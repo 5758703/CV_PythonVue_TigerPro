@@ -74,6 +74,12 @@ class MtmcActiveGallery:
         with _lock:
             return len(self._vecs.get(object_type, {}))
 
+    def cameras_for_global(self, object_type: str, global_id: str) -> set[int]:
+        """某 Global 已存原型的相机集合（不含 -1 占位）。"""
+        with _lock:
+            cam_map = self._vecs.get(object_type, {}).get(str(global_id), {})
+            return {int(c) for c in cam_map if int(c) >= 0}
+
     def max_similarity(
         self,
         object_type: str,
