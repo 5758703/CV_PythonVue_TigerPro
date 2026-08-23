@@ -5,6 +5,11 @@ Flask-JWT-Extended==4.6.0
 PyMySQL==1.1.1
 cryptography>=44.0.0,<50.0.0
 python-dotenv==1.0.1
+# ultralytics==8.4.69
+# 可选：Tencent YOLO-Master（MoE 检测/分割/姿态/OBB/分类）需单独 clone 并 pip install -e .
+#   git clone https://github.com/Tencent/YOLO-Master backend/uploads/models/third_party/YOLO-Master
+#   cd backend/uploads/models/third_party/YOLO-Master && pip install -e .
+#   或设置环境变量 YOLO_MASTER_ROOT 指向仓库根目录
 ultralytics==8.4.69
 # OpenVINO：YOLO CPU 热路径 FP16/INT8 可选加速（YOLO_INFER_BACKEND=auto|openvino）
 openvino>=2024.0.0

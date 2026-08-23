@@ -38,6 +38,12 @@ def run_vision_detect(*, model_id: int, image_bytes: bytes, conf: float = 0.25, 
         return detect_image_rfdetr(
             abs_path, image_bytes, conf=conf, draw=draw, model_key=m.model_key or "rf-detr-medium"
         )
+    if lib == "yolo-master":
+        from services import yolo_master as ym
+        task = (m.task or "object-detection").lower()
+        if task == "obb":
+            return ym.detect_obb(abs_path, image_bytes, conf=conf, draw=draw, model_key=m.model_key)
+        return ym.detect_image(abs_path, image_bytes, conf=conf, draw=draw, model_key=m.model_key)
     from inference import detect_image
     return detect_image(abs_path, image_bytes, conf=conf, draw=draw, model_key=m.model_key)
 

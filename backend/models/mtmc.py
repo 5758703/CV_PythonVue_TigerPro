@@ -141,6 +141,247 @@ class MtmcTrackEvent(db.Model):
         }
 
 
+class MtmcTracklet(db.Model):
+    """局部轨迹片段（Tracklet First）。"""
+    __tablename__ = "mtmc_tracklet"
+
+    id = db.Column(db.Integer, primary_key=True)
+    tracklet_id = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    session_id = db.Column(db.String(64), nullable=False, index=True)
+    camera_id = db.Column(db.Integer, nullable=False, index=True)
+    object_type = db.Column(db.String(16), nullable=False, index=True)
+    local_track_id = db.Column(db.Integer, index=True)
+    global_id = db.Column(db.String(64), index=True)
+    start_time = db.Column(db.DateTime)
+    end_time = db.Column(db.DateTime)
+    keyframe_count = db.Column(db.Integer, default=0)
+    observation_count = db.Column(db.Integer, default=0)
+    avg_quality = db.Column(db.Float, default=0.0)
+    embedding_dim = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(16), default="closed")
+    trail_json = db.Column(db.Text)
+    attrs_json = db.Column(db.Text)
+    create_time = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        import json
+
+        def _loads(s):
+            if not s:
+                return None
+            try:
+                return json.loads(s)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return {
+            "id": self.id,
+            "trackletId": self.tracklet_id,
+            "sessionId": self.session_id,
+            "cameraId": self.camera_id,
+            "objectType": self.object_type,
+            "localTrackId": self.local_track_id,
+            "globalId": self.global_id,
+            "startTime": self.start_time.isoformat() if self.start_time else None,
+            "endTime": self.end_time.isoformat() if self.end_time else None,
+            "keyframeCount": self.keyframe_count,
+            "observationCount": self.observation_count,
+            "avgQuality": self.avg_quality,
+            "embeddingDim": self.embedding_dim,
+            "status": self.status,
+            "trail": _loads(self.trail_json),
+            "attrs": _loads(self.attrs_json),
+            "createTime": self.create_time.isoformat() if self.create_time else None,
+        }
+
+
+class MtmcAssociationEdge(db.Model):
+    """跨镜关联证据（Observation 与 Association 分层）。"""
+    __tablename__ = "mtmc_association_edge"
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(64), nullable=False, index=True)
+    tracklet_id = db.Column(db.String(80), index=True)
+    object_type = db.Column(db.String(16), nullable=False, index=True)
+    decision = db.Column(db.String(16), nullable=False)
+    source_global_id = db.Column(db.String(64), index=True)
+    target_global_id = db.Column(db.String(64), nullable=False, index=True)
+    policy_version = db.Column(db.String(32), default="mtmc_v1")
+    scores_json = db.Column(db.Text)
+    evidence_json = db.Column(db.Text)
+    create_time = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    def to_dict(self):
+        import json
+
+        def _loads(s):
+            if not s:
+                return None
+            try:
+                return json.loads(s)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return {
+            "id": self.id,
+            "sessionId": self.session_id,
+            "trackletId": self.tracklet_id,
+            "objectType": self.object_type,
+            "decision": self.decision,
+            "sourceGlobalId": self.source_global_id,
+            "targetGlobalId": self.target_global_id,
+            "policyVersion": self.policy_version,
+            "scores": _loads(self.scores_json),
+            "evidence": _loads(self.evidence_json),
+            "createTime": self.create_time.isoformat() if self.create_time else None,
+        }
+
+
+class MtmcCrossCameraEvent(db.Model):
+    """跨镜通行事件（轻量模式 P2）：同一 Global 在不同相机出现。"""
+    __tablename__ = "mtmc_cross_camera_event"
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(64), nullable=False, index=True)
+    global_id = db.Column(db.String(64), nullable=False, index=True)
+    object_type = db.Column(db.String(16), nullable=False, index=True)
+    from_camera_id = db.Column(db.Integer, nullable=False, index=True)
+    to_camera_id = db.Column(db.Integer, nullable=False, index=True)
+    transit_sec = db.Column(db.Float)
+    display_name = db.Column(db.String(128))
+    plate = db.Column(db.String(32))
+    decision = db.Column(db.String(16))  # long_term|sticky|candidate|...
+    event_time = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    attrs_json = db.Column(db.Text)
+    create_time = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        import json
+
+        def _loads(s):
+            if not s:
+                return None
+            try:
+                return json.loads(s)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return {
+            "id": self.id,
+            "sessionId": self.session_id,
+            "globalId": self.global_id,
+            "objectType": self.object_type,
+            "fromCameraId": self.from_camera_id,
+            "toCameraId": self.to_camera_id,
+            "transitSec": self.transit_sec,
+            "displayName": self.display_name,
+            "plate": self.plate,
+            "decision": self.decision,
+            "eventTime": self.event_time.isoformat() if self.event_time else None,
+            "attrs": _loads(self.attrs_json),
+        }
+
+
+class MtmcCandidatePair(db.Model):
+    """三档候选配对（P1 产生，P2 可晋升/驳回）。"""
+    __tablename__ = "mtmc_candidate_pair"
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(64), nullable=False, index=True)
+    global_id = db.Column(db.String(64), nullable=False, index=True)
+    candidate_global_id = db.Column(db.String(64), nullable=False, index=True)
+    object_type = db.Column(db.String(16), nullable=False, index=True)
+    camera_id = db.Column(db.Integer)
+    tracklet_id = db.Column(db.String(80), index=True)
+    status = db.Column(db.String(16), default="pending", index=True)  # pending|promoted|rejected
+    final_score = db.Column(db.Float)
+    reid_score = db.Column(db.Float)
+    evidence_json = db.Column(db.Text)
+    create_time = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    resolve_time = db.Column(db.DateTime)
+
+    def to_dict(self):
+        import json
+
+        def _loads(s):
+            if not s:
+                return None
+            try:
+                return json.loads(s)
+            except Exception:  # noqa: BLE001
+                return None
+
+        return {
+            "id": self.id,
+            "sessionId": self.session_id,
+            "globalId": self.global_id,
+            "candidateGlobalId": self.candidate_global_id,
+            "objectType": self.object_type,
+            "cameraId": self.camera_id,
+            "trackletId": self.tracklet_id,
+            "status": self.status,
+            "finalScore": self.final_score,
+            "reidScore": self.reid_score,
+            "evidence": _loads(self.evidence_json),
+            "createTime": self.create_time.isoformat() if self.create_time else None,
+            "resolveTime": self.resolve_time.isoformat() if self.resolve_time else None,
+        }
+
+
+class MtmcSearchJob(db.Model):
+    """跨镜检索任务队列（P2）：全局轨迹 / 多视频 ReID。"""
+    __tablename__ = "mtmc_search_job"
+
+    id = db.Column(db.String(64), primary_key=True)
+    job_type = db.Column(db.String(32), nullable=False, index=True)
+    status = db.Column(db.String(32), default="queued", index=True)
+    progress = db.Column(db.Float, default=0.0)
+    message = db.Column(db.String(500), default="")
+    error = db.Column(db.Text)
+    params_json = db.Column(db.Text, default="{}")
+    result_json = db.Column(db.Text)
+    create_time = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    update_time = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def params(self):
+        import json
+        try:
+            return json.loads(self.params_json or "{}") or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def set_params(self, obj):
+        import json
+        self.params_json = json.dumps(obj or {}, ensure_ascii=False, default=str)
+
+    def result(self):
+        import json
+        if not self.result_json:
+            return None
+        try:
+            return json.loads(self.result_json)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def set_result(self, obj):
+        import json
+        self.result_json = json.dumps(obj, ensure_ascii=False, default=str) if obj is not None else None
+
+    def to_dict(self):
+        return {
+            "jobId": self.id,
+            "jobType": self.job_type,
+            "status": self.status,
+            "progress": self.progress,
+            "message": self.message or "",
+            "error": self.error,
+            "params": self.params(),
+            "result": self.result(),
+            "createTime": self.create_time.isoformat() if self.create_time else None,
+            "updateTime": self.update_time.isoformat() if self.update_time else None,
+        }
+
+
 class MtmcVehiclePass(db.Model):
     """跨镜过车记录（挂载在车辆全局身份上）。"""
     __tablename__ = "mtmc_vehicle_pass"

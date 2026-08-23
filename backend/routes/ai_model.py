@@ -398,8 +398,8 @@ def convert_weight(mid):
         return jsonify(code=400, message="onnx → pt 不支持：ONNX 为冻结推理图，无法还原 PyTorch 训练权重；请使用原始 .pt"), 400
     if target != "onnx":
         return jsonify(code=400, message=f"不支持的目标格式：{target}"), 400
-    if _detect_lib(m) != "ultralytics":
-        return jsonify(code=400, message="仅 ultralytics（YOLO）模型支持 pt → onnx 转换"), 400
+    if _detect_lib(m) not in ("ultralytics", "yolo-master"):
+        return jsonify(code=400, message="仅 ultralytics / yolo-master（YOLO）模型支持 pt → onnx 转换"), 400
     pt, onnx = _weight_variants(m)
     if not pt:
         return jsonify(code=400, message="该模型没有本地 .pt 权重，无法转换"), 400
@@ -601,7 +601,9 @@ def _resolve_detect_runtime(m):
             )
         yolo = _pick_local_weight(base)
         if yolo:
-            return lib if lib in ("rfdetr", "rtmlib") else "ultralytics", yolo
+            if lib in ("rfdetr", "rtmlib", "yolo-master"):
+                return lib, yolo
+            return "ultralytics", yolo
         raise ValueError("目录内未找到可用检测权重（.pt/.onnx/.pth）")
 
     raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
@@ -1042,16 +1044,21 @@ def classify_image_route(mid):
     prefer_backend = (request.form.get("backend") or "auto").strip().lower()
 
     try:
-        from inference import classify_image
-        result = classify_image(
-            path,
-            file.read(),
-            task=m.task or "image-classification",
-            top_k=top_k,
-            library=m.library,
-            precision=precision,
-            prefer_backend=prefer_backend,
-        )
+        lib = (m.library or "").strip().lower()
+        if lib == "yolo-master":
+            from services import yolo_master as ym
+            result = ym.classify_image(path, file.read(), top_k=top_k)
+        else:
+            from inference import classify_image
+            result = classify_image(
+                path,
+                file.read(),
+                task=m.task or "image-classification",
+                top_k=top_k,
+                library=m.library,
+                precision=precision,
+                prefer_backend=prefer_backend,
+            )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"分类失败：{e}"), 500
     return jsonify(code=0, message="分类完成", data=result)
@@ -1433,6 +1440,16 @@ def detect(mid):
             from inference import detect_image_rfdetr
             result = detect_image_rfdetr(abs_path, file.read(), conf=conf, draw=draw,
                                          model_key=m.model_key or "rf-detr-medium")
+        elif lib == "yolo-master":
+            task = (m.task or "object-detection").lower()
+            from services import yolo_master as ym
+            raw = file.read()
+            if task == "obb":
+                result = ym.detect_obb(abs_path, raw, conf=conf, draw=draw, model_key=m.model_key)
+            elif task == "image-classification":
+                result = ym.classify_image(abs_path, raw, top_k=5, conf=conf)
+            else:
+                result = ym.detect_image(abs_path, raw, conf=conf, draw=draw, model_key=m.model_key)
         else:
             from inference import detect_image
             result = detect_image(abs_path, file.read(), conf=conf, draw=draw,
@@ -1453,7 +1470,7 @@ def _resolve_pose_runtime(m):
     if not _is_pose_task(task):
         raise ValueError("该模型任务不是姿态估计类型")
     lib = _detect_lib(m)
-    if lib == "ultralytics":
+    if lib in ("ultralytics", "yolo-master"):
         if task != "pose-estimation":
             raise ValueError("全身姿态模型须使用 rtmlib（DWPose）")
         path = _abs_weight(m)
@@ -1493,6 +1510,9 @@ def pose_route(mid):
             from inference import estimate_pose_rtmlib
             result = estimate_pose_rtmlib(
                 m.model_key or "rtmo-s", abs_path, file.read(), conf=conf, draw=draw)
+        elif lib == "yolo-master":
+            from services import yolo_master as ym
+            result = ym.estimate_pose(abs_path, file.read(), conf=conf, draw=draw)
         else:
             from inference import estimate_pose
             result = estimate_pose(abs_path, file.read(), conf=conf, draw=draw)
@@ -1529,12 +1549,16 @@ def segment_route(mid):
             from inference import segment_image_rfdetr
             result = segment_image_rfdetr(abs_path, file.read(), conf=conf, draw=draw,
                                           model_key=m.model_key or "rf-detr-seg-medium")
-        elif lib == "ultralytics":
-            from inference import segment_image_ultralytics
-            result = segment_image_ultralytics(
-                abs_path, file.read(), conf=conf, draw=draw,
-                classes=request.form.get("classes"),
-            )
+        elif lib in ("ultralytics", "yolo-master"):
+            if lib == "yolo-master":
+                from services import yolo_master as ym
+                result = ym.segment_image(abs_path, file.read(), conf=conf, draw=draw)
+            else:
+                from inference import segment_image_ultralytics
+                result = segment_image_ultralytics(
+                    abs_path, file.read(), conf=conf, draw=draw,
+                    classes=request.form.get("classes"),
+                )
         elif lib == "mobilesam":
             import json
             from inference import segment_image_mobilesam
@@ -1572,7 +1596,7 @@ def segment_route(mid):
         else:
             return jsonify(
                 code=400,
-                message="分割仅支持 rfdetr、ultralytics、mobilesam 或 opencv-sam 引擎",
+                message="分割仅支持 rfdetr、ultralytics、yolo-master、mobilesam 或 opencv-sam 引擎",
             ), 400
     except ValueError as e:
         return jsonify(code=400, message=str(e)), 400
@@ -1595,6 +1619,9 @@ def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_
             from inference import segment_video_ultralytics
             stats = segment_video_ultralytics(
                 abs_path, src_path, out_path, conf=conf, classes=classes, progress_cb=cb)
+        elif lib == "yolo-master":
+            from services import yolo_master as ym
+            stats = ym.segment_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
         else:
             from inference import segment_video_rfdetr
             stats = segment_video_rfdetr(abs_path, src_path, out_path, conf=conf,
@@ -1620,8 +1647,8 @@ def segment_video_route(mid):
     """实例分割视频：RF-DETR-Seg 或 Ultralytics(YOLOE)，异步任务。"""
     m = AiModel.query.get_or_404(mid)
     lib = _detect_lib(m)
-    if (m.task or "") != "instance-segmentation" or lib not in ("rfdetr", "ultralytics"):
-        return jsonify(code=400, message="视频分割仅支持 RF-DETR-Seg 或 Ultralytics 实例分割模型"), 400
+    if (m.task or "") != "instance-segmentation" or lib not in ("rfdetr", "ultralytics", "yolo-master"):
+        return jsonify(code=400, message="视频分割仅支持 RF-DETR-Seg、Ultralytics 或 YOLO-Master 实例分割模型"), 400
     abs_path = _detect_model_path(m)
     if abs_path is None:
         return jsonify(code=400, message="该模型暂无本地权重，请先上传或拉取权重"), 400
@@ -1733,6 +1760,13 @@ def _video_worker(
             stats = detect_video_rfdetr(abs_path, src_path, out_path, conf=conf,
                                         model_key=model_key, progress_cb=cb,
                                         alert_rules=alert_rules_payload, alert_source_key=job_id)
+        elif lib == "yolo-master":
+            from services import yolo_master as ym
+            stats = ym.detect_video(
+                abs_path, src_path, out_path, conf=conf,
+                progress_cb=cb, model_key=model_key,
+                alert_rules=alert_rules_payload, alert_source_key=job_id,
+            )
         else:
             from inference import detect_video
             stats = detect_video(abs_path, src_path, out_path, conf=conf,
@@ -1851,6 +1885,9 @@ def _pose_worker(job_id, library, model_key, abs_path, src_path, out_path, out_n
             from inference import pose_video_rtmlib
             stats = pose_video_rtmlib(
                 model_key or "rtmo-s", abs_path, src_path, out_path, conf=conf, progress_cb=cb)
+        elif (library or "").lower() == "yolo-master":
+            from services import yolo_master as ym
+            stats = ym.pose_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
         else:
             from inference import pose_video
             stats = pose_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)

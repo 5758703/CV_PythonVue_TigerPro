@@ -3,13 +3,14 @@
     <el-tabs v-model="engine" @tab-change="onEngineChange">
       <el-tab-pane label="RF-DETR 实例分割" name="rfdetr" />
       <el-tab-pane label="YOLOE 开放词汇分割" name="ultralytics" />
+      <el-tab-pane label="YOLO-Master 实例分割" name="yolo-master" />
       <el-tab-pane label="MobileSAM 交互分割" name="mobilesam" />
       <el-tab-pane label="EfficientSAM（OpenCV）" name="efficientsam" />
     </el-tabs>
 
     <el-card shadow="never" class="cfg-card">
       <el-form :inline="true">
-        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics'" label="模式">
+        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics' || engine === 'yolo-master'" label="模式">
           <el-radio-group v-model="mode" @change="clearAll">
             <el-radio-button value="image">图片</el-radio-button>
             <el-radio-button value="video">视频</el-radio-button>
@@ -44,7 +45,7 @@
             <el-radio-button value="int8">INT8</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics' || (engine === 'mobilesam' && samMode === 'auto')">
+        <el-form-item v-if="engine === 'rfdetr' || engine === 'ultralytics' || engine === 'yolo-master' || (engine === 'mobilesam' && samMode === 'auto')">
           <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPick"
                      :accept="isVideoMode ? 'video/*' : 'image/*'">
             <el-button :icon="UploadFilled">{{ pickLabel }}</el-button>
@@ -279,7 +280,7 @@ let originBlobUrl = null
 let resultBlobUrl = null
 let pollTimer = null
 
-const isVideoMode = computed(() => (engine.value === 'rfdetr' || engine.value === 'ultralytics') && mode.value === 'video')
+const isVideoMode = computed(() => (engine.value === 'rfdetr' || engine.value === 'ultralytics' || engine.value === 'yolo-master') && mode.value === 'video')
 const isImageMode = computed(() => !isVideoMode.value)
 const isInteractiveEngine = computed(() => engine.value === 'mobilesam' || engine.value === 'efficientsam')
 const isSamPrompt = computed(() =>

@@ -1182,8 +1182,12 @@ def seed_ai_models():
     created |= _ensure_ai_model("yolo26n-p2-plate", dict(
         model_name="车牌检测 YOLO26n-P2（自训脚手架）", category="交通车辆",
         task="object-detection", library="ultralytics", version="v26-p2",
-        source_url="https://docs.ultralytics.com/models/yolo26/",
-        description="官方无 yolo26n-p2.pt。请用 YOLO('yolo26n-p2.yaml') 自训后把 best.pt 放到 models/yolo26n-p2-plate/。面向远距小车牌。", status="0",
+        source_url="https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt",
+        description=(
+            "官方无 yolo26n-p2.pt 预训练包；拉取 yolo26n.pt 作为 P2 小目标车牌微调基座。"
+            "自训完成后可将 best.pt 覆盖本目录权重。"
+        ),
+        status="0",
     ))
     # YOLO26n-pose / OBB 基座（HF openvision）
     created |= _ensure_ai_model("yolo26n-pose", dict(
@@ -1368,6 +1372,8 @@ def seed_ai_models():
     _bind_local_yoloe_seg_weight()
     _bind_local_yolo11s_ball_weight()
     _bind_vehicle_track_models()
+    created |= _ensure_yolo_master_models()
+    created |= _patch_broken_model_source_urls()
     _ensure_security_detector_models()
     _ensure_fish_detector_model()
     _ensure_handpose_model()
@@ -1562,6 +1568,92 @@ def _ensure_fish_detector_model():
 
 
 # ── 安防检测器模型包：11 个本地 onnx（均内嵌 ultralytics 元数据，ONNX Runtime 推理）──
+def _yolo_master_source_url(spec):
+    from services.yolo_master import release_url
+    return spec.get("source_url") or release_url(spec["file"])
+
+
+def _ensure_yolo_master_models():
+    """Tencent YOLO-Master 预置模型（检测/分割/姿态/OBB/分类）。"""
+    from services.yolo_master import YOLO_MASTER_MODELS
+
+    base = os.path.dirname(os.path.abspath(__file__))
+    uploads = os.path.join(base, "uploads")
+    category_map = {
+        "object-detection": "目标检测",
+        "instance-segmentation": "实例分割",
+        "pose-estimation": "姿态估计",
+        "obb": "交通车辆",
+        "image-classification": "图像分类",
+    }
+    changed = False
+    for spec in YOLO_MASTER_MODELS:
+        rel_file = f"models/{spec['key']}/{spec['file']}"
+        abs_p = os.path.join(uploads, rel_file.replace("/", os.sep))
+        fields = dict(
+            model_name=spec["name"],
+            category=category_map.get(spec["task"], "目标检测"),
+            task=spec["task"],
+            library="yolo-master",
+            version=spec["version"],
+            source_url=_yolo_master_source_url(spec),
+            description=(
+                f"{spec['desc']} "
+                "推理库=yolo-master；MoE 权重需 clone Tencent/YOLO-Master 并 pip install -e .，"
+                "或设置 YOLO_MASTER_ROOT。"
+            ),
+            status="0",
+        )
+        if os.path.isfile(abs_p):
+            fields["file_path"] = rel_file
+            fields["file_size"] = os.path.getsize(abs_p)
+        created = _ensure_ai_model(spec["key"], fields)
+        changed |= created
+    return changed
+
+
+def _patch_broken_model_source_urls():
+    """修正已入库但 source_url 错误或 Release 文件名变更的模型（幂等）。"""
+    from services.yolo_master import YOLO_MASTER_MODELS
+
+    changed = False
+    yolo_master_by_key = {spec["key"]: spec for spec in YOLO_MASTER_MODELS}
+    for key, spec in yolo_master_by_key.items():
+        m = AiModel.query.filter_by(model_key=key).first()
+        if not m:
+            continue
+        url = _yolo_master_source_url(spec)
+        desc = (
+            f"{spec['desc']} "
+            "推理库=yolo-master；MoE 权重需 clone Tencent/YOLO-Master 并 pip install -e .，"
+            "或设置 YOLO_MASTER_ROOT。"
+        )
+        if m.source_url != url:
+            m.source_url = url
+            changed = True
+        if m.description != desc:
+            m.description = desc
+            changed = True
+
+    m127 = AiModel.query.filter_by(model_key="yolo26n-p2-plate").first()
+    if m127:
+        url127 = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt"
+        desc127 = (
+            "官方无 yolo26n-p2.pt 预训练包；拉取 yolo26n.pt 作为 P2 小目标车牌微调基座。"
+            "自训完成后可将 best.pt 覆盖本目录权重。"
+        )
+        if m127.source_url != url127:
+            m127.source_url = url127
+            changed = True
+        if m127.description != desc127:
+            m127.description = desc127
+            changed = True
+
+    if changed:
+        db.session.commit()
+    return changed
+
+
 _SECURITY_DETECTOR_SPECS = [
     ("sec-fire-yolov8n", "烟火检测-轻量（YOLOv8n）", "sec-fire-yolov8n/fire_smoke_yolov8n.onnx", "v8n",
      "烟火/烟雾检测（fire、smoke 2 类，640 输入，CPU 约 39ms）。安防检测器包·烟火 01。"),

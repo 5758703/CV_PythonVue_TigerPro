@@ -1,7 +1,7 @@
 /** 拉取图像分类模型（分页拉全，避免 pageSize 截断漏掉 MobileNet 等）。 */
 export async function loadImageClassificationModels(modelApi, {
   pageSize = 200,
-  libraries = ['transformers', 'opencv-dnn', 'opencv_dnn', 'mobilenet'],
+  libraries = ['transformers', 'opencv-dnn', 'opencv_dnn', 'mobilenet', 'yolo-master'],
 } = {}) {
   const libSet = new Set(libraries.map((x) => String(x).toLowerCase()))
   const byId = new Map()
@@ -40,7 +40,7 @@ export async function loadImageClassificationModels(modelApi, {
     const task = (m.task || '').toLowerCase()
     if (task && task !== 'image-classification') return false
     const lib = (m.library || '').toLowerCase()
-    return !libSet.size || libSet.has(lib) || /opencv|mobilenet|dnn/i.test(lib)
+    return !libSet.size || libSet.has(lib) || /opencv|mobilenet|dnn|yolo-master/i.test(lib)
   })
 
   // OpenCV DNN / MobileNet 排前面，便于实时分类默认选中

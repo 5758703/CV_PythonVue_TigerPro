@@ -247,7 +247,9 @@ from .alert import AlertRule, AlertEvent  # noqa: E402  检测告警
 from .open_app import OpenApp, OpenApiKey, OpenApiCallLog  # noqa: E402  开放平台
 from .open_job import OpenJob  # noqa: E402  开放异步任务
 from .mtmc import (  # noqa: E402  跨镜 MTMC
-    CameraTopology, MtmcGlobalPerson, MtmcGlobalVehicle, MtmcTrackEvent, MtmcVehiclePass,
+    CameraTopology, MtmcAssociationEdge, MtmcCandidatePair, MtmcCrossCameraEvent,
+    MtmcGlobalPerson, MtmcGlobalVehicle, MtmcSearchJob,
+    MtmcTrackEvent, MtmcTracklet, MtmcVehiclePass,
 )
 
 __all__ = [
@@ -258,6 +260,8 @@ __all__ = [
     "ReidPerson", "ReidEmbedding",
     "AlertRule", "AlertEvent",
     "OpenApp", "OpenApiKey", "OpenApiCallLog", "OpenJob",
-    "CameraTopology", "MtmcGlobalPerson", "MtmcGlobalVehicle", "MtmcTrackEvent", "MtmcVehiclePass",
+    "CameraTopology", "MtmcAssociationEdge", "MtmcCandidatePair", "MtmcCrossCameraEvent",
+    "MtmcGlobalPerson", "MtmcGlobalVehicle", "MtmcSearchJob",
+    "MtmcTrackEvent", "MtmcTracklet", "MtmcVehiclePass",
     "user_role", "user_dept", "user_post", "role_menu", "user_menu",
 ]

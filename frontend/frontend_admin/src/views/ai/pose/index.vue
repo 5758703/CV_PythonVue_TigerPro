@@ -201,7 +201,7 @@ const KP_CONF = 0.3
 const POSE_TASKS = ['pose-estimation', 'wholebody-pose-estimation']
 
 const modelLabel = (m) => {
-  const tag = m.task === 'wholebody-pose-estimation' ? '133点' : (m.library === 'rtmlib' ? 'rtmlib' : 'YOLO')
+  const tag = m.task === 'wholebody-pose-estimation' ? '133点' : (m.library === 'rtmlib' ? 'rtmlib' : (m.library === 'yolo-master' ? 'YOLO-Master' : 'YOLO'))
   return `${m.modelName}（${tag}）`
 }
 
@@ -221,7 +221,7 @@ const loadModels = async () => {
     const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
     modelOptions.value = (res.data.rows || []).filter((m) => {
       if (m.status !== '0' || !POSE_TASKS.includes(m.task)) return false
-      if (m.library === 'ultralytics') return !!m.filePath
+      if (m.library === 'ultralytics' || m.library === 'yolo-master') return !!m.filePath
       if (m.library === 'rtmlib') {
         return m.filePath || /^(rtmo|rtmpose|dwpose)-/.test(m.modelKey || '')
       }
@@ -229,7 +229,8 @@ const loadModels = async () => {
     })
     if (modelOptions.value.length && !modelId.value) {
       const pref = modelOptions.value.find((m) =>
-        m.modelKey === 'rtmpose-m' || m.modelKey === 'rtmo-s' || m.modelKey === 'yolo11n-pose')
+        m.modelKey === 'rtmpose-m' || m.modelKey === 'rtmo-s' || m.modelKey === 'yolo11n-pose'
+        || m.modelKey === 'yolo-master-pose-n')
       modelId.value = pref?.id || modelOptions.value[0].id
     }
   } catch (e) {

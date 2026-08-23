@@ -2,13 +2,26 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from werkzeug.utils import secure_filename
 
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 from flask_jwt_extended import verify_jwt_in_request
 
 from extensions import db
 from models import AiModel, Camera
-from models.mtmc import CameraTopology, MtmcTrackEvent, MtmcVehiclePass
+from models.mtmc import (
+    CameraTopology,
+    MtmcAssociationEdge,
+    MtmcCandidatePair,
+    MtmcCrossCameraEvent,
+    MtmcGlobalPerson,
+    MtmcGlobalVehicle,
+    MtmcSearchJob,
+    MtmcTrackEvent,
+    MtmcTracklet,
+    MtmcVehiclePass,
+)
 from security import current_user, has_perm, permission_required
 from services import mtmc_engine
 from services.mtmc_engine import MtmcConfig
@@ -19,24 +32,9 @@ mtmc_bp = Blueprint("mtmc", __name__, url_prefix="/api/ai/mtmc")
 def _abs_weight(m: AiModel | None) -> str | None:
     if m is None or not m.file_path:
         return None
-    root = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
-    if os.path.isfile(root):
-        return root
-    if os.path.isdir(root):
-        preferred = (
-            "best.pt", "best.onnx", "yolo26n.pt", "yolo26n.onnx",
-            "yolo11n.pt", "yolov8n.pt",
-        )
-        for name in preferred:
-            p = os.path.join(root, name)
-            if os.path.isfile(p):
-                return p
-        for dirpath, _dirs, files in os.walk(root):
-            for f in files:
-                if f.lower().endswith((".pt", ".onnx", ".engine")):
-                    return os.path.join(dirpath, f)
-        return root
-    return None
+    from services.model_paths import resolve_model_weight_path
+
+    return resolve_model_weight_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
 
 
 def _pick_model(mid: int | None, *, task=None, library=None, keys=None):
@@ -203,10 +201,15 @@ def start_session():
         ocr_fn=ocr_fn,
         enable_person=bool(data.get("enablePerson", True)),
         enable_vehicle=bool(data.get("enableVehicle", True)),
-        conf=float(data.get("conf") or 0.35),
+        conf=float(data.get("conf") or 0.28),
         sample_fps=float(data.get("sampleFps") or 2.0),
         meters_per_pixel=float(data.get("metersPerPixel") or 0.05),
         appear_thresh=float(data.get("appearThresh") or 0.48),
+        vehicle_appear_thresh=float(data.get("vehicleAppearThresh") or 0),
+        confirm_thresh=float(data.get("confirmThresh") or 0),
+        candidate_thresh=float(data.get("candidateThresh") or 0),
+        use_faiss_gallery=bool(data.get("useFaissGallery", True)),
+        gallery_model_key=(data.get("galleryModelKey") or "").strip() or None,
         time_window_sec=float(data.get("timeWindowSec") or 90),
         fuse_weight_strong=float(data.get("fuseWeightStrong") or 0.65),
         width=int(data.get("width") or 640),
@@ -222,10 +225,20 @@ def start_session():
     )
     if cfg.enable_person and not cfg.det_person_path:
         return jsonify(code=400, message="人员检测模型未就绪，请先拉取 YOLO"), 400
+    if cfg.enable_person and not os.path.isfile(cfg.det_person_path):
+        return jsonify(
+            code=400,
+            message=f"人员检测模型路径无效（非文件）: {cfg.det_person_path}",
+        ), 400
     if cfg.enable_person and not cfg.youtu_root and not cfg.strong_reid_root:
         return jsonify(code=400, message="请至少准备 Youtu 或强 ReID（OSNet/CLIP）权重"), 400
     if cfg.enable_vehicle and not cfg.det_vehicle_path:
         return jsonify(code=400, message="车辆检测模型未就绪"), 400
+    if cfg.enable_vehicle and not os.path.isfile(cfg.det_vehicle_path):
+        return jsonify(
+            code=400,
+            message=f"车辆检测模型路径无效（非文件）: {cfg.det_vehicle_path}",
+        ), 400
 
     edges = [e.to_dict() for e in CameraTopology.query.filter_by(status="0").all()]
     session = mtmc_engine.start_session(
@@ -281,6 +294,247 @@ def list_passes():
         q = q.filter(MtmcVehiclePass.plate.contains(plate))
     total = q.count()
     rows = q.order_by(MtmcVehiclePass.id.desc()).offset((page - 1) * size).limit(size).all()
+    return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
+
+
+@mtmc_bp.get("/tracklets")
+@permission_required("ai:mtmc:query")
+def list_tracklets():
+    sid = (request.args.get("sessionId") or "").strip()
+    gid = (request.args.get("globalId") or "").strip()
+    ot = (request.args.get("objectType") or "").strip()
+    page = max(1, int(request.args.get("pageNum") or 1))
+    size = min(200, max(1, int(request.args.get("pageSize") or 50)))
+    q = MtmcTracklet.query
+    if sid:
+        q = q.filter(MtmcTracklet.session_id == sid)
+    if gid:
+        q = q.filter(MtmcTracklet.global_id == gid)
+    if ot:
+        q = q.filter(MtmcTracklet.object_type == ot)
+    total = q.count()
+    rows = q.order_by(MtmcTracklet.id.desc()).offset((page - 1) * size).limit(size).all()
+    return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
+
+
+@mtmc_bp.get("/globals/person")
+@permission_required("ai:mtmc:query")
+def list_global_persons():
+    gid = (request.args.get("globalId") or "").strip()
+    page = max(1, int(request.args.get("pageNum") or 1))
+    size = min(200, max(1, int(request.args.get("pageSize") or 50)))
+    q = MtmcGlobalPerson.query
+    if gid:
+        q = q.filter(MtmcGlobalPerson.global_id == gid)
+    total = q.count()
+    rows = q.order_by(MtmcGlobalPerson.last_seen_at.desc()).offset((page - 1) * size).limit(size).all()
+    return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
+
+
+@mtmc_bp.get("/globals/vehicle")
+@permission_required("ai:mtmc:query")
+def list_global_vehicles():
+    gid = (request.args.get("globalId") or "").strip()
+    plate = (request.args.get("plate") or "").strip()
+    page = max(1, int(request.args.get("pageNum") or 1))
+    size = min(200, max(1, int(request.args.get("pageSize") or 50)))
+    q = MtmcGlobalVehicle.query
+    if gid:
+        q = q.filter(MtmcGlobalVehicle.global_id == gid)
+    if plate:
+        q = q.filter(MtmcGlobalVehicle.plate.contains(plate))
+    total = q.count()
+    rows = q.order_by(MtmcGlobalVehicle.last_seen_at.desc()).offset((page - 1) * size).limit(size).all()
+    return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
+
+
+@mtmc_bp.get("/sessions/<sid>/candidates")
+@permission_required("ai:mtmc:query")
+def session_candidates(sid):
+    s = mtmc_engine.get_session(sid)
+    live = s.associator.list_candidates() if s else []
+    q = MtmcCandidatePair.query.filter_by(session_id=sid)
+    status = (request.args.get("status") or "").strip()
+    if status:
+        q = q.filter(MtmcCandidatePair.status == status)
+    db_rows = q.order_by(MtmcCandidatePair.id.desc()).limit(200).all()
+    return jsonify(
+        code=0,
+        data={
+            "live": live,
+            "rows": [r.to_dict() for r in db_rows],
+            "total": len(db_rows),
+        },
+    )
+
+
+@mtmc_bp.get("/candidates")
+@permission_required("ai:mtmc:query")
+def list_candidates_db():
+    sid = (request.args.get("sessionId") or "").strip()
+    status = (request.args.get("status") or "pending").strip()
+    page = max(1, int(request.args.get("pageNum") or 1))
+    size = min(200, max(1, int(request.args.get("pageSize") or 50)))
+    q = MtmcCandidatePair.query
+    if sid:
+        q = q.filter(MtmcCandidatePair.session_id == sid)
+    if status:
+        q = q.filter(MtmcCandidatePair.status == status)
+    total = q.count()
+    rows = q.order_by(MtmcCandidatePair.id.desc()).offset((page - 1) * size).limit(size).all()
+    return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
+
+
+@mtmc_bp.post("/candidates/promote")
+@permission_required("ai:mtmc:edit")
+def promote_candidate():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("sessionId") or "").strip()
+    gid = (data.get("globalId") or "").strip()
+    cand = (data.get("candidateGlobalId") or "").strip()
+    if not sid or not gid or not cand:
+        return jsonify(code=400, message="sessionId、globalId、candidateGlobalId 必填"), 400
+    result = mtmc_engine.promote_candidate(sid, gid, cand)
+    if not result.get("ok"):
+        return jsonify(code=400, message=result.get("message") or "晋升失败"), 400
+    return jsonify(code=0, message="已晋升合并", data=result)
+
+
+@mtmc_bp.post("/candidates/reject")
+@permission_required("ai:mtmc:edit")
+def reject_candidate():
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("sessionId") or "").strip()
+    gid = (data.get("globalId") or "").strip()
+    cand = (data.get("candidateGlobalId") or "").strip()
+    if not sid or not gid or not cand:
+        return jsonify(code=400, message="sessionId、globalId、candidateGlobalId 必填"), 400
+    result = mtmc_engine.reject_candidate(sid, gid, cand)
+    if not result.get("ok"):
+        return jsonify(code=400, message="驳回失败或记录不存在"), 400
+    return jsonify(code=0, message="已驳回", data=result)
+
+
+@mtmc_bp.get("/cross-events")
+@permission_required("ai:mtmc:query")
+def list_cross_events():
+    sid = (request.args.get("sessionId") or "").strip()
+    gid = (request.args.get("globalId") or "").strip()
+    page = max(1, int(request.args.get("pageNum") or 1))
+    size = min(200, max(1, int(request.args.get("pageSize") or 50)))
+    q = MtmcCrossCameraEvent.query
+    if sid:
+        q = q.filter(MtmcCrossCameraEvent.session_id == sid)
+    if gid:
+        q = q.filter(MtmcCrossCameraEvent.global_id == gid)
+    total = q.count()
+    rows = q.order_by(MtmcCrossCameraEvent.id.desc()).offset((page - 1) * size).limit(size).all()
+    live = []
+    for s in mtmc_engine.list_sessions():
+        if sid and s.get("sessionId") != sid:
+            continue
+        live.extend(s.get("crossEvents") or [])
+    return jsonify(
+        code=0,
+        data={"rows": [r.to_dict() for r in rows], "total": total, "live": live[-50:]},
+    )
+
+
+@mtmc_bp.post("/search/jobs")
+@permission_required("ai:mtmc:edit")
+def submit_search_job():
+    from services.mtmc_search import submit_job
+
+    data = request.get_json(silent=True) or {}
+    job_type = (data.get("jobType") or request.form.get("jobType") or "global_trace").strip()
+    params: dict = {}
+
+    if job_type == "global_trace":
+        params["globalId"] = (data.get("globalId") or request.form.get("globalId") or "").strip()
+        params["sessionId"] = (data.get("sessionId") or request.form.get("sessionId") or "").strip()
+        if not params["globalId"]:
+            return jsonify(code=400, message="globalId 必填"), 400
+    elif job_type == "multi_video_reid":
+        camera_ids = data.get("cameraIds") or request.form.get("cameraIds") or []
+        if isinstance(camera_ids, str):
+            camera_ids = [int(x) for x in camera_ids.split(",") if x.strip()]
+        camera_ids = [int(x) for x in camera_ids]
+        if not camera_ids:
+            return jsonify(code=400, message="cameraIds 必填"), 400
+        qfile = request.files.get("query") or request.files.get("file")
+        if qfile is None or not qfile.filename:
+            return jsonify(code=400, message="请上传查询行人图 query"), 400
+        suffix = os.path.splitext(secure_filename(qfile.filename))[1] or ".jpg"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=current_app.config["UPLOAD_FOLDER"])
+        tmp_path = tmp.name
+        tmp.close()
+        qfile.save(tmp_path)
+        youtu_m = _pick_model(
+            data.get("youtuModelId") or request.form.get("youtuModelId"),
+            task="person-reid",
+            keys=["opencv-person-reid-youtu"],
+        )
+        person_m = _pick_model(
+            data.get("personDetModelId") or request.form.get("personDetModelId"),
+            task="object-detection",
+            keys=["yolo26n", "yolo11n", "yolov8n"],
+        )
+        params = {
+            "cameraIds": camera_ids,
+            "queryImagePath": tmp_path,
+            "reidRoot": _abs_weight(youtu_m),
+            "modelKey": youtu_m.model_key if youtu_m else "opencv-person-reid-youtu",
+            "detPath": _abs_weight(person_m),
+            "threshold": float(data.get("threshold") or request.form.get("threshold") or 0.45),
+            "sampleFps": float(data.get("sampleFps") or request.form.get("sampleFps") or 1.0),
+            "maxFrames": int(data.get("maxFrames") or request.form.get("maxFrames") or 120),
+            "topk": int(data.get("topk") or request.form.get("topk") or 20),
+        }
+    else:
+        return jsonify(code=400, message="jobType 无效"), 400
+
+    job_id = submit_job(current_app._get_current_object(), job_type, params)
+    return jsonify(code=0, message="检索任务已提交", data={"jobId": job_id, "jobType": job_type})
+
+
+@mtmc_bp.get("/search/jobs")
+@permission_required("ai:mtmc:query")
+def list_search_jobs():
+    from services.mtmc_search import list_jobs
+
+    job_type = (request.args.get("jobType") or "").strip() or None
+    rows = list_jobs(current_app._get_current_object(), job_type=job_type, limit=int(request.args.get("limit") or 50))
+    return jsonify(code=0, data={"rows": rows, "total": len(rows)})
+
+
+@mtmc_bp.get("/search/jobs/<job_id>")
+@permission_required("ai:mtmc:query")
+def get_search_job(job_id):
+    from services.mtmc_search import get_job
+
+    row = get_job(current_app._get_current_object(), job_id)
+    if not row:
+        return jsonify(code=404, message="任务不存在"), 404
+    return jsonify(code=0, data=row)
+
+
+@mtmc_bp.get("/associations")
+@permission_required("ai:mtmc:query")
+def list_associations():
+    sid = (request.args.get("sessionId") or "").strip()
+    gid = (request.args.get("globalId") or "").strip()
+    tid = (request.args.get("trackletId") or "").strip()
+    page = max(1, int(request.args.get("pageNum") or 1))
+    size = min(200, max(1, int(request.args.get("pageSize") or 50)))
+    q = MtmcAssociationEdge.query
+    if sid:
+        q = q.filter(MtmcAssociationEdge.session_id == sid)
+    if gid:
+        q = q.filter(MtmcAssociationEdge.target_global_id == gid)
+    if tid:
+        q = q.filter(MtmcAssociationEdge.tracklet_id == tid)
+    total = q.count()
+    rows = q.order_by(MtmcAssociationEdge.id.desc()).offset((page - 1) * size).limit(size).all()
     return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
 
 

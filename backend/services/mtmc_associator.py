@@ -26,6 +26,7 @@ class AssocMode(str, Enum):
     """本次 associate 实际走的路径（便于日志/调试）。"""
     STICKY = "sticky"              # 短时：粘性续接，无外观匹配
     LONG_TERM = "long_term"        # 长时：新生 track 复活丢失 / 跨镜外观
+    CANDIDATE = "candidate"        # 三档中间态：暂存候选，precision-first 不合并
     NEW = "new"                    # 新建 Global
 
 
@@ -78,6 +79,39 @@ class GlobalTrack:
     last_assoc_mode: str = AssocMode.NEW.value
 
 
+@dataclass
+class AssocEvidence:
+    """单次 associate 的决策证据（供 association_edge 落库）。"""
+    decision: str
+    target_global_id: str
+    source_global_id: str | None = None
+    candidate_global_id: str | None = None
+    reid_score: float | None = None
+    topology_score: float | None = None
+    time_score: float | None = None
+    final_score: float | None = None
+    policy_version: str = "mtmc_v2"
+    extra: dict = field(default_factory=dict)
+
+    def to_scores(self) -> dict:
+        return {
+            "reid": self.reid_score,
+            "topology": self.topology_score,
+            "time": self.time_score,
+            "final": self.final_score,
+        }
+
+    def to_dict(self) -> dict:
+        d = self.to_scores()
+        d.update(self.extra or {})
+        d["decision"] = self.decision
+        d["targetGlobalId"] = self.target_global_id
+        d["sourceGlobalId"] = self.source_global_id
+        d["candidateGlobalId"] = self.candidate_global_id
+        d["policyVersion"] = self.policy_version
+        return d
+
+
 class MtmcAssociator:
     """跨摄像头全局关联（McByte++：短时粘性 / 长时选择性 ReID）。"""
 
@@ -85,6 +119,7 @@ class MtmcAssociator:
         self,
         *,
         appear_thresh: float = 0.48,
+        vehicle_appear_thresh: float | None = None,
         time_window_sec: float = 90.0,
         topology: dict[tuple[int, int], tuple[float, float]] | None = None,
         same_cam_reuse: bool = True,
@@ -96,8 +131,24 @@ class MtmcAssociator:
         same_cam_appear_thresh: float | None = None,
         # True：严格 McByte++ —— 无粘性时只用外观匹配「丢失/跨镜」目标；禁止抢占同镜活跃 Global
         mcbyte_decouple: bool = True,
+        confirm_thresh: float | None = None,
+        candidate_thresh: float | None = None,
+        use_faiss_gallery: bool = True,
+        gallery_model_key: str | None = None,
     ):
         self.appear_thresh = float(appear_thresh)
+        self.vehicle_appear_thresh = float(
+            vehicle_appear_thresh if vehicle_appear_thresh is not None else appear_thresh
+        )
+        self.confirm_thresh = float(
+            confirm_thresh if confirm_thresh is not None else appear_thresh
+        )
+        self.candidate_thresh = float(
+            candidate_thresh
+            if candidate_thresh is not None
+            else max(0.2, float(appear_thresh) * 0.82)
+        )
+        self.use_faiss_gallery = bool(use_faiss_gallery)
         self.same_cam_appear_thresh = float(
             same_cam_appear_thresh if same_cam_appear_thresh is not None else min(0.72, appear_thresh + 0.2)
         )
@@ -114,6 +165,89 @@ class MtmcAssociator:
         self._local_bind: dict[tuple[str, int, int], str] = {}
         self._seq = 0
         self.last_mode: AssocMode = AssocMode.NEW
+        self.last_evidence: AssocEvidence | None = None
+        from services.mtmc_active_gallery import MtmcActiveGallery
+
+        self._gallery = MtmcActiveGallery()
+        self._candidates: list[dict] = []
+
+    def _gallery_upsert(self, g: GlobalTrack) -> None:
+        if g.embedding is not None:
+            self._gallery.upsert(g.object_type, g.global_id, g.embedding)
+
+    def _gallery_remove(self, object_type: str, global_id: str) -> None:
+        self._gallery.remove(object_type, global_id)
+
+    def _hard_conflict(
+        self,
+        object_type: str,
+        *,
+        plate: str | None,
+        identity_key: str | None,
+        target: GlobalTrack,
+    ) -> bool:
+        """硬冲突：高置信车牌/身份键不一致时拒绝合并。"""
+        if object_type != "vehicle":
+            return False
+        ik = _valid_identity_key(identity_key)
+        g_ik = _valid_identity_key(target.identity_key)
+        if ik and g_ik and ik != g_ik:
+            return True
+        p = (plate or "").strip().upper()
+        gp = (target.plate or "").strip().upper()
+        if p and gp and p != gp and p not in _INVALID_IDENTITY_KEYS and gp not in _INVALID_IDENTITY_KEYS:
+            return True
+        return False
+
+    def _iter_long_term_targets(
+        self,
+        object_type: str,
+        embedding: np.ndarray | None,
+        excluded: set[str],
+        *,
+        reid_person_id: int | None = None,
+        plate: str | None = None,
+        identity_key: str | None = None,
+    ):
+        has_id_signal = bool(
+            reid_person_id
+            or plate
+            or _valid_identity_key(identity_key)
+        )
+        seen: set[str] = set()
+        if (
+            not has_id_signal
+            and self.use_faiss_gallery
+            and embedding is not None
+            and self._gallery.faiss_available()
+            and self._gallery.size(object_type) > 0
+        ):
+            for gid, _sim in self._gallery.search(object_type, embedding, topk=50):
+                if gid in excluded or gid in seen:
+                    continue
+                g = self.tracks.get(gid)
+                if g is None or g.object_type != object_type:
+                    continue
+                seen.add(gid)
+                yield g
+        for gid, g in self.tracks.items():
+            if gid in excluded or gid in seen or g.object_type != object_type:
+                continue
+            yield g
+
+    def _prefer_on_tie(self, g_new: GlobalTrack, g_old: GlobalTrack, camera_id: int) -> bool:
+        """同分 tie-break：优先跨镜 Global，避免同镜误建重复 ID 抢占。"""
+        if g_new.camera_id != camera_id and g_old.camera_id == camera_id:
+            return True
+        return False
+
+    def list_candidates(self) -> list[dict]:
+        with self._lock:
+            return [dict(x) for x in self._candidates[-200:]]
+
+    def get_track(self, global_id: str) -> GlobalTrack | None:
+        with self._lock:
+            return self.tracks.get(global_id)
 
     def set_topology(self, edges: list[dict]):
         topo = {}
@@ -133,6 +267,23 @@ class MtmcAssociator:
         self._seq += 1
         prefix = "P" if object_type == "person" else "V"
         return f"{prefix}{self._seq:06d}-{uuid.uuid4().hex[:6]}"
+
+    def _time_fit_score(self, prev_cam: int | None, cur_cam: int, dt: float) -> float:
+        if prev_cam is None:
+            return 1.0
+        if prev_cam == cur_cam:
+            return 1.0 if dt <= self.time_window_sec else 0.0
+        key = (int(prev_cam), int(cur_cam))
+        if key in self.topology:
+            lo, hi = self.topology[key]
+            if dt < lo or dt > hi:
+                return 0.0
+            mid = (lo + hi) * 0.5
+            span = max(hi - lo, 1e-6)
+            return float(max(0.0, 1.0 - abs(dt - mid) / span))
+        if dt > self.time_window_sec:
+            return 0.0
+        return 0.55
 
     def _topology_ok(self, prev_cam: int | None, cur_cam: int, dt: float) -> float:
         if prev_cam is None or prev_cam == cur_cam:
@@ -178,7 +329,9 @@ class MtmcAssociator:
             if now - g.last_seen > self.time_window_sec * 2
         ]
         for gid in dead:
-            self.tracks.pop(gid, None)
+            g = self.tracks.pop(gid, None)
+            if g is not None:
+                self._gallery_remove(g.object_type, gid)
         if dead:
             dead_set = set(dead)
             self._local_bind = {
@@ -270,58 +423,71 @@ class MtmcAssociator:
         plate: str | None,
         reid_person_id: int | None,
         now: float,
-    ) -> float | None:
-        """仅用于新生 local track 的长时/跨镜外观匹配。"""
+    ) -> tuple[float | None, dict]:
+        """仅用于新生 local track 的长时/跨镜外观匹配。返回 (final_score, breakdown)。"""
         dt = now - g.last_seen
         topo_w = self._topology_ok(g.camera_id, camera_id, dt)
+        time_w = self._time_fit_score(g.camera_id, camera_id, dt)
         if topo_w <= 0:
-            return None
+            return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
 
         same_cam = g.camera_id == camera_id
         if self.mcbyte_decouple:
             if not self._is_lost_for_revive(g, camera_id, now):
-                return None
+                return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
             if same_cam and not self.same_cam_reuse:
-                return None
+                return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
         else:
             if same_cam:
                 if dt < self.same_cam_min_gap:
-                    return None
+                    return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
                 if not self.same_cam_reuse:
-                    return None
+                    return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
 
         appear_need = self.same_cam_appear_thresh if same_cam else self.appear_thresh
-        # 长时复活略提高门槛，降低误认
+        if object_type == "vehicle":
+            appear_need = max(appear_need, self.vehicle_appear_thresh)
         if same_cam:
             appear_need = max(appear_need, self.appear_thresh + 0.12)
 
         score = 0.0
+        reid_raw = None
         ik = _valid_identity_key(identity_key)
         g_ik = _valid_identity_key(g.identity_key)
 
         if object_type == "vehicle":
             if ik and g_ik and ik == g_ik:
                 cos = _cos(embedding, g.embedding)
-                if cos >= 0 and cos < appear_need * 0.75:
-                    return None
-                score = 0.99
+                min_cos = appear_need
+                if cos >= 0 and cos < min_cos:
+                    return None, {"topology": topo_w, "time": time_w, "reid": cos, "final": None}
+                score, reid_raw = 0.99, cos if cos >= 0 else None
             elif plate and g.plate and plate == g.plate:
                 cos = _cos(embedding, g.embedding)
                 if embedding is not None and g.embedding is not None and cos < appear_need * 0.65:
-                    return None
-                score = 0.92
+                    return None, {"topology": topo_w, "time": time_w, "reid": cos, "final": None}
+                score, reid_raw = 0.92, cos if cos >= 0 else None
             else:
-                score = _cos(embedding, g.embedding)
+                reid_raw = _cos(embedding, g.embedding)
+                score = reid_raw
                 if score < appear_need:
-                    return None
+                    return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
         else:
             if reid_person_id and g.reid_person_id and reid_person_id == g.reid_person_id:
-                score = 0.99
+                score, reid_raw = 0.99, 1.0
             else:
-                score = _cos(embedding, g.embedding)
+                reid_raw = _cos(embedding, g.embedding)
+                score = reid_raw
                 if score < appear_need:
-                    return None
-        return float(score * topo_w)
+                    return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
+        final = float(score * topo_w)
+        return final, {
+            "reid": reid_raw,
+            "topology": topo_w,
+            "time": time_w,
+            "final": final,
+            "candidateGlobalId": g.global_id,
+        }
 
     def associate(
         self,
@@ -363,6 +529,12 @@ class MtmcAssociator:
                     if g is not None and g.object_type == object_type:
                         if now - g.last_seen <= self.local_sticky_sec:
                             self.last_mode = AssocMode.STICKY
+                            self.last_evidence = AssocEvidence(
+                                decision=AssocMode.STICKY.value,
+                                target_global_id=g.global_id,
+                                source_global_id=g.global_id,
+                                final_score=1.0,
+                            )
                             # 短时不依赖外观；embedding 可空（引擎可跳过 OSNet）
                             self._update_track(
                                 g,
@@ -379,6 +551,7 @@ class MtmcAssociator:
                                 mode=AssocMode.STICKY,
                                 update_embedding=embedding is not None,
                             )
+                            self._gallery_upsert(g)
                             return g
                         self._local_bind.pop(bkey, None)
                         self._mark_lost_if_unbound(sticky_gid, now)
@@ -393,18 +566,29 @@ class MtmcAssociator:
             allow_appearance = is_new_local or force_long_term or local_track_id is None
             best_gid = None
             best_score = -1.0
+            best_breakdown: dict = {}
             if allow_appearance and (
                 embedding is not None
                 or _valid_identity_key(identity_key)
                 or plate
                 or reid_person_id
             ):
-                for gid, g in self.tracks.items():
-                    if gid in excluded:
+                for g in self._iter_long_term_targets(
+                    object_type,
+                    embedding,
+                    excluded,
+                    reid_person_id=reid_person_id,
+                    plate=plate,
+                    identity_key=identity_key,
+                ):
+                    if self._hard_conflict(
+                        object_type,
+                        plate=plate,
+                        identity_key=identity_key,
+                        target=g,
+                    ):
                         continue
-                    if g.object_type != object_type:
-                        continue
-                    score = self._score_long_term(
+                    score, breakdown = self._score_long_term(
                         g,
                         object_type=object_type,
                         camera_id=camera_id,
@@ -418,9 +602,37 @@ class MtmcAssociator:
                         continue
                     if score > best_score:
                         best_score = score
-                        best_gid = gid
+                        best_gid = g.global_id
+                        best_breakdown = breakdown
+                    elif (
+                        score == best_score
+                        and best_gid is not None
+                        and self._prefer_on_tie(g, self.tracks[best_gid], camera_id)
+                    ):
+                        best_gid = g.global_id
+                        best_breakdown = breakdown
 
+            prev_gid = None
+            if local_track_id is not None:
+                prev_gid = self._local_bind.get(self._bind_key(object_type, camera_id, int(local_track_id)))
+
+            tier = "new"
+            candidate_gid = best_gid
+            tier_score = (
+                best_breakdown.get("reid")
+                if best_breakdown.get("reid") is not None
+                else best_score
+            )
             if best_gid is not None:
+                if tier_score >= self.confirm_thresh:
+                    tier = "confirm"
+                elif tier_score >= self.candidate_thresh:
+                    tier = "candidate"
+                else:
+                    best_gid = None
+                    tier = "new"
+
+            if best_gid is not None and tier == "confirm":
                 self.last_mode = AssocMode.LONG_TERM
                 g = self._update_track(
                     self.tracks[best_gid],
@@ -436,6 +648,61 @@ class MtmcAssociator:
                     now=now,
                     mode=AssocMode.LONG_TERM,
                     update_embedding=True,
+                )
+                self.last_evidence = AssocEvidence(
+                    decision=AssocMode.LONG_TERM.value,
+                    target_global_id=g.global_id,
+                    source_global_id=prev_gid,
+                    candidate_global_id=best_breakdown.get("candidateGlobalId"),
+                    reid_score=best_breakdown.get("reid"),
+                    topology_score=best_breakdown.get("topology"),
+                    time_score=best_breakdown.get("time"),
+                    final_score=best_breakdown.get("final"),
+                )
+                self._gallery_upsert(g)
+            elif tier == "candidate" and candidate_gid is not None:
+                self.last_mode = AssocMode.CANDIDATE
+                gid = self._new_gid(object_type)
+                g = GlobalTrack(
+                    global_id=gid,
+                    object_type=object_type,
+                    embedding=_l2(embedding) if embedding is not None else None,
+                    camera_id=camera_id,
+                    last_seen=now,
+                    first_seen=now,
+                    reid_person_id=reid_person_id,
+                    face_person_id=face_person_id,
+                    display_name=display_name,
+                    plate=plate,
+                    identity_key=identity_key,
+                    visual_key=visual_key,
+                    local_track_id=int(local_track_id) if local_track_id is not None else None,
+                    last_assoc_mode=AssocMode.CANDIDATE.value,
+                )
+                self.tracks[gid] = g
+                self._gallery_upsert(g)
+                self._candidates.append({
+                    "globalId": gid,
+                    "candidateGlobalId": candidate_gid,
+                    "objectType": object_type,
+                    "cameraId": camera_id,
+                    "localTrackId": local_track_id,
+                    "finalScore": best_score,
+                    "reidScore": best_breakdown.get("reid"),
+                    "topologyScore": best_breakdown.get("topology"),
+                    "timeScore": best_breakdown.get("time"),
+                    "ts": now,
+                })
+                self.last_evidence = AssocEvidence(
+                    decision=AssocMode.CANDIDATE.value,
+                    target_global_id=g.global_id,
+                    source_global_id=prev_gid,
+                    candidate_global_id=candidate_gid,
+                    reid_score=best_breakdown.get("reid"),
+                    topology_score=best_breakdown.get("topology"),
+                    time_score=best_breakdown.get("time"),
+                    final_score=best_score,
+                    extra={"tier": "candidate", "confirmThresh": self.confirm_thresh},
                 )
             else:
                 self.last_mode = AssocMode.NEW
@@ -457,10 +724,73 @@ class MtmcAssociator:
                     last_assoc_mode=AssocMode.NEW.value,
                 )
                 self.tracks[gid] = g
+                self._gallery_upsert(g)
+                self.last_evidence = AssocEvidence(
+                    decision=AssocMode.NEW.value,
+                    target_global_id=g.global_id,
+                    source_global_id=prev_gid,
+                    reid_score=None,
+                    topology_score=None,
+                    time_score=None,
+                    final_score=None,
+                )
 
             if local_track_id is not None:
                 self._local_bind[self._bind_key(object_type, camera_id, int(local_track_id))] = g.global_id
             return g
+
+    def merge_globals(self, keep_gid: str, drop_gid: str, now: float | None = None) -> GlobalTrack | None:
+        """P2：将 drop_gid 合并进 keep_gid（候选晋升）。"""
+        now = float(now if now is not None else time.time())
+        with self._lock:
+            keep = self.tracks.get(keep_gid)
+            drop = self.tracks.get(drop_gid)
+            if keep is None or drop is None or keep.object_type != drop.object_type:
+                return None
+            if drop.embedding is not None:
+                if keep.embedding is None:
+                    keep.embedding = _l2(drop.embedding)
+                else:
+                    a, b = _l2(keep.embedding), _l2(drop.embedding)
+                    dim = max(a.size, b.size)
+                    aa = np.zeros(dim, dtype=np.float32)
+                    bb = np.zeros(dim, dtype=np.float32)
+                    aa[: a.size] = a
+                    bb[: b.size] = b
+                    keep.embedding = _l2(0.5 * aa + 0.5 * bb)
+            keep.hit_count += int(drop.hit_count or 1)
+            if drop.reid_person_id and not keep.reid_person_id:
+                keep.reid_person_id = drop.reid_person_id
+            if drop.face_person_id and not keep.face_person_id:
+                keep.face_person_id = drop.face_person_id
+            if drop.display_name and not keep.display_name:
+                keep.display_name = drop.display_name
+            if drop.plate and not keep.plate:
+                keep.plate = drop.plate
+            if drop.identity_key and not keep.identity_key:
+                keep.identity_key = drop.identity_key
+            if drop.visual_key and not keep.visual_key:
+                keep.visual_key = drop.visual_key
+            keep.last_seen = max(keep.last_seen, drop.last_seen)
+            keep.first_seen = min(keep.first_seen, drop.first_seen)
+            keep.camera_id = drop.camera_id
+            keep.lost_at = None
+            keep.last_assoc_mode = AssocMode.LONG_TERM.value
+            for k, v in list(self._local_bind.items()):
+                if v == drop_gid:
+                    self._local_bind[k] = keep_gid
+            self._gallery_remove(drop.object_type, drop_gid)
+            self.tracks.pop(drop_gid, None)
+            self._gallery_upsert(keep)
+            self.last_mode = AssocMode.LONG_TERM
+            self.last_evidence = AssocEvidence(
+                decision="promoted",
+                target_global_id=keep_gid,
+                source_global_id=drop_gid,
+                candidate_global_id=keep_gid,
+                policy_version="mtmc_v2",
+            )
+            return keep
 
     def release_local(self, object_type: str, camera_id: int, local_track_ids: Iterable[int] | None = None):
         now = time.time()

@@ -5,6 +5,7 @@ const SEG_TASKS = ['instance-segmentation', 'interactive-segmentation']
 const ENGINE_LIBS = {
   rfdetr: ['rfdetr'],
   ultralytics: ['ultralytics'],
+  'yolo-master': ['yolo-master'],
   mobilesam: ['mobilesam'],
   efficientsam: ['opencv-sam', 'efficientsam', 'efficient-sam'],
 }
@@ -26,6 +27,7 @@ export function resolveSegEngine(m) {
   const lib = String(m.library || '').toLowerCase()
   if (lib === 'mobilesam') return 'mobilesam'
   if (lib === 'ultralytics') return 'ultralytics'
+  if (lib === 'yolo-master') return 'yolo-master'
   if (lib === 'rfdetr') return 'rfdetr'
   return null
 }
@@ -82,6 +84,7 @@ export async function loadSegmentationModels(modelApi, { pageSize = 200 } = {}) 
       if (isEfficientSamModel(m)) return 0
       if (String(m.library || '').toLowerCase() === 'mobilesam') return 1
       if (String(m.library || '').toLowerCase() === 'ultralytics') return 2
+      if (String(m.library || '').toLowerCase() === 'yolo-master') return 2
       return 3
     }
     return rank(a) - rank(b) || Number(a.id) - Number(b.id)

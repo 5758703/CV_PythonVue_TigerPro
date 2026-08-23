@@ -44,10 +44,15 @@ class MtmcConfig:
     ocr_fn: Callable[[bytes], dict] | None = None
     enable_person: bool = True
     enable_vehicle: bool = True
-    conf: float = 0.35
+    conf: float = 0.28
     sample_fps: float = 2.0
     meters_per_pixel: float = 0.05
     appear_thresh: float = 0.48
+    vehicle_appear_thresh: float = 0.0
+    confirm_thresh: float = 0.0
+    candidate_thresh: float = 0.0
+    use_faiss_gallery: bool = True
+    gallery_model_key: str | None = None
     time_window_sec: float = 90.0
     fuse_weight_strong: float = 0.65
     width: int = 640
@@ -75,6 +80,8 @@ class CamState:
     frame_seq: int = 0
     last_dets: list = field(default_factory=list)
     congestion: dict = field(default_factory=dict)
+    person_builders: dict = field(default_factory=dict)
+    vehicle_builders: dict = field(default_factory=dict)
 
 
 class MtmcSession:
@@ -97,6 +104,9 @@ class MtmcSession:
             "vehicles": 0,
             "errors": 0,
         }
+        self.cross_events: list[dict] = []
+        self._global_last_cam: dict[str, int] = {}
+        self._global_last_seen_ts: dict[str, float] = {}
 
     def to_dict(self) -> dict:
         return {
@@ -108,6 +118,11 @@ class MtmcSession:
             "localTrackBackend": self.cfg.local_track_backend,
             "enableCmc": self.cfg.enable_cmc,
             "mcbyteDecouple": self.cfg.mcbyte_decouple,
+            "confirmThresh": self.cfg.confirm_thresh or self.cfg.appear_thresh,
+            "candidateThresh": self.cfg.candidate_thresh or max(0.2, self.cfg.appear_thresh * 0.82),
+            "useFaissGallery": self.cfg.use_faiss_gallery,
+            "candidates": self.associator.list_candidates(),
+            "crossEvents": self.cross_events[-50:],
             "createdAt": self.created_at,
             "stats": dict(self.stats),
             "globals": self.associator.snapshot(),
@@ -126,6 +141,7 @@ class MtmcSession:
 
 _sessions: dict[str, MtmcSession] = {}
 _sessions_lock = threading.Lock()
+_detect_fail_logged: set[str] = set()
 
 
 def get_session(session_id: str) -> MtmcSession | None:
@@ -164,9 +180,15 @@ def _decode_jpeg(data: bytes):
 def _detect(model_path: str | None, frame, conf: float, classes: list[int] | None):
     if not model_path:
         return []
+    path = model_path
+    if not os.path.isfile(path):
+        if path not in _detect_fail_logged:
+            _detect_fail_logged.add(path)
+            log.error("mtmc detect model not found: %s", path)
+        return []
     try:
         from inference import _get_model, _yolo_predict_kwargs
-        model = _get_model(model_path)
+        model = _get_model(path)
         kw = _yolo_predict_kwargs(conf=conf, classes=classes)
         r = model.predict(frame, **kw)[0]
         out = []
@@ -183,7 +205,10 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
             })
         return out
     except Exception as e:  # noqa: BLE001
-        log.warning("mtmc detect failed: %s", e)
+        key = f"{path}:{type(e).__name__}:{e}"
+        if key not in _detect_fail_logged:
+            _detect_fail_logged.add(key)
+            log.error("mtmc detect failed path=%s: %s", path, e)
         return []
 
 
@@ -201,12 +226,43 @@ def _crop(img, bbox, pad=0.05):
     return img[y1:y2, x1:x2].copy()
 
 
-def _match_gallery(emb, model_key: str, threshold: float):
+def _gallery_model_keys(cfg: MtmcConfig, meta_backend: str | None = None) -> list[str]:
+    keys: list[str] = []
+    if cfg.gallery_model_key:
+        keys.append(cfg.gallery_model_key)
+    backend = (meta_backend or "").lower()
+    if cfg.strong_reid_root or "strong" in backend:
+        keys.extend(["osnet-x1-0", "clip-reid-person", "fastreid-osnet"])
+    if cfg.youtu_root or "youtu" in backend:
+        keys.append("opencv-person-reid-youtu")
+    if not keys:
+        keys.append("opencv-person-reid-youtu")
+    seen: set[str] = set()
+    out: list[str] = []
+    for k in keys:
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+def _match_gallery(emb, model_keys: list[str], threshold: float):
     try:
-        from services.reid_gallery import match_embedding
-        return match_embedding(emb, model_key, threshold=threshold)
+        from services.reid_gallery import match_embedding, match_embedding_faiss
     except Exception:  # noqa: BLE001
-        return {"matched": False, "name": "未知", "personId": None, "score": 0.0}
+        return {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
+    best = {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
+    for key in model_keys:
+        try:
+            row = match_embedding_faiss(emb, key, threshold=threshold)
+        except Exception:  # noqa: BLE001
+            try:
+                row = match_embedding(emb, key, threshold=threshold)
+            except Exception:  # noqa: BLE001
+                continue
+        if row.get("matched") and float(row.get("score") or 0) > float(best.get("score") or 0):
+            best = {**row, "modelKey": key}
+    return best
 
 
 def _speed_from_trail(trail, meters_per_pixel: float, fps: float) -> float | None:
@@ -354,6 +410,219 @@ def _persist_pass(app, row: dict):
         log.debug("persist pass failed: %s", e)
 
 
+def _get_tracklet_builder(
+    cam_state: CamState,
+    *,
+    session_id: str,
+    object_type: str,
+    local_track_id: int,
+    now: float,
+):
+    from services.mtmc_tracklet import TrackletBuilder
+
+    pool = cam_state.person_builders if object_type == "person" else cam_state.vehicle_builders
+    builder = pool.get(int(local_track_id))
+    if builder is None:
+        builder = TrackletBuilder.create(
+            session_id=session_id,
+            camera_id=cam_state.camera_id,
+            object_type=object_type,
+            local_track_id=int(local_track_id),
+            now=now,
+        )
+        pool[int(local_track_id)] = builder
+    return builder
+
+
+def _maybe_cross_camera_event(session: MtmcSession, builder, g, now: float):
+    """P2：同一 Global 跨相机切换时写入轻量跨镜事件。"""
+    if not session.cfg.persist_events:
+        return
+    gid = g.global_id
+    cur_cam = int(builder.camera_id)
+    prev_cam = session._global_last_cam.get(gid)
+    prev_ts = session._global_last_seen_ts.get(gid, now)
+    evidence = session.associator.last_evidence
+    decision = evidence.decision if evidence else None
+    if prev_cam is not None and int(prev_cam) != cur_cam:
+        transit = float(now - prev_ts)
+        row = {
+            "sessionId": session.session_id,
+            "globalId": gid,
+            "objectType": builder.object_type,
+            "fromCameraId": int(prev_cam),
+            "toCameraId": cur_cam,
+            "transitSec": round(transit, 2),
+            "displayName": g.display_name,
+            "plate": g.plate,
+            "decision": decision,
+            "eventTime": now,
+        }
+        session.cross_events.append(row)
+        if len(session.cross_events) > 200:
+            session.cross_events = session.cross_events[-200:]
+        from services.mtmc_persist import persist_cross_camera_event
+
+        persist_cross_camera_event(
+            session.app,
+            session_id=session.session_id,
+            global_id=gid,
+            object_type=builder.object_type,
+            from_camera_id=int(prev_cam),
+            to_camera_id=cur_cam,
+            transit_sec=transit,
+            display_name=g.display_name,
+            plate=g.plate,
+            decision=decision,
+            attrs={"trackletId": builder.tracklet_id},
+            event_time=None,
+        )
+    session._global_last_cam[gid] = cur_cam
+    session._global_last_seen_ts[gid] = now
+
+
+def _record_association(
+    session: MtmcSession,
+    builder,
+    g,
+    *,
+    prev_global_id: str | None,
+    persist_tracklet_row: bool = False,
+):
+    from services.mtmc_persist import (
+        persist_association_edge,
+        persist_candidate_pair,
+        persist_global_identity,
+        persist_tracklet,
+    )
+
+    evidence = session.associator.last_evidence
+    decision = evidence.decision if evidence else "NEW"
+    if prev_global_id and prev_global_id != g.global_id:
+        decision = "REFINE"
+    if session.cfg.persist_events:
+        persist_global_identity(session.app, g)
+        persist_association_edge(
+            session.app,
+            session_id=session.session_id,
+            tracklet_id=builder.tracklet_id,
+            object_type=builder.object_type,
+            decision=decision,
+            target_global_id=g.global_id,
+            source_global_id=prev_global_id,
+            scores=evidence.to_scores() if evidence else {},
+            evidence=evidence.to_dict() if evidence else {},
+            policy_version=evidence.policy_version if evidence else "mtmc_v2",
+        )
+        if evidence and evidence.decision == "candidate" and evidence.candidate_global_id:
+            persist_candidate_pair(
+                session.app,
+                session_id=session.session_id,
+                global_id=g.global_id,
+                candidate_global_id=evidence.candidate_global_id,
+                object_type=builder.object_type,
+                camera_id=builder.camera_id,
+                tracklet_id=builder.tracklet_id,
+                final_score=evidence.final_score,
+                reid_score=evidence.reid_score,
+                evidence=evidence.to_dict(),
+            )
+        if persist_tracklet_row:
+            persist_tracklet(session.app, builder, global_id=g.global_id)
+    _maybe_cross_camera_event(session, builder, g, time.time())
+
+
+def _associate_tracklet(
+    session: MtmcSession,
+    builder,
+    *,
+    embedding,
+    reid_person_id=None,
+    display_name=None,
+    identity_key=None,
+    plate=None,
+    visual_key=None,
+    exclude_gids: set,
+    now: float,
+    force: bool = False,
+):
+    prev_gid = builder.assigned_global_id
+    if prev_gid and not force:
+        g = session.associator.get_track(prev_gid)
+        if g is not None:
+            return g
+    g = session.associator.associate(
+        object_type=builder.object_type,
+        camera_id=builder.camera_id,
+        embedding=embedding,
+        reid_person_id=reid_person_id,
+        identity_key=identity_key,
+        plate=plate,
+        visual_key=visual_key,
+        display_name=display_name,
+        local_track_id=int(builder.local_track_id),
+        exclude_gids=exclude_gids,
+        now=now,
+        force_long_term=force,
+    )
+    builder.assigned_global_id = g.global_id
+    _record_association(session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False)
+    return g
+
+
+def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | None = None):
+    """局部轨迹结束：聚合 embedding 后做最终关联并落库 tracklet。"""
+    emb = builder.aggregate_embedding()
+    identity = builder.aggregate_identity()
+    prev_gid = builder.assigned_global_id
+    ex = set(exclude_gids or ())
+    kwargs = dict(
+        embedding=emb,
+        exclude_gids=ex,
+        now=builder.end_ts or time.time(),
+        force=True,
+    )
+    if builder.object_type == "person":
+        g = _associate_tracklet(
+            session,
+            builder,
+            reid_person_id=None,
+            display_name=None,
+            **kwargs,
+        )
+    else:
+        g = _associate_tracklet(
+            session,
+            builder,
+            identity_key=identity.get("identityKey"),
+            plate=identity.get("plate"),
+            visual_key=identity.get("visualKey"),
+            **kwargs,
+        )
+    if session.cfg.persist_events:
+        from services.mtmc_persist import persist_tracklet
+        persist_tracklet(session.app, builder, global_id=g.global_id)
+    return g
+
+
+def _finalize_removed_builders(
+    session: MtmcSession,
+    cam_state: CamState,
+    object_type: str,
+    active_local_ids: set[int],
+):
+    pool = cam_state.person_builders if object_type == "person" else cam_state.vehicle_builders
+    stale = [tid for tid in list(pool.keys()) if int(tid) not in active_local_ids]
+    for tid in stale:
+        builder = pool.pop(tid, None)
+        if builder is None or not builder.observations:
+            continue
+        try:
+            _finalize_tracklet(session, builder, exclude_gids=set())
+        except Exception as e:  # noqa: BLE001
+            log.debug("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
+
+
 def _make_local_tracker(cfg: MtmcConfig):
     """按配置创建单路局部跟踪器；ByteTrack/BoT-SORT 不可用时回退 IoU。"""
     from services.mtmc_local_track import bytetrack_available, botsort_available, create_local_tracker
@@ -380,7 +649,7 @@ def _make_local_tracker(cfg: MtmcConfig):
     )
 
 
-def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict):
+def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
     from services.strong_reid import extract_person_embedding
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
     from services.vehicle_track import congestion_level, get_session as get_vsession
@@ -388,7 +657,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
 
     cfg = session.cfg
     cam_id = cam_state.camera_id
-    now = time.time()
+    now = float(now if now is not None else time.time())
     min_interval = 1.0 / max(0.2, float(cfg.sample_fps))
     if now - cam_state.last_process_at < min_interval:
         # 仍刷新 overlay 用上一帧结果画在新帧上
@@ -399,6 +668,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 cam_state.frame_seq += 1
         return
     cam_state.last_process_at = now
+    fh, fw = frame.shape[:2]
 
     if cam_state.tracker_person is None:
         cam_state.tracker_person = _make_local_tracker(cfg)
@@ -417,7 +687,13 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             crop = _crop(frame, t.bbox)
             if crop is None:
                 continue
-            # McByte++：粘性短时不提 OSNet；仅新生 / 无粘性才长时认人
+            builder = _get_tracklet_builder(
+                cam_state,
+                session_id=session.session_id,
+                object_type="person",
+                local_track_id=int(t.track_id),
+                now=now,
+            )
             sticky_gid = session.associator.peek_sticky(
                 object_type="person",
                 camera_id=cam_id,
@@ -438,32 +714,59 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     emb = l2_normalize(emb)
                 except Exception:  # noqa: BLE001
                     emb, meta = None, {}
-                if emb is not None and cfg.youtu_root:
+                if emb is not None:
                     try:
-                        gallery = _match_gallery(emb, "opencv-person-reid-youtu", cfg.appear_thresh)
+                        gallery = _match_gallery(
+                            emb,
+                            _gallery_model_keys(cfg, meta.get("backend")),
+                            cfg.appear_thresh,
+                        )
                     except Exception:  # noqa: BLE001
                         pass
-            g = session.associator.associate(
-                object_type="person",
-                camera_id=cam_id,
+            builder.add_observation(
+                bbox=t.bbox,
+                conf=t.conf,
+                frame_h=fh,
+                frame_w=fw,
                 embedding=emb,
-                reid_person_id=gallery.get("personId") if gallery.get("matched") else None,
-                display_name=gallery.get("name") if gallery.get("matched") else None,
-                local_track_id=int(t.track_id),
-                exclude_gids=claimed_person,
+                trail=list(t.trail),
+                meta={"reidBackend": meta.get("backend")},
                 now=now,
             )
-            claimed_person.add(g.global_id)
-            if gallery.get("matched") and not g.display_name:
-                g.display_name = gallery.get("name")
-            name = g.display_name or "匿名"
-            label = f"{g.global_id}|{name}"
+            g = None
+            if sticky_gid:
+                g = session.associator.get_track(sticky_gid)
+            elif builder.assigned_global_id:
+                g = session.associator.get_track(builder.assigned_global_id)
+            elif builder.ready_for_tentative(min_quality=0.08):
+                agg_emb = builder.aggregate_embedding()
+                if agg_emb is None:
+                    agg_emb = emb
+                g = _associate_tracklet(
+                    session,
+                    builder,
+                    embedding=agg_emb,
+                    reid_person_id=gallery.get("personId") if gallery.get("matched") else None,
+                    display_name=gallery.get("name") if gallery.get("matched") else None,
+                    exclude_gids=claimed_person,
+                    now=now,
+                )
+            if g is not None:
+                claimed_person.add(g.global_id)
+                if gallery.get("matched") and not g.display_name:
+                    g.display_name = gallery.get("name")
+                name = g.display_name or "匿名"
+                label = f"{g.global_id}|{name}"
+            else:
+                label = f"L{t.track_id}"
+                name = "匿名"
             speed = _speed_from_trail(t.trail, cfg.meters_per_pixel, cfg.sample_fps)
             item = {
                 "objectType": "person",
-                "globalId": g.global_id,
+                "globalId": g.global_id if g is not None else None,
                 "localTrackId": t.track_id,
-                "reidPersonId": g.reid_person_id,
+                "trackletId": builder.tracklet_id,
+                "reidPersonId": g.reid_person_id if g is not None else None,
                 "displayName": name,
                 "bbox": t.bbox,
                 "trail": list(t.trail),
@@ -473,24 +776,27 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 "attrs": {
                     "reidBackend": meta.get("backend"),
                     "cameraId": cam_id,
-                    "assocMode": getattr(g, "last_assoc_mode", None),
+                    "assocMode": getattr(g, "last_assoc_mode", None) if g else None,
                     "reidSkipped": not need_reid,
+                    "trackletId": builder.tracklet_id,
                 },
             }
             items.append(item)
-            session.stats["persons"] += 1
-            row = {
-                "sessionId": session.session_id,
-                "cameraId": cam_id,
-                **item,
-                "congestion": None,
-            }
-            with session._events_lock:
-                session.events.append({**row, "ts": now})
-                if len(session.events) > 500:
-                    session.events = session.events[-400:]
-            if cfg.persist_events:
-                _persist_event(session.app, row)
+            if g is not None:
+                session.stats["persons"] += 1
+                row = {
+                    "sessionId": session.session_id,
+                    "cameraId": cam_id,
+                    **item,
+                    "congestion": None,
+                }
+                with session._events_lock:
+                    session.events.append({**row, "ts": now})
+                    if len(session.events) > 500:
+                        session.events = session.events[-400:]
+                if cfg.persist_events:
+                    _persist_event(session.app, row)
+        _finalize_removed_builders(session, cam_state, "person", active_person_local)
         try:
             session.associator.prune_inactive_locals("person", cam_id, active_person_local)
         except Exception:  # noqa: BLE001
@@ -511,6 +817,13 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             crop = _crop(frame, t.bbox)
             if crop is None:
                 continue
+            builder = _get_tracklet_builder(
+                cam_state,
+                session_id=session.session_id,
+                object_type="vehicle",
+                local_track_id=int(t.track_id),
+                now=now,
+            )
             sticky_gid = session.associator.peek_sticky(
                 object_type="vehicle",
                 camera_id=cam_id,
@@ -544,28 +857,11 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     plate_text = vsession.plates[t.track_id].get("text")
                     plate_score = float(vsession.plates[t.track_id].get("score") or 0)
 
-                best_peer = None
-                best_sim = -1.0
-                with session.associator._lock:
-                    for gtrack in session.associator.tracks.values():
-                        if gtrack.object_type != "vehicle" or gtrack.embedding is None:
-                            continue
-                        if gtrack.global_id in claimed_vehicle:
-                            continue
-                        # 仅与「丢失/跨镜」候选比，避免同帧同伴污染
-                        dt = now - gtrack.last_seen
-                        if gtrack.camera_id == cam_id and dt < max(0.45, float(cfg.lost_revive_sec or 1.0)):
-                            continue
-                        from services.vehicle_reid_feat import cosine as vcos
-                        sim = vcos(emb, gtrack.embedding) if emb is not None else -1.0
-                        if sim > best_sim:
-                            best_sim = sim
-                            best_peer = gtrack.embedding
                 fuse = fuse_plate_visual(
                     plate=plate_text,
                     plate_score=plate_score,
                     emb_a=emb,
-                    emb_b=best_peer if best_peer is not None else emb,
+                    emb_b=emb,
                 )
             elif t.track_id in vsession.plates:
                 plate_text = vsession.plates[t.track_id].get("text")
@@ -573,20 +869,49 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 fuse = {"plate": plate_text, "plateScore": plate_score, "identityKey": None,
                         "visualKey": None, "fuseScore": 0, "visualScore": 0}
 
-            g = session.associator.associate(
-                object_type="vehicle",
-                camera_id=cam_id,
+            builder.add_observation(
+                bbox=t.bbox,
+                conf=t.conf,
+                frame_h=fh,
+                frame_w=fw,
                 embedding=emb,
-                identity_key=fuse.get("identityKey"),
                 plate=fuse.get("plate") or plate_text,
+                plate_score=float(fuse.get("plateScore") or plate_score or 0),
+                identity_key=fuse.get("identityKey"),
                 visual_key=fuse.get("visualKey"),
-                local_track_id=int(t.track_id),
-                exclude_gids=claimed_vehicle,
+                fuse_score=float(fuse.get("fuseScore") or 0),
+                trail=list(t.trail),
+                meta={"vehicleReid": vmeta.get("backend")},
                 now=now,
             )
-            claimed_vehicle.add(g.global_id)
+            g = None
+            if sticky_gid:
+                g = session.associator.get_track(sticky_gid)
+            elif builder.assigned_global_id:
+                g = session.associator.get_track(builder.assigned_global_id)
+            elif builder.ready_for_tentative(min_quality=0.08):
+                agg_emb = builder.aggregate_embedding()
+                if agg_emb is None:
+                    agg_emb = emb
+                g = _associate_tracklet(
+                    session,
+                    builder,
+                    embedding=agg_emb,
+                    identity_key=fuse.get("identityKey"),
+                    plate=fuse.get("plate") or plate_text,
+                    visual_key=fuse.get("visualKey"),
+                    exclude_gids=claimed_vehicle,
+                    now=now,
+                )
+            if g is not None:
+                claimed_vehicle.add(g.global_id)
+                plate_show = g.plate or fuse.get("plate") or plate_text or "无牌"
+                label = f"{g.global_id}|{plate_show}"
+            else:
+                plate_show = fuse.get("plate") or plate_text or "无牌"
+                label = f"L{t.track_id}|{plate_show}"
             speed = _speed_from_trail(t.trail, cfg.meters_per_pixel, cfg.sample_fps)
-            if speed is not None:
+            if speed is not None and g is not None:
                 cx = (t.bbox[0] + t.bbox[2]) * 0.5
                 cy = (t.bbox[1] + t.bbox[3]) * 0.5
                 hist = vsession.track_history.setdefault(t.track_id, [])
@@ -594,14 +919,13 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 if len(hist) > 90:
                     vsession.track_history[t.track_id] = hist[-90:]
 
-            plate_show = g.plate or fuse.get("plate") or plate_text or "无牌"
-            label = f"{g.global_id}|{plate_show}"
             item = {
                 "objectType": "vehicle",
-                "globalId": g.global_id,
+                "globalId": g.global_id if g is not None else None,
                 "localTrackId": t.track_id,
-                "plate": g.plate or fuse.get("plate") or plate_text,
-                "identityKey": g.identity_key or fuse.get("identityKey"),
+                "trackletId": builder.tracklet_id,
+                "plate": (g.plate if g else None) or fuse.get("plate") or plate_text,
+                "identityKey": (g.identity_key if g else None) or fuse.get("identityKey"),
                 "bbox": t.bbox,
                 "trail": list(t.trail),
                 "score": float(fuse.get("fuseScore") or 0),
@@ -614,44 +938,47 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 "attrs": {
                     "vehicleReid": vmeta.get("backend"),
                     "cameraId": cam_id,
-                    "assocMode": getattr(g, "last_assoc_mode", None),
+                    "assocMode": getattr(g, "last_assoc_mode", None) if g else None,
                     "reidSkipped": not need_reid,
+                    "trackletId": builder.tracklet_id,
                 },
             }
             items.append(item)
-            session.stats["vehicles"] += 1
-            row = {"sessionId": session.session_id, "cameraId": cam_id, **item}
-            with session._events_lock:
-                session.events.append({**row, "ts": now})
-                if len(session.events) > 500:
-                    session.events = session.events[-400:]
-            if cfg.persist_events:
-                _persist_event(session.app, row)
-                pass_key = f"{g.global_id}:{cam_id}"
-                seen = getattr(session, "_pass_seen", None)
-                if seen is None:
-                    session._pass_seen = set()
-                    seen = session._pass_seen
-                if pass_key not in seen:
-                    seen.add(pass_key)
-                    pass_row = {
-                        "sessionId": session.session_id,
-                        "cameraId": cam_id,
-                        "globalId": g.global_id,
-                        "identityKey": item.get("identityKey"),
-                        "plate": item.get("plate"),
-                        "plateScore": item.get("plateScore"),
-                        "visualScore": item.get("visualScore"),
-                        "fuseScore": item.get("fuseScore"),
-                        "speedKmh": speed,
-                        "congestion": cong,
-                        "localTrackId": t.track_id,
-                    }
-                    with session._events_lock:
-                        session.passes.append({**pass_row, "ts": now})
-                        if len(session.passes) > 300:
-                            session.passes = session.passes[-200:]
-                    _persist_pass(session.app, pass_row)
+            if g is not None:
+                session.stats["vehicles"] += 1
+                row = {"sessionId": session.session_id, "cameraId": cam_id, **item}
+                with session._events_lock:
+                    session.events.append({**row, "ts": now})
+                    if len(session.events) > 500:
+                        session.events = session.events[-400:]
+                if cfg.persist_events:
+                    _persist_event(session.app, row)
+                    pass_key = f"{g.global_id}:{cam_id}"
+                    seen = getattr(session, "_pass_seen", None)
+                    if seen is None:
+                        session._pass_seen = set()
+                        seen = session._pass_seen
+                    if pass_key not in seen:
+                        seen.add(pass_key)
+                        pass_row = {
+                            "sessionId": session.session_id,
+                            "cameraId": cam_id,
+                            "globalId": g.global_id,
+                            "identityKey": item.get("identityKey"),
+                            "plate": item.get("plate"),
+                            "plateScore": item.get("plateScore"),
+                            "visualScore": item.get("visualScore"),
+                            "fuseScore": item.get("fuseScore"),
+                            "speedKmh": speed,
+                            "congestion": cong,
+                            "localTrackId": t.track_id,
+                        }
+                        with session._events_lock:
+                            session.passes.append({**pass_row, "ts": now})
+                            if len(session.passes) > 300:
+                                session.passes = session.passes[-200:]
+                        _persist_pass(session.app, pass_row)
+        _finalize_removed_builders(session, cam_state, "vehicle", active_vehicle_local)
         try:
             session.associator.prune_inactive_locals("vehicle", cam_id, active_vehicle_local)
         except Exception:  # noqa: BLE001
@@ -710,12 +1037,20 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
 
 def start_session(cfg: MtmcConfig, *, cameras: list, upload_folder: str, app=None, topology_edges=None) -> MtmcSession:
     from services.mtmc_associator import MtmcAssociator
+    from services.vehicle_reid_feat import assets_ready
 
     sid = uuid.uuid4().hex[:16]
     # same_cam_min_gap：略小于采样周期，保证同帧互斥，又允许目标短暂丢失后同镜续接
     sample_gap = 1.0 / max(0.2, float(cfg.sample_fps))
+    v_appear = float(cfg.vehicle_appear_thresh or 0)
+    if v_appear <= 0:
+        if assets_ready(cfg.vehicle_reid_root):
+            v_appear = float(cfg.appear_thresh)
+        else:
+            v_appear = max(0.62, float(cfg.appear_thresh) + 0.14)
     associator = MtmcAssociator(
         appear_thresh=cfg.appear_thresh,
+        vehicle_appear_thresh=v_appear,
         time_window_sec=cfg.time_window_sec,
         same_cam_reuse=True,
         same_cam_min_gap=max(0.35, sample_gap * 0.85),
@@ -723,6 +1058,10 @@ def start_session(cfg: MtmcConfig, *, cameras: list, upload_folder: str, app=Non
         local_sticky_sec=max(12.0, cfg.time_window_sec * 0.25),
         same_cam_appear_thresh=min(0.78, float(cfg.appear_thresh) + 0.22),
         mcbyte_decouple=bool(cfg.mcbyte_decouple),
+        confirm_thresh=cfg.confirm_thresh or None,
+        candidate_thresh=cfg.candidate_thresh or None,
+        use_faiss_gallery=bool(cfg.use_faiss_gallery),
+        gallery_model_key=cfg.gallery_model_key,
     )
     if topology_edges:
         associator.set_topology(topology_edges)
@@ -744,3 +1083,39 @@ def start_session(cfg: MtmcConfig, *, cameras: list, upload_folder: str, app=Non
         session._threads.append(th)
         th.start()
     return session
+
+
+def promote_candidate(session_id: str, global_id: str, candidate_global_id: str) -> dict:
+    """P2：候选晋升 — 将 tentative global 合并进候选 Global。"""
+    s = get_session(session_id)
+    if not s:
+        return {"ok": False, "message": "会话不存在"}
+    g = s.associator.merge_globals(candidate_global_id, global_id)
+    if g is None:
+        return {"ok": False, "message": "合并失败"}
+    from services.mtmc_persist import resolve_candidate_pair
+
+    resolve_candidate_pair(
+        s.app,
+        session_id=session_id,
+        global_id=global_id,
+        candidate_global_id=candidate_global_id,
+        status="promoted",
+    )
+    return {"ok": True, "globalId": g.global_id, "mergedFrom": global_id}
+
+
+def reject_candidate(session_id: str, global_id: str, candidate_global_id: str) -> dict:
+    s = get_session(session_id)
+    if not s:
+        return {"ok": False, "message": "会话不存在"}
+    from services.mtmc_persist import resolve_candidate_pair
+
+    ok = resolve_candidate_pair(
+        s.app,
+        session_id=session_id,
+        global_id=global_id,
+        candidate_global_id=candidate_global_id,
+        status="rejected",
+    )
+    return {"ok": ok, "globalId": global_id, "candidateGlobalId": candidate_global_id}

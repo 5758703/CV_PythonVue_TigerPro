@@ -29,6 +29,17 @@ def test_local_tracker_new_id_after_max_age():
     assert b[0].track_id != tid
 
 
+def test_associator_records_evidence():
+    from services.mtmc_associator import AssocEvidence, AssocMode
+
+    assoc = MtmcAssociator(appear_thresh=0.4, time_window_sec=60)
+    emb = _l2(np.random.randn(32).astype(np.float32))
+    g = assoc.associate(object_type="person", camera_id=1, embedding=emb, local_track_id=1, now=1.0)
+    assert isinstance(assoc.last_evidence, AssocEvidence)
+    assert assoc.last_evidence.target_global_id == g.global_id
+    assert assoc.last_mode == AssocMode.NEW
+
+
 def test_associator_same_person_across_cameras():
     assoc = MtmcAssociator(appear_thresh=0.4, time_window_sec=60)
     emb = _l2(np.random.randn(64).astype(np.float32))
@@ -269,3 +280,74 @@ def test_peek_sticky_allows_skip_reid():
     )
     assert assoc.peek_sticky(object_type="person", camera_id=2, local_track_id=5, now=1.1) == g.global_id
     assert assoc.peek_sticky(object_type="person", camera_id=2, local_track_id=99, now=1.1) is None
+
+
+def test_three_tier_candidate_not_merge():
+    """三档决策：中间分数新建 Global 并记录候选，不合并。"""
+    from services.mtmc_associator import AssocMode
+
+    assoc = MtmcAssociator(
+        appear_thresh=0.5,
+        confirm_thresh=0.92,
+        candidate_thresh=0.45,
+        mcbyte_decouple=True,
+    )
+    emb_a = _l2(np.ones(32, dtype=np.float32))
+    emb_b = _l2(np.concatenate([np.ones(24, dtype=np.float32), np.zeros(8, dtype=np.float32)]))
+    g1 = assoc.associate(object_type="person", camera_id=1, embedding=emb_a, local_track_id=1, now=1.0)
+    assoc.prune_inactive_locals("person", 1, active_local_ids=[])
+    g2 = assoc.associate(
+        object_type="person", camera_id=2, embedding=emb_b, local_track_id=2, now=5.0,
+    )
+    assert g2.global_id != g1.global_id
+    assert assoc.last_mode == AssocMode.CANDIDATE
+    assert assoc.last_evidence.candidate_global_id == g1.global_id
+    assert len(assoc.list_candidates()) >= 1
+
+
+def test_three_tier_confirm_merge():
+    """三档决策：高分确认合并。"""
+    from services.mtmc_associator import AssocMode
+
+    assoc = MtmcAssociator(
+        appear_thresh=0.4,
+        confirm_thresh=0.55,
+        candidate_thresh=0.35,
+    )
+    emb = _l2(np.ones(48, dtype=np.float32))
+    g1 = assoc.associate(object_type="person", camera_id=1, embedding=emb, now=1.0)
+    g2 = assoc.associate(object_type="person", camera_id=2, embedding=emb, now=6.0)
+    assert g1.global_id == g2.global_id
+    assert assoc.last_mode == AssocMode.LONG_TERM
+
+
+def test_hard_conflict_plate_reject():
+    """硬冲突：不同车牌不得合并，即使外观相似。"""
+    assoc = MtmcAssociator(appear_thresh=0.3, confirm_thresh=0.3, candidate_thresh=0.2)
+    emb = _l2(np.random.randn(32).astype(np.float32))
+    claimed = set()
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=emb,
+        plate="粤B11111", identity_key="粤B11111|VK1",
+        local_track_id=1, exclude_gids=claimed, now=1.0,
+    )
+    claimed.add(g1.global_id)
+    assoc.prune_inactive_locals("vehicle", 1, active_local_ids=[])
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=2, embedding=emb,
+        plate="粤B22222", identity_key="粤B22222|VK2",
+        local_track_id=2, exclude_gids=claimed, now=5.0,
+    )
+    assert g2.global_id != g1.global_id
+
+
+def test_active_gallery_faiss_search():
+    from services.mtmc_active_gallery import MtmcActiveGallery
+
+    gal = MtmcActiveGallery()
+    emb = _l2(np.random.randn(64).astype(np.float32))
+    gal.upsert("person", "P000001", emb)
+    if not gal.faiss_available():
+        return
+    hits = gal.search("person", emb, topk=3)
+    assert hits and hits[0][0] == "P000001" and hits[0][1] > 0.99

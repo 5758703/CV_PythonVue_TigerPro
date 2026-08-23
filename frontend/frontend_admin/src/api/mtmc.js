@@ -20,6 +20,21 @@ export const mtmcApi = {
   stopSession: (id) => request.post(`/ai/mtmc/sessions/${id}/stop`),
   listEvents: (params) => request.get('/ai/mtmc/events', { params }),
   listPasses: (params) => request.get('/ai/mtmc/passes', { params }),
+  listTracklets: (params) => request.get('/ai/mtmc/tracklets', { params }),
+  listAssociations: (params) => request.get('/ai/mtmc/associations', { params }),
+  listGlobalPersons: (params) => request.get('/ai/mtmc/globals/person', { params }),
+  listGlobalVehicles: (params) => request.get('/ai/mtmc/globals/vehicle', { params }),
+  listCandidates: (sid, params) => request.get(`/ai/mtmc/sessions/${sid}/candidates`, { params }),
+  listCandidatesDb: (params) => request.get('/ai/mtmc/candidates', { params }),
+  promoteCandidate: (data) => request.post('/ai/mtmc/candidates/promote', data),
+  rejectCandidate: (data) => request.post('/ai/mtmc/candidates/reject', data),
+  listCrossEvents: (params) => request.get('/ai/mtmc/cross-events', { params }),
+  submitSearchJob: (data) => {
+    const isForm = typeof FormData !== 'undefined' && data instanceof FormData
+    return request.post('/ai/mtmc/search/jobs', data, isForm ? { timeout: 120000 } : undefined)
+  },
+  listSearchJobs: (params) => request.get('/ai/mtmc/search/jobs', { params }),
+  getSearchJob: (jobId) => request.get(`/ai/mtmc/search/jobs/${jobId}`),
   trajectory: (gid) => request.get(`/ai/mtmc/trajectory/${gid}`),
   overlayUrl: (sessionId, cameraId, bust = '') => {
     const token = useUserStore().token

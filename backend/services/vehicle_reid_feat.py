@@ -141,9 +141,12 @@ def extract_vehicle_embedding(model_path: str | None, image_bgr: np.ndarray) -> 
 
 
 def visual_key_from_embedding(emb: np.ndarray, prefix: str = "V") -> str:
-    """将 embedding 量化为短视觉键（稳定聚类代理）。"""
-    q = (np.clip(_l2(emb), -1, 1) * 127).astype(np.int8).tobytes()
-    digest = hashlib.sha1(q).hexdigest()[:12]
+    """将 embedding 量化为短视觉键（稳定聚类代理）。
+
+    使用 float32 字节哈希，避免 int8 粗量化导致相似外观（如直方图兜底）碰撞同一键。
+    """
+    e = _l2(emb)
+    digest = hashlib.sha1(e.astype(np.float32).tobytes()).hexdigest()[:12]
     return f"{prefix}{digest}"
 
 

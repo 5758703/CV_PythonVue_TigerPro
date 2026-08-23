@@ -76,7 +76,7 @@
             <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath" @click="openTest(row)">测试</el-button>
             <el-button v-if="canDownloadWeight(row)" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
             <el-button v-if="canFetchWeight(row)" v-permission="'ai:model:add'" link type="warning" :icon="Download" :loading="fetchingId === row.id" @click="fetchWeight(row)">{{ row.filePath ? "重新拉取" : "拉取权重" }}</el-button>
-            <el-button v-if="row.filePath && row.library === 'ultralytics'" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
+            <el-button v-if="row.filePath && ['ultralytics', 'yolo-master'].includes(row.library)" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
             <el-button v-permission="'ai:model:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-permission="'ai:model:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
@@ -194,6 +194,7 @@
         <el-form-item label="推理库" prop="library">
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
+            <el-option label="yolo-master（Tencent YOLO-Master）" value="yolo-master" />
             <el-option label="transformers（HF 模型目录）" value="transformers" />
             <el-option label="opencv-dnn（MobileNet V2 ONNX）" value="opencv-dnn" />
             <el-option label="rfdetr（RF-DETR 目标检测/分割）" value="rfdetr" />
@@ -223,6 +224,7 @@
             <el-option label="交互分割 interactive-segmentation" value="interactive-segmentation" />
             <el-option label="图像修复 image-inpainting" value="image-inpainting" />
             <el-option label="姿态估计 pose-estimation" value="pose-estimation" />
+            <el-option label="旋转框 OBB obb" value="obb" />
             <el-option label="人脸识别 face-recognition" value="face-recognition" />
             <el-option label="行人重识别 person-reid" value="person-reid" />
             <el-option label="图像分类 image-classification" value="image-classification" />
@@ -397,6 +399,7 @@ const TASK_LABELS = {
   "interactive-segmentation": "交互分割",
   "image-inpainting": "图像修复",
   "pose-estimation": "姿态估计",
+  obb: "旋转框检测",
   "face-recognition": "人脸识别",
   "person-reid": "行人重识别",
   "image-classification": "图像分类",
@@ -421,6 +424,7 @@ const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "ima
 
 const LIB_DEFAULT_TASK = {
   ultralytics: "object-detection",
+  "yolo-master": "object-detection",
   rfdetr: "object-detection",
   mobilesam: "interactive-segmentation",
   "opencv-sam": "interactive-segmentation",
@@ -809,6 +813,8 @@ const TASK_PAGE = {
   "interactive-segmentation": { path: "/ai/segment", label: "图像分割" },
   "image-inpainting": { path: "/ai/inpaint", label: "图像修复" },
   "pose-estimation": { path: "/ai/pose", label: "姿态估计" },
+  obb: { path: "/ai/image", label: "图像检测" },
+  "image-classification": { path: "/ai/imgcls", label: "图像分类" },
   "automatic-speech-recognition": { path: "/ai/asr", label: "语音识别" },
   "text-to-speech": { path: "/ai/tts", label: "文本转语音" },
   "talking-head": { path: "/ai/talker", label: "数字人合成" },

@@ -4,7 +4,7 @@
       type="info"
       :closable="false"
       show-icon
-      title="跨镜 MTMC（McByte++ 解耦）：检测看到目标 → Kalman/IoU/ByteTrack 短时跟踪 → 粘性续 Global；仅新生轨迹才用 OSNet/外观长时复活；CMC 可选；Mask 钩子默认关"
+      title="跨镜 MTMC（P0 Tracklet + P1 三档 + P2 跨镜事件/检索）：检测 → Tracklet → 关联 → 证据落库 → 候选晋升；策略 mtmc_v2"
       class="mb"
     />
 
@@ -25,8 +25,17 @@
           <el-form-item label="采样 FPS">
             <el-input-number v-model="form.sampleFps" :min="0.5" :max="8" :step="0.5" />
           </el-form-item>
+          <el-form-item label="确认阈值">
+            <el-input-number v-model="form.confirmThresh" :min="0" :max="0.95" :step="0.01" />
+          </el-form-item>
           <el-form-item label="外观阈值">
             <el-input-number v-model="form.appearThresh" :min="0.2" :max="0.9" :step="0.01" />
+          </el-form-item>
+          <el-form-item label="候选阈值">
+            <el-input-number v-model="form.candidateThresh" :min="0" :max="0.9" :step="0.01" />
+          </el-form-item>
+          <el-form-item label="FAISS Gallery">
+            <el-switch v-model="form.useFaissGallery" />
           </el-form-item>
           <el-form-item label="时间窗(s)">
             <el-input-number v-model="form.timeWindowSec" :min="10" :max="300" :step="5" />
@@ -118,6 +127,138 @@
         </el-table>
       </el-tab-pane>
 
+      <el-tab-pane label="Tracklet / 证据" name="evidence">
+        <div class="tab-toolbar">
+          <el-input v-model="evidenceQ.globalId" clearable placeholder="globalId" style="width: 160px" />
+          <el-select v-model="evidenceQ.objectType" clearable placeholder="类型" style="width: 110px">
+            <el-option label="人员" value="person" />
+            <el-option label="车辆" value="vehicle" />
+          </el-select>
+          <el-button @click="loadEvidence">刷新</el-button>
+        </div>
+        <h4>候选关联（三档中间态，可晋升/驳回）</h4>
+        <el-table :data="candidateRows" size="small" border stripe class="mb" max-height="220">
+          <el-table-column prop="globalId" label="新建 Global" min-width="130" />
+          <el-table-column prop="candidateGlobalId" label="候选 Global" min-width="130" />
+          <el-table-column prop="status" label="状态" width="90" />
+          <el-table-column prop="finalScore" label="综合分" width="80" />
+          <el-table-column prop="reidScore" label="ReID" width="70" />
+          <el-table-column label="操作" width="140">
+            <template #default="{ row }">
+              <el-button
+                v-if="row.status === 'pending' || !row.status"
+                link
+                type="success"
+                v-permission="'ai:mtmc:edit'"
+                @click="onPromote(row)"
+              >晋升</el-button>
+              <el-button
+                v-if="row.status === 'pending' || !row.status"
+                link
+                type="warning"
+                v-permission="'ai:mtmc:edit'"
+                @click="onReject(row)"
+              >驳回</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <h4>Tracklet 片段</h4>
+        <el-table :data="tracklets" size="small" border stripe class="mb" max-height="260">
+          <el-table-column prop="trackletId" label="Tracklet" min-width="120" show-overflow-tooltip />
+          <el-table-column prop="globalId" label="Global ID" min-width="120" />
+          <el-table-column prop="objectType" label="类型" width="70" />
+          <el-table-column prop="cameraId" label="相机" width="70" />
+          <el-table-column prop="localTrackId" label="Local" width="70" />
+          <el-table-column prop="observationCount" label="观测" width="70" />
+          <el-table-column prop="qualityScore" label="质量" width="70" />
+          <el-table-column prop="startTs" label="开始" width="170" />
+          <el-table-column prop="endTs" label="结束" width="170" />
+        </el-table>
+        <h4>关联证据边</h4>
+        <el-table :data="associations" size="small" border stripe max-height="260">
+          <el-table-column prop="decision" label="决策" width="90" />
+          <el-table-column prop="targetGlobalId" label="目标 Global" min-width="120" />
+          <el-table-column prop="sourceGlobalId" label="来源 Global" min-width="120" />
+          <el-table-column prop="candidateGlobalId" label="候选 Global" min-width="120" />
+          <el-table-column prop="trackletId" label="Tracklet" min-width="110" show-overflow-tooltip />
+          <el-table-column prop="policyVersion" label="策略" width="90" />
+          <el-table-column label="分数" width="120">
+            <template #default="{ row }">
+              {{ formatAssocScores(row) }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="createdAt" label="时间" width="170" />
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="跨镜事件 / 检索" name="p2">
+        <div class="tab-toolbar">
+          <el-input v-model="crossQ.globalId" clearable placeholder="globalId" style="width: 160px" />
+          <el-button @click="loadCrossEvents">刷新跨镜事件</el-button>
+        </div>
+        <h4>跨镜通行事件（轻量模式 P2）</h4>
+        <el-table :data="crossEvents" size="small" border stripe class="mb" max-height="240">
+          <el-table-column prop="eventTime" label="时间" width="170" />
+          <el-table-column prop="globalId" label="Global ID" min-width="120" />
+          <el-table-column prop="fromCameraId" label="From" width="70" />
+          <el-table-column prop="toCameraId" label="To" width="70" />
+          <el-table-column prop="transitSec" label="间隔(s)" width="80" />
+          <el-table-column prop="displayName" label="人员" width="90" />
+          <el-table-column prop="plate" label="车牌" width="100" />
+          <el-table-column prop="decision" label="决策" width="90" />
+        </el-table>
+
+        <h4>全局轨迹检索（异步任务）</h4>
+        <el-form :inline="true" class="mb">
+          <el-form-item label="Global ID">
+            <el-input v-model="searchForm.globalId" clearable style="width: 160px" />
+          </el-form-item>
+          <el-button type="primary" :disabled="!searchForm.globalId" v-permission="'ai:mtmc:edit'" @click="submitGlobalTrace">
+            提交轨迹检索
+          </el-button>
+        </el-form>
+
+        <h4>多视频 ReID 检索队列</h4>
+        <el-form :inline="true" class="mb">
+          <el-form-item label="摄像头">
+            <el-select v-model="searchForm.cameraIds" multiple collapse-tags style="width: 280px" placeholder="本地视频源">
+              <el-option
+                v-for="c in fileCameras"
+                :key="c.id"
+                :label="`${c.name} (#${c.id})`"
+                :value="c.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="查询图">
+            <input type="file" accept="image/*" @change="onQueryFile" />
+          </el-form-item>
+          <el-button
+            type="primary"
+            :disabled="!searchForm.cameraIds.length || !searchForm.queryFile"
+            v-permission="'ai:mtmc:edit'"
+            @click="submitMultiVideoSearch"
+          >
+            提交多视频检索
+          </el-button>
+          <el-button @click="loadSearchJobs">刷新任务</el-button>
+        </el-form>
+        <el-table :data="searchJobs" size="small" border stripe max-height="260">
+          <el-table-column prop="jobId" label="任务 ID" min-width="120" />
+          <el-table-column prop="jobType" label="类型" width="120" />
+          <el-table-column prop="status" label="状态" width="90" />
+          <el-table-column prop="progress" label="进度" width="70">
+            <template #default="{ row }">{{ Math.round((row.progress || 0) * 100) }}%</template>
+          </el-table-column>
+          <el-table-column prop="message" label="说明" min-width="120" />
+          <el-table-column label="结果" width="90">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="showSearchResult(row)">查看</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
       <el-tab-pane label="相机拓扑" name="topo">
         <el-form :inline="true" class="mb">
           <el-form-item label="From">
@@ -164,30 +305,78 @@
           />
 
           <h3 class="guide-h3">一、推荐使用流程</h3>
-          <el-steps :active="6" align-center finish-status="success" class="guide-steps mb">
+          <el-steps :active="8" align-center finish-status="success" class="guide-steps mb">
             <el-step title="准备摄像头" description="摄像头管理录入 RTSP，流可预览" />
             <el-step title="准备权重" description="检测 + ReID / 车牌模型已拉取" />
             <el-step title="配置拓扑" description="相机拓扑 Tab 添加通行边" />
             <el-step title="启动会话" description="会话控制 Tab 选路并启动" />
             <el-step title="查看全局 ID" description="预览与全局身份表" />
+            <el-step title="Tracklet / 证据" description="核对关联决策与落库片段" />
+            <el-step title="跨镜事件 / 检索" description="通行事件与多视频检索队列（P2）" />
             <el-step title="监控墙叠加" description="可选：大屏 AI 叠加" />
           </el-steps>
 
-          <h3 class="guide-h3">二、会话控制 · 参数说明</h3>
+          <h3 class="guide-h3">二、链路概览（P0 + P1 + P2）</h3>
+          <p class="guide-p">
+            当前 MTMC 采用 <b>Tracklet 优先</b> 的跨镜关联链路（策略版本 <code>mtmc_v2</code>）：
+          </p>
+          <ol class="guide-ol mb">
+            <li><b>共享拉流</b> → YOLO 检测 → ByteTrack / BoT-SORT 局部跟踪</li>
+            <li><b>Tracklet 累积</b>：按 local_track_id 聚合多帧观测，关键帧质量筛选 + Top-K 加权 embedding 聚合</li>
+            <li><b>关联决策</b>：短时粘性续 Global；仅新生轨迹才开放长时外观匹配</li>
+            <li><b>三档门控（P1）</b>：ReID 分 ≥ 确认阈值 → 自动合并；介于候选～确认 → 新建 Global 并标记候选；低于候选 → 新建</li>
+            <li><b>落库</b>：全局身份、Tracklet 片段、关联证据边、轨迹事件一并持久化</li>
+            <li><b>跨镜事件（P2）</b>：同一 Global 切换相机时写入轻量通行事件，可审计通行链</li>
+            <li><b>候选晋升（P2）</b>：三档 candidate 可人工晋升合并或驳回，并更新 Tracklet 绑定</li>
+            <li><b>检索队列（P2）</b>：全局轨迹检索、多路本地视频 ReID 异步任务</li>
+          </ol>
+          <el-descriptions :column="1" border size="small" class="mb">
+            <el-descriptions-item label="画面标签">未分配 Global 时显示 <code>L{localId}</code>；分配后显示 <code>GlobalId|姓名/车牌</code></el-descriptions-item>
+            <el-descriptions-item label="决策类型">sticky / long_term / candidate / new / promoted（人工晋升）</el-descriptions-item>
+            <el-descriptions-item label="硬冲突">车辆高置信车牌或身份键不一致时，强制拒绝合并（P1）</el-descriptions-item>
+            <el-descriptions-item label="FAISS Gallery">在线 Active Gallery 加速 Global 候选检索；行人底库匹配亦支持 FAISS（P1）</el-descriptions-item>
+            <el-descriptions-item label="跨镜事件表">mtmc_cross_camera_event：From→To 相机、通行间隔、关联决策（P2）</el-descriptions-item>
+          </el-descriptions>
+
+          <h3 class="guide-h3">三、会话控制 · 参数说明</h3>
           <el-table :data="paramGuide" size="small" border stripe class="mb">
             <el-table-column prop="name" label="参数" width="120" />
             <el-table-column prop="desc" label="说明" min-width="280" />
             <el-table-column prop="suggest" label="建议值" width="160" />
           </el-table>
 
-          <h3 class="guide-h3">三、相机拓扑</h3>
+          <h3 class="guide-h3">四、Tracklet / 证据 Tab（P0 + P1）</h3>
+          <p class="guide-p">
+            用于审计跨镜关联是否「有据可依」，建议在联调阶段与「事件 / 过车」Tab 配合使用。
+          </p>
+          <el-table :data="evidenceGuide" size="small" border stripe class="mb">
+            <el-table-column prop="name" label="区块" width="140" />
+            <el-table-column prop="desc" label="说明" min-width="320" />
+          </el-table>
+          <p class="guide-p">
+            <b>关联证据边</b> 字段含义：<code>decision</code> 为决策路径；
+            <code>targetGlobalId</code> 为本次写入的 Global；
+            <code>candidateGlobalId</code> 为三档中间态时「疑似同一目标」的候选 Global；
+            <code>policyVersion</code> 为 <code>mtmc_v2</code> 时含三档门控；
+            分数列 <code>r=</code> 为 ReID 分，<code>f=</code> 为综合分（含拓扑权重）。
+          </p>
+
+          <h3 class="guide-h3">五、跨镜事件 / 检索 Tab（P2）</h3>
+          <ul class="guide-ol mb">
+            <li><b>跨镜通行事件</b>：会话运行中，同一 Global 从相机 A 切换到 B 时自动记录（含通行间隔秒数）。可用于园区通行链审计，无需单独告警规则。</li>
+            <li><b>候选晋升 / 驳回</b>：在「Tracklet / 证据」Tab 对 pending 候选点击晋升，将把「新建 Global」合并进「候选 Global」；驳回则保持分离。</li>
+            <li><b>全局轨迹检索</b>：输入 Global ID 提交异步任务，汇总事件、Tracklet、跨镜事件。</li>
+            <li><b>多视频检索队列</b>：上传查询行人图 + 多选<b>本地视频</b>摄像头（sourceType=file），后台按路排队执行录像 ReID，适合离线复盘。</li>
+          </ul>
+
+          <h3 class="guide-h3">六、相机拓扑</h3>
           <p class="guide-p">
             在「相机拓扑」Tab 为相邻摄像头添加有向边 <code>From → To</code>，并设置最短/最长通行秒数。
             跨镜关联时，若候选轨迹不在该时间窗内会被拒绝，避免「瞬移」误合并。
             园区典型配置：门口 → 走廊（5～30s）、走廊 → 出口（10～60s）。
           </p>
 
-          <h3 class="guide-h3">四、监控墙 AI 叠加</h3>
+          <h3 class="guide-h3">七、监控墙 AI 叠加</h3>
           <ol class="guide-ol mb">
             <li>在本页「会话控制」启动跨镜并选中摄像头。</li>
             <li>点击「打开监控墙叠加」，或手动进入 <b>视频监控 → 监控墙</b>。</li>
@@ -195,25 +384,29 @@
             <li>各画面切换为带框与 Global ID 的 MJPEG 流；若叠加失败会自动回退普通监控流。</li>
           </ol>
 
-          <h3 class="guide-h3">五、模型与权重依赖</h3>
+          <h3 class="guide-h3">八、模型与权重依赖</h3>
           <el-descriptions :column="1" border size="small" class="mb">
             <el-descriptions-item label="人员检测">YOLO 行人检测（如 yolo26n），模型管理启用</el-descriptions-item>
-            <el-descriptions-item label="人员强 ReID">osnet-x1-0 / clip-reid-person ONNX（可选，无则回退 Youtu）</el-descriptions-item>
-            <el-descriptions-item label="人员底库">行人重识别页登记后，命中可显示姓名</el-descriptions-item>
+            <el-descriptions-item label="人员强 ReID">osnet-x1-0 / clip-reid-person ONNX（与 Youtu 可加权融合）</el-descriptions-item>
+            <el-descriptions-item label="人员底库（P1）">按 model_key 多路检索（OSNet/CLIP + Youtu）；行人重识别页登记后命中显示姓名；可选 FAISS 加速</el-descriptions-item>
             <el-descriptions-item label="车辆检测">YOLO 车辆检测 + 车牌检测/OCR</el-descriptions-item>
-            <el-descriptions-item label="车辆视觉 ReID">transreid-vehicle / clip-reid-vehicle（可选，无牌时兜底）</el-descriptions-item>
+            <el-descriptions-item label="车辆视觉 ReID">transreid-vehicle / clip-reid-vehicle（无牌时兜底）</el-descriptions-item>
+            <el-descriptions-item label="全局身份落库（P0）">会话运行中持续写入 MtmcGlobalPerson / MtmcGlobalVehicle</el-descriptions-item>
           </el-descriptions>
 
-          <h3 class="guide-h3">六、注意事项（必读）</h3>
+          <h3 class="guide-h3">九、注意事项（必读）</h3>
           <div class="guide-alerts">
-            <el-alert type="warning" :closable="false" show-icon title="后端重启后会话失效" description="跨镜会话保存在后端内存中。重启 Flask 后旧 sessionId 无效，监控墙叠加会 404；请重新启动会话，或关闭 AI 叠加。" />
+            <el-alert type="warning" :closable="false" show-icon title="后端重启后会话失效" description="跨镜会话保存在后端内存中。重启 Flask 后旧 sessionId 无效，监控墙叠加会 404；请重新启动会话，或关闭 AI 叠加。已落库的 Tracklet / 证据边 / 全局身份仍可在数据库中查询。" />
             <el-alert type="warning" :closable="false" show-icon title="CPU 与路数" description="建议 2～4 路摄像头、采样 FPS ≤ 2、检测分辨率约 640。路数或 FPS 过高会导致延迟堆积、全局 ID 抖动。" />
             <el-alert type="warning" :closable="false" show-icon title="局部跟踪与 CMC" description="默认 ByteTrack + McByte++ 解耦（粘性续 Global、仅新生才长时 ReID）。镜头抖动明显可试 BoT-SORT 并开启 CMC；静止机位不必开 CMC。" />
+            <el-alert type="info" :closable="false" show-icon title="三档决策调参（P1）" description="确认阈值默认等于外观阈值；候选阈值默认为外观阈值的约 82%。设为 0 表示使用后端默认。三档判断基于 ReID 分（拓扑已在评分阶段作为硬门控）。候选态 precision-first：不自动合并，可在「Tracklet / 证据」Tab 人工核对。" />
+            <el-alert type="info" :closable="false" show-icon title="Tracklet 与 tentative 关联（P0）" description="局部轨迹积累足够高质量观测后 tentatively 关联；轨迹结束（local 消失）时 finalize 并落库 Tracklet。画面可能短暂显示 L{localId}，finalize 后稳定为 Global ID。" />
+            <el-alert type="info" :closable="false" show-icon title="候选晋升（P2）" description="晋升/驳回需会话仍在运行（内存 Associator 合并）。会话已停止时仅更新数据库候选状态，不会 retroactive 合并在线 Global。" />
             <el-alert type="error" :closable="false" show-icon title="合规与隐私" description="人脸、行人外观、车牌属于敏感信息。请确保采集与展示已获授权，生产环境应限制访问权限并遵守当地法规。" />
-            <el-alert type="info" :closable="false" show-icon title="排障顺序" description="权重是否就绪 → 摄像头流是否可预览 → 会话是否 running → sessionAlive 是否通过 → 拓扑时间窗是否合理 → 外观阈值是否过严/过松。" />
+            <el-alert type="info" :closable="false" show-icon title="排障顺序" description="权重是否就绪 → 摄像头流可预览 → 会话 running → sessionAlive 通过 → 拓扑时间窗合理 → 确认/候选阈值是否过严 → Tracklet / 证据 Tab 查看 decision 与分数 → FAISS 未安装时自动回退矩阵检索。" />
           </div>
 
-          <h3 class="guide-h3">七、常见问题</h3>
+          <h3 class="guide-h3">十、常见问题</h3>
           <el-collapse class="mb">
             <el-collapse-item title="监控墙开了 AI 叠加但没有框？" name="q1">
               <p>先确认跨镜会话仍在运行（本页状态为「是」）；后端重启后需重新启动。监控墙会先调 alive 接口，失败则回退普通流。</p>
@@ -222,10 +415,25 @@
               <p>适当降低采样 FPS、检查检测是否稳定；调高外观阈值或缩短时间窗；确认拓扑边的时间范围符合实际通行时间；强 ReID 权重未就绪时会更多依赖 Youtu/直方图，跨镜稳定性会下降。</p>
             </el-collapse-item>
             <el-collapse-item title="车辆有牌仍串车？" name="q3">
-              <p>检查车牌 OCR 置信度与检测框质量；夜间/污损车牌会退回视觉键。可在事件/过车 Tab 查看 identityKey 与 fuseScore。</p>
+              <p>检查车牌 OCR 置信度与检测框质量；夜间/污损车牌会退回视觉键。P1 已对高置信不同车牌启用硬冲突拒绝合并。可在事件/过车 Tab 查看 identityKey 与 fuseScore。</p>
             </el-collapse-item>
             <el-collapse-item title="无 edit 权限无法启动？" name="q4">
               <p>启动/停止跨镜、维护拓扑需要 <code>ai:mtmc:edit</code>。只读角色可查看会话与事件。</p>
+            </el-collapse-item>
+            <el-collapse-item title="画面一直显示 L{数字} 没有 Global ID？" name="q5">
+              <p>属 P0 Tracklet 流程正常现象：局部轨迹尚在累积观测，或尚未达到 tentative / finalize 条件。待轨迹结束或关键帧质量足够后会分配 Global ID。可在「Tracklet / 证据」Tab 查看对应 tracklet 的观测数与质量分。</p>
+            </el-collapse-item>
+            <el-collapse-item title="出现 candidate 决策是什么意思？" name="q6">
+              <p>P1 三档中间态：ReID 分介于候选阈值与确认阈值之间，系统新建了 Global ID 但记录了疑似同一目标的候选 Global（precision-first，不自动合并）。请在「Tracklet / 证据」Tab 的「候选关联」表核对，必要时结合事件轨迹人工确认。</p>
+            </el-collapse-item>
+            <el-collapse-item title="关联证据里 decision 有哪些？" name="q7">
+              <p><code>sticky</code> 短时粘性续接；<code>long_term</code> 长时确认合并；<code>candidate</code> 候选态新建；<code>new</code> 无匹配新建。策略版本 <code>mtmc_v2</code> 表示已启用三档门控与证据落库。</p>
+            </el-collapse-item>
+            <el-collapse-item title="多视频检索没有可选摄像头？" name="q9">
+              <p>仅 <code>sourceType=file</code> 的本地视频摄像头会出现在多视频检索下拉框。RTSP 实时流请使用在线 MTMC 会话，离线录像需先在摄像头管理配置为本地文件源。</p>
+            </el-collapse-item>
+            <el-collapse-item title="FAISS Gallery 关或 faiss-cpu 未安装？" name="q8">
+              <p>关闭「FAISS Gallery」或环境未装 faiss-cpu 时，在线 Global 候选与行人底库匹配会自动回退全量矩阵检索，功能可用但 CPU 占用略高。安装：<code>pip install faiss-cpu</code>。</p>
             </el-collapse-item>
           </el-collapse>
 
@@ -252,7 +460,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { cameraApi } from '../../../api/camera'
@@ -267,6 +475,12 @@ const session = ref(null)
 const topology = ref([])
 const events = ref([])
 const passes = ref([])
+const tracklets = ref([])
+const associations = ref([])
+const candidates = ref([])
+const candidateDb = ref([])
+const crossEvents = ref([])
+const searchJobs = ref([])
 const overlayBust = reactive({})
 let pollTimer = null
 
@@ -276,6 +490,9 @@ const form = reactive({
   enableVehicle: true,
   sampleFps: 2,
   appearThresh: 0.48,
+  confirmThresh: 0,
+  candidateThresh: 0,
+  useFaissGallery: true,
   timeWindowSec: 90,
   localTrackBackend: 'bytetrack',
   enableCmc: false,
@@ -291,6 +508,13 @@ const topoForm = reactive({
 
 const eventQ = reactive({ globalId: '', objectType: '' })
 const passQ = reactive({ plate: '' })
+const evidenceQ = reactive({ globalId: '', objectType: '' })
+const crossQ = reactive({ globalId: '' })
+const searchForm = reactive({
+  globalId: '',
+  cameraIds: [],
+  queryFile: null,
+})
 
 const trajOpen = ref(false)
 const trajEvents = ref([])
@@ -300,11 +524,29 @@ const paramGuide = [
   { name: '摄像头', desc: '参与跨镜的多路视频源，须已在「摄像头管理」配置且可预览', suggest: '先 2 路联调' },
   { name: '人员 / 车辆', desc: '是否启用人员 MTMC、车辆 MTMC（含车牌融合）', suggest: '按场景开关' },
   { name: '采样 FPS', desc: '每路每秒处理帧数，越高越耗 CPU', suggest: '1～2' },
-  { name: '外观阈值', desc: '跨镜外观匹配置信下限，过高易断联，过低易串 ID', suggest: '0.45～0.55' },
+  { name: '外观阈值', desc: '长时外观匹配的 ReID 下限；同时作为确认阈值默认值（P1）', suggest: '0.45～0.55' },
+  { name: '确认阈值', desc: 'P1 三档：ReID 分 ≥ 此值自动合并到候选 Global（long_term）', suggest: '0 或同外观阈值' },
+  { name: '候选阈值', desc: 'P1 三档：ReID 分介于候选～确认时新建并标记 candidate', suggest: '0 或约外观×0.82' },
+  { name: 'FAISS Gallery', desc: 'P1 在线 Active Gallery + 行人底库 FAISS 加速；关则回退矩阵检索', suggest: '开' },
   { name: '时间窗(s)', desc: '全局身份在线缓存秒数，影响跨镜关联范围', suggest: '60～120' },
   { name: '局部跟踪', desc: 'ByteTrack 推荐；BoT-SORT 可配合 CMC 抗抖动', suggest: 'bytetrack' },
   { name: 'CMC', desc: '镜头运动补偿，移动/云台摄像头可开', suggest: '静止机关' },
 ]
+
+/** Tracklet / 证据 Tab 说明 */
+const evidenceGuide = [
+  { name: '候选关联', desc: 'P1 三档中间态：新建 Global 与疑似候选 Global 的配对，含 ReID / 综合分，供人工核对' },
+  { name: 'Tracklet 片段', desc: 'P0 局部轨迹落库：每段 local track 的观测数、质量分、起止时间与绑定 Global ID' },
+  { name: '关联证据边', desc: 'P0 每次 associate 的决策与分数（reid / topology / final），policyVersion=mtmc_v2' },
+]
+
+const fileCameras = computed(() => cameras.value.filter((c) => c.sourceType === 'file'))
+
+const candidateRows = computed(() => {
+  const db = candidateDb.value || []
+  if (db.length) return db
+  return (candidates.value || []).map((r) => ({ ...r, status: 'pending' }))
+})
 
 const overlaySrc = (cid) => {
   if (!sessionId.value || !session.value?.running) return ''
@@ -427,6 +669,130 @@ const loadPasses = async () => {
     pageSize: 80,
   })
   passes.value = res.data.rows || []
+}
+
+const formatAssocScores = (row) => {
+  const s = row.scores || {}
+  const parts = []
+  if (s.reid != null) parts.push(`r=${s.reid}`)
+  if (s.final != null) parts.push(`f=${s.final}`)
+  return parts.join(' ') || '-'
+}
+
+const loadEvidence = async () => {
+  const sid = sessionId.value || undefined
+  const [tRes, aRes] = await Promise.all([
+    mtmcApi.listTracklets({
+      sessionId: sid,
+      globalId: evidenceQ.globalId || undefined,
+      objectType: evidenceQ.objectType || undefined,
+      pageNum: 1,
+      pageSize: 80,
+    }),
+    mtmcApi.listAssociations({
+      sessionId: sid,
+      globalId: evidenceQ.globalId || undefined,
+      pageNum: 1,
+      pageSize: 80,
+    }),
+  ])
+  tracklets.value = tRes.data.rows || []
+  associations.value = aRes.data.rows || []
+  if (sessionId.value) {
+    try {
+      const cRes = await mtmcApi.listCandidates(sessionId.value, { status: 'pending' })
+      candidates.value = cRes.data.live || []
+      candidateDb.value = cRes.data.rows || []
+    } catch (_) {
+      candidates.value = session.value?.candidates || []
+      candidateDb.value = []
+    }
+  } else {
+    candidates.value = []
+    candidateDb.value = []
+  }
+}
+
+const onPromote = async (row) => {
+  if (!sessionId.value) {
+    ElMessage.warning('请先启动会话')
+    return
+  }
+  await mtmcApi.promoteCandidate({
+    sessionId: sessionId.value,
+    globalId: row.globalId,
+    candidateGlobalId: row.candidateGlobalId,
+  })
+  ElMessage.success('已晋升合并')
+  await loadEvidence()
+  await refreshSession()
+}
+
+const onReject = async (row) => {
+  if (!sessionId.value) return
+  await mtmcApi.rejectCandidate({
+    sessionId: sessionId.value,
+    globalId: row.globalId,
+    candidateGlobalId: row.candidateGlobalId,
+  })
+  ElMessage.success('已驳回')
+  await loadEvidence()
+}
+
+const loadCrossEvents = async () => {
+  const res = await mtmcApi.listCrossEvents({
+    sessionId: sessionId.value || undefined,
+    globalId: crossQ.globalId || undefined,
+    pageNum: 1,
+    pageSize: 80,
+  })
+  const db = res.data.rows || []
+  const live = (res.data.live || []).map((e) => ({
+    ...e,
+    eventTime: e.eventTime || e.ts,
+  }))
+  crossEvents.value = [...live, ...db]
+}
+
+const loadSearchJobs = async () => {
+  const res = await mtmcApi.listSearchJobs({ limit: 30 })
+  searchJobs.value = res.data.rows || []
+}
+
+const submitGlobalTrace = async () => {
+  await mtmcApi.submitSearchJob({
+    jobType: 'global_trace',
+    globalId: searchForm.globalId,
+    sessionId: sessionId.value || undefined,
+  })
+  ElMessage.success('轨迹检索任务已提交')
+  await loadSearchJobs()
+}
+
+const onQueryFile = (ev) => {
+  searchForm.queryFile = ev.target.files?.[0] || null
+}
+
+const submitMultiVideoSearch = async () => {
+  const fd = new FormData()
+  fd.append('jobType', 'multi_video_reid')
+  fd.append('cameraIds', searchForm.cameraIds.join(','))
+  fd.append('query', searchForm.queryFile)
+  fd.append('threshold', '0.45')
+  await mtmcApi.submitSearchJob(fd)
+  ElMessage.success('多视频检索任务已提交')
+  await loadSearchJobs()
+}
+
+const showSearchResult = async (row) => {
+  const res = await mtmcApi.getSearchJob(row.jobId)
+  const result = res.data.result
+  if (!result) {
+    ElMessage.info(res.data.message || '尚无结果')
+    return
+  }
+  ElMessage.info(`匹配 ${result.matchCount ?? result.eventCount ?? '-'} 条，详见控制台`)
+  console.log('MTMC search result', res.data)
 }
 
 const showTraj = async (gid) => {
