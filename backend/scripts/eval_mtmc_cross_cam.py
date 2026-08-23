@@ -174,9 +174,10 @@ def build_session(models: dict, sample_fps: float):
         appear_thresh=cfg.appear_thresh,
         vehicle_appear_thresh=v_appear,
         time_window_sec=cfg.time_window_sec,
+        # 重叠视野：允许同时刻跨镜（dt=0）；上限放宽到 30s
         topology={
-            (71, 81): (0.5, 20.0),
-            (81, 71): (0.5, 20.0),
+            (71, 81): (0.0, 30.0),
+            (81, 71): (0.0, 30.0),
         },
         same_cam_reuse=True,
         same_cam_min_gap=max(0.35, (1.0 / sample_fps) * 0.85),

@@ -168,11 +168,19 @@ def vehicle_class_bucket(class_name: str | None) -> str:
 
 
 def vehicle_class_conflict(a: str | None, b: str | None) -> bool:
-    """双方类别均可判定时，truck/bus 与 car 等互斥。"""
+    """硬冲突仅限 large(truck/bus) ↔ car/motor。
+
+    motorcycle↔car 不冲突：YOLO 常把轿车/SUV 误标摩托，硬拦会阻断跨镜合并。
+    """
     ba, bb = vehicle_class_bucket(a), vehicle_class_bucket(b)
     if ba == "unknown" or bb == "unknown":
         return False
-    return ba != bb
+    if ba == bb:
+        return False
+    # 仅货车/客车与小车/摩托互斥
+    if {ba, bb} == {"large", "car"} or {ba, bb} == {"large", "motor"}:
+        return True
+    return False
 
 
 def infer_vehicle_class(
@@ -182,13 +190,16 @@ def infer_vehicle_class(
     frame_h: int = 0,
     frame_w: int = 0,
 ) -> str | None:
-    """检测类 + 框面积启发式，缓解 YOLO 将货车误标为 car。"""
+    """检测类 + 框面积启发式，缓解 YOLO 将货车误标为 car / 轿车误标摩托。"""
     n = (class_name or "").strip().lower()
     bucket = vehicle_class_bucket(n)
     area_ratio = 0.0
     if bbox is not None and len(bbox) >= 4 and frame_h > 0 and frame_w > 0:
         x1, y1, x2, y2 = (float(bbox[i]) for i in range(4))
         area_ratio = max(0.0, x2 - x1) * max(0.0, y2 - y1) / float(frame_h * frame_w)
+    # 大框摩托多为误检（轿车/SUV），升为 car
+    if bucket == "motor" and area_ratio >= 0.04:
+        return "car"
     if area_ratio >= 0.10 and bucket != "large":
         return "truck"
     if bucket != "unknown":

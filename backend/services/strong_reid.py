@@ -136,6 +136,36 @@ def extract_strong(strong_root: str | None, image_bgr: np.ndarray) -> tuple[np.n
         return None, {"strong": False, "strongError": str(e)}
 
 
+def color_signature(image_bgr: np.ndarray | None) -> np.ndarray | None:
+    """HSV 颜色直方图签名（行人跨镜弱外观时的软线索）。"""
+    if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+        return None
+    import cv2
+
+    h, w = image_bgr.shape[:2]
+    if h < 8 or w < 8:
+        return None
+    # 取中部躯干区域，减轻背景干扰
+    y0, y1 = int(h * 0.15), int(h * 0.75)
+    x0, x1 = int(w * 0.2), int(w * 0.8)
+    roi = image_bgr[y0:y1, x0:x1]
+    if roi.size == 0:
+        roi = image_bgr
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    hist_h = cv2.calcHist([hsv], [0], None, [16], [0, 180]).reshape(-1)
+    hist_s = cv2.calcHist([hsv], [1], None, [8], [0, 256]).reshape(-1)
+    hist_v = cv2.calcHist([hsv], [2], None, [8], [0, 256]).reshape(-1)
+    sig = np.concatenate([hist_h, hist_s, hist_v]).astype(np.float32)
+    n = float(np.linalg.norm(sig))
+    return sig / n if n > 1e-6 else sig
+
+
+def color_sig_cosine(a: np.ndarray | None, b: np.ndarray | None) -> float:
+    if a is None or b is None:
+        return -1.0
+    return float(np.dot(_l2(a), _l2(b)))
+
+
 def extract_person_embedding(
     image_bgr: np.ndarray,
     *,

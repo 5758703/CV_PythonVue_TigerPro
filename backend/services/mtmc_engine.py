@@ -543,6 +543,7 @@ def _associate_tracklet(
     plate=None,
     visual_key=None,
     vehicle_class=None,
+    color_sig=None,
     exclude_gids: set,
     now: float,
     force: bool = False,
@@ -561,6 +562,7 @@ def _associate_tracklet(
         plate=plate,
         visual_key=visual_key,
         vehicle_class=vehicle_class,
+        color_sig=color_sig,
         display_name=display_name,
         local_track_id=int(builder.local_track_id),
         exclude_gids=exclude_gids,
@@ -745,7 +747,7 @@ def _make_local_tracker(cfg: MtmcConfig):
 
 
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
-    from services.strong_reid import extract_person_embedding
+    from services.strong_reid import extract_person_embedding, color_signature
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.vehicle_track import congestion_level, get_session as get_vsession
     from services.reid_gallery import l2_normalize
@@ -775,7 +777,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     claimed_vehicle: set[str] = set()
     # ---- 人员 ----
     if cfg.enable_person and cfg.det_person_path:
-        raw = _detect(cfg.det_person_path, frame, cfg.conf, [0])
+        # 骑行人/远距小人框置信度偏低，略降阈值
+        person_conf = min(float(cfg.conf), 0.18)
+        raw = _detect(cfg.det_person_path, frame, person_conf, [0])
         tracks = cam_state.tracker_person.update(raw, frame=frame)
         active_person_local = {int(t.track_id) for t in tracks}
         for t in tracks:
@@ -797,6 +801,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             )
             need_reid = sticky_gid is None or bool(getattr(t, "is_new", False))
             emb, meta = None, {}
+            c_sig = None
             gallery = {"matched": False, "name": None, "personId": None, "score": 0.0}
             if need_reid:
                 try:
@@ -807,6 +812,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                         fuse_weight_strong=cfg.fuse_weight_strong,
                     )
                     emb = l2_normalize(emb)
+                    c_sig = color_signature(crop)
                 except Exception:  # noqa: BLE001
                     emb, meta = None, {}
                 if emb is not None:
@@ -843,6 +849,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     embedding=agg_emb,
                     reid_person_id=gallery.get("personId") if gallery.get("matched") else None,
                     display_name=gallery.get("name") if gallery.get("matched") else None,
+                    color_sig=c_sig,
                     exclude_gids=claimed_person,
                     now=now,
                 )

@@ -17,7 +17,7 @@ from services.mtmc_associator import MtmcAssociator
 from services.mtmc_engine import _crop, _detect
 from services.mtmc_local_track import create_local_tracker
 from services.reid_gallery import l2_normalize
-from services.strong_reid import extract_person_embedding
+from services.strong_reid import extract_person_embedding, color_signature
 from services.vehicle_reid_feat import cosine
 
 IMG_DIR = os.path.join(ROOT, "..", "docs", "test_data", "images")
@@ -82,10 +82,10 @@ def _pick_person(dets):
     return max(pool, key=lambda x: (x["bbox"][2] - x["bbox"][0]) * (x["bbox"][3] - x["bbox"][1]))
 
 
-def _person_embeddings_from_half(half, models: dict) -> list[dict]:
+def _person_embeddings_from_half(half, models: dict, conf: float = 0.15) -> list[dict]:
     hh, hw = half.shape[:2]
     small = cv2.resize(half, (640, max(1, int(hh * 640 / hw))))
-    dets = _detect(models["det_person_path"], small, 0.28, [0])
+    dets = _detect(models["det_person_path"], small, conf, [0])
     persons = [d for d in dets if str(d.get("className", "")).lower() == "person"] or list(dets or [])
     out = []
     for d in persons:
@@ -102,12 +102,13 @@ def _person_embeddings_from_half(half, models: dict) -> list[dict]:
             "emb": l2_normalize(emb),
             "bbox": d["bbox"],
             "conf": d["confidence"],
+            "color": color_signature(crop),
         })
     return out
 
 
 def ref_from_screenshot(case_idx: int, models: dict) -> dict:
-    """从用户截图左/右半幅取目标行人 ref：全检测两两配对，取得分最高的一对。"""
+    """从用户截图左/右半幅取目标行人 ref：外观+颜色综合配对。"""
     if case_idx >= len(PERSON_SCREENSHOTS):
         return {}
     path = PERSON_SCREENSHOTS[case_idx]
@@ -116,42 +117,66 @@ def ref_from_screenshot(case_idx: int, models: dict) -> dict:
         return {}
     h, w = img.shape[:2]
     pool = {
-        71: _person_embeddings_from_half(img[:, : w // 2], models),
-        81: _person_embeddings_from_half(img[:, w // 2 :], models),
+        71: _person_embeddings_from_half(img[:, : w // 2], models, conf=0.12),
+        81: _person_embeddings_from_half(img[:, w // 2 :], models, conf=0.12),
     }
     if not pool[71] or not pool[81]:
         return {}
+    from services.strong_reid import color_sig_cosine
     best = (-1.0, None, None)
     for a in pool[71]:
         for b in pool[81]:
             c = cosine(a["emb"], b["emb"])
-            if c > best[0]:
-                best = (c, a, b)
+            cs = color_sig_cosine(a.get("color"), b.get("color"))
+            joint = c if cs < 0 else (0.65 * c + 0.35 * max(c, cs))
+            if joint > best[0]:
+                best = (joint, a, b)
     if best[1] is None:
         return {}
     return {71: best[1], 81: best[2]}
 
 
-def ref_embedding(t71: float, t81: float, models: dict, case_idx: int = 0):
-    out = {}
+def ref_from_video(t71: float, t81: float, models: dict, conf: float = 0.15) -> dict:
+    """视频帧最佳配对（含颜色），用于截图漏检时回退。"""
+    from services.strong_reid import color_sig_cosine
+    pools = {}
     for cid, path, t, fps in ((71, P71, t71, 20.0), (81, P81, t81, 25.0)):
         frame = load_frame(path, t, fps)
         if frame is None:
-            out[cid] = None
+            pools[cid] = []
             continue
-        dets = _detect(models["det_person_path"], frame, 0.28, [0])
-        d = _pick_person(dets)
-        if d is None:
-            out[cid] = None
-            continue
-        crop = _crop(frame, d["bbox"])
-        emb, _ = extract_person_embedding(
-            crop,
-            youtu_root=models["youtu_root"],
-            strong_root=models["strong_reid_root"],
-        )
-        out[cid] = {"emb": l2_normalize(emb), "bbox": d["bbox"], "conf": d["confidence"]}
-    return out
+        dets = _detect(models["det_person_path"], frame, conf, [0])
+        out = []
+        for d in dets:
+            crop = _crop(frame, d["bbox"])
+            if crop is None:
+                continue
+            try:
+                emb, _ = extract_person_embedding(
+                    crop, youtu_root=models["youtu_root"], strong_root=models["strong_reid_root"],
+                )
+            except Exception:
+                continue
+            out.append({
+                "emb": l2_normalize(emb),
+                "bbox": d["bbox"],
+                "conf": d["confidence"],
+                "color": color_signature(crop),
+            })
+        pools[cid] = out
+    if not pools.get(71) or not pools.get(81):
+        return {}
+    best = (-1.0, None, None)
+    for a in pools[71]:
+        for b in pools[81]:
+            c = cosine(a["emb"], b["emb"])
+            cs = color_sig_cosine(a.get("color"), b.get("color"))
+            joint = c if cs < 0 else (0.65 * c + 0.35 * max(c, cs))
+            if joint > best[0]:
+                best = (joint, a, b)
+    if best[1] is None:
+        return {}
+    return {71: best[1], 81: best[2]}
 
 
 def isolated_test(refs: dict) -> dict:
@@ -160,14 +185,19 @@ def isolated_test(refs: dict) -> dict:
         return {"ok": False, "reason": "missing ref detection"}
     cos = cosine(r71["emb"], r81["emb"])
     now = 1_700_000_000.0
-    assoc = MtmcAssociator(appear_thresh=0.48, confirm_thresh=0.48, time_window_sec=120)
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, confirm_thresh=0.48, time_window_sec=120,
+        topology={(71, 81): (0.0, 30.0), (81, 71): (0.0, 30.0)},
+    )
     g1 = assoc.associate(
         object_type="person", camera_id=71, embedding=r71["emb"],
+        color_sig=r71.get("color"),
         local_track_id=1, exclude_gids=set(), now=now,
     )
     g2 = assoc.associate(
         object_type="person", camera_id=81, embedding=r81["emb"],
-        local_track_id=3, exclude_gids=set(), now=now + 1.0,
+        color_sig=r81.get("color"),
+        local_track_id=3, exclude_gids=set(), now=now + 0.5,
     )
     return {"ok": g1.global_id == g2.global_id, "visual_cosine": cos, "g71": g1.global_id, "g81": g2.global_id}
 
@@ -223,7 +253,7 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
                 continue
             now = base_ts + t
             small = resize_frame(frame)
-            raw_p = _detect(det, small, 0.28, [0])
+            raw_p = _detect(det, small, 0.15, [0])
             tracks = trackers[cid].update(raw_p, frame=small)
             claimed: set[str] = set()
             tt = t71 if cid == 71 else t81
@@ -242,10 +272,12 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
                         strong_root=models["strong_reid_root"],
                     )
                     emb = l2_normalize(emb)
+                    c_sig = color_signature(crop)
                 except Exception:
                     continue
                 g = session.associator.associate(
                     object_type="person", camera_id=cid, embedding=emb,
+                    color_sig=c_sig,
                     local_track_id=int(tr.track_id), exclude_gids=claimed, now=now,
                 )
                 claimed.add(g.global_id)
@@ -301,7 +333,7 @@ def main():
         print(f"\n--- {name}  cam71={t71:.0f}s  cam81={t81:.0f}s ---")
         refs = ref_from_screenshot(idx, models)
         if not refs.get(71) or not refs.get(81):
-            refs = ref_embedding(t71, t81, models, case_idx=idx)
+            refs = ref_from_video(t71, t81, models, conf=0.12)
         if refs.get(71) and refs.get(81):
             print(f"  ref visual_cosine={cosine(refs[71]['emb'], refs[81]['emb']):.4f}")
         iso = isolated_test(refs)

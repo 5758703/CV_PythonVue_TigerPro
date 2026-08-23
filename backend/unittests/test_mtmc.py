@@ -494,6 +494,69 @@ def test_person_cross_cam_uses_peer_prototype():
     assert g1.global_id == g2.global_id
 
 
+def test_motor_vs_car_no_hard_conflict():
+    """摩托↔轿车不硬冲突（YOLO 常误标），高相似应跨镜合并。"""
+    from services.vehicle_reid_feat import vehicle_class_conflict
+    assert not vehicle_class_conflict("motorcycle", "car")
+    assert vehicle_class_conflict("truck", "car")
+    assoc = MtmcAssociator(appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48)
+    emb = _l2(np.random.randn(64).astype(np.float32))
+    noise = _l2(emb + np.random.randn(64).astype(np.float32) * 0.04)
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb,
+        vehicle_class="motorcycle", local_track_id=1, exclude_gids=set(), now=50.0,
+    )
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=noise,
+        vehicle_class="car", local_track_id=2, exclude_gids=set(), now=50.0,
+    )
+    assert g1.global_id == g2.global_id
+
+
+def test_simultaneous_cross_cam_dt_zero_merges():
+    """重叠视野同时刻（dt=0）应允许跨镜合并。"""
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48,
+        topology={(71, 81): (0.0, 30.0), (81, 71): (0.0, 30.0)},
+    )
+    emb = _l2(np.random.randn(64).astype(np.float32))
+    noise = _l2(emb + np.random.randn(64).astype(np.float32) * 0.03)
+    g1 = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb,
+        vehicle_class="car", local_track_id=1, exclude_gids=set(), now=200.0,
+    )
+    g2 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=noise,
+        vehicle_class="car", local_track_id=5, exclude_gids=set(), now=200.0,
+    )
+    assert g1.global_id == g2.global_id
+
+
+def test_person_color_sig_helps_low_visual():
+    """弱外观 + 强颜色签名应跨镜合并行人。"""
+    from services.strong_reid import color_signature
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, confirm_thresh=0.48,
+        topology={(71, 81): (0.0, 30.0), (81, 71): (0.0, 30.0)},
+    )
+    emb_a = _l2(np.random.randn(64).astype(np.float32))
+    # 视觉相似度约 0.30（低于旧阈值）
+    emb_b = _l2(emb_a + np.random.randn(64).astype(np.float32) * 0.55)
+    # 合成红色上衣 ROI
+    red = np.zeros((120, 60, 3), dtype=np.uint8)
+    red[:, :] = (40, 40, 220)
+    cs = color_signature(red)
+    g1 = assoc.associate(
+        object_type="person", camera_id=71, embedding=emb_a,
+        color_sig=cs, local_track_id=1, exclude_gids=set(), now=10.0,
+    )
+    g2 = assoc.associate(
+        object_type="person", camera_id=81, embedding=emb_b,
+        color_sig=cs, local_track_id=2, exclude_gids=set(), now=10.5,
+    )
+    assert g1.global_id == g2.global_id
+
+
 def test_active_gallery_faiss_search():
     from services.mtmc_active_gallery import MtmcActiveGallery
 

@@ -21,6 +21,12 @@ import numpy as np
 
 from services.vehicle_reid_feat import plate_reliable, vehicle_class_conflict
 
+try:
+    from services.strong_reid import color_sig_cosine
+except ImportError:  # pragma: no cover
+    def color_sig_cosine(a, b):  # type: ignore
+        return -1.0
+
 _INVALID_IDENTITY_KEYS = frozenset({"", "UNKNOWN|U", "UNKNOWN", "NONE", "NULL"})
 
 
@@ -77,6 +83,7 @@ class GlobalTrack:
     visual_key: str | None = None
     vehicle_class: str | None = None
     vehicle_class_by_cam: dict[int, str] = field(default_factory=dict)
+    color_sig: np.ndarray | None = None
     hit_count: int = 1
     trail_by_cam: dict[int, list] = field(default_factory=dict)
     local_track_id: int | None = None
@@ -495,6 +502,7 @@ class MtmcAssociator:
         display_name: str | None,
         visual_key: str | None,
         vehicle_class: str | None,
+        color_sig: np.ndarray | None = None,
         local_track_id: int | None,
         now: float,
         mode: AssocMode,
@@ -537,6 +545,19 @@ class MtmcAssociator:
             vc_norm = str(vehicle_class).strip().lower()
             g.vehicle_class = vc_norm
             g.vehicle_class_by_cam[int(camera_id)] = vc_norm
+        if color_sig is not None:
+            cs = _l2(np.asarray(color_sig, dtype=np.float32).reshape(-1))
+            if g.color_sig is None:
+                g.color_sig = cs
+            else:
+                a, b = _l2(g.color_sig), cs
+                dim = max(a.size, b.size)
+                aa = np.zeros(dim, dtype=np.float32)
+                bb = np.zeros(dim, dtype=np.float32)
+                aa[: a.size] = a
+                bb[: b.size] = b
+                alpha = 0.2 if mode == AssocMode.STICKY else 0.4
+                g.color_sig = _l2((1.0 - alpha) * aa + alpha * bb)
         return g
 
     def _is_lost_for_revive(self, g: GlobalTrack, camera_id: int, now: float) -> bool:
@@ -585,6 +606,7 @@ class MtmcAssociator:
         reid_person_id: int | None,
         local_track_id: int | None = None,
         vehicle_class: str | None = None,
+        color_sig: np.ndarray | None = None,
         now: float,
     ) -> tuple[float | None, dict]:
         """仅用于新生 local track 的长时/跨镜外观匹配。返回 (final_score, breakdown)。"""
@@ -633,13 +655,18 @@ class MtmcAssociator:
             if not same_cam or cross_takeover:
                 appear_need = min(appear_need, max(0.42, self.vehicle_appear_thresh - 0.06))
         elif not same_cam:
-            appear_need = min(appear_need, max(0.40, self.appear_thresh - 0.06))
-            if (
-                object_type == "person"
-                and cross_proto >= 0.38
-                and self._cross_cam_established(g, camera_id)
-            ):
-                appear_need = min(appear_need, max(0.36, cross_proto - 0.02))
+            # 行人跨视角外观弱于车辆：阈值更松，依赖拓扑+对侧原型
+            if object_type == "person":
+                appear_need = min(appear_need, max(0.28, self.appear_thresh - 0.18))
+                if cross_proto >= 0.28:
+                    appear_need = min(appear_need, max(0.26, float(cross_proto) - 0.02))
+            else:
+                appear_need = min(appear_need, max(0.40, self.appear_thresh - 0.06))
+                if (
+                    cross_proto >= 0.38
+                    and self._cross_cam_established(g, camera_id)
+                ):
+                    appear_need = min(appear_need, max(0.36, cross_proto - 0.02))
         if same_cam and not cross_takeover:
             appear_need = max(appear_need, self.appear_thresh + 0.12)
 
@@ -689,9 +716,18 @@ class MtmcAssociator:
                     reid_raw = cross_proto
                 else:
                     reid_raw = centroid_cos
+                # 颜色签名：跨视角外观弱时抬分（红帽/米色衫/白盔等）
+                csim = color_sig_cosine(color_sig, g.color_sig)
+                if not same_cam and csim >= 0.55 and reid_raw is not None and reid_raw >= 0:
+                    reid_raw = float(0.62 * reid_raw + 0.38 * max(reid_raw, csim))
+                    if csim >= 0.72 and reid_raw < appear_need:
+                        reid_raw = max(reid_raw, min(appear_need + 0.02, 0.55 * reid_raw + 0.45 * csim))
                 score = reid_raw
                 if score < appear_need:
-                    return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
+                    return None, {
+                        "topology": topo_w, "time": time_w,
+                        "reid": reid_raw, "color": csim if csim >= 0 else None, "final": None,
+                    }
         recency_w = (
             self._cross_cam_recency_weight(g, camera_id, now)
             if not same_cam
@@ -727,6 +763,7 @@ class MtmcAssociator:
         display_name: str | None = None,
         visual_key: str | None = None,
         vehicle_class: str | None = None,
+        color_sig: np.ndarray | None = None,
         local_track_id: int | None = None,
         exclude_gids: Iterable[str] | None = None,
         now: float | None = None,
@@ -824,6 +861,7 @@ class MtmcAssociator:
                                 display_name=display_name,
                                 visual_key=visual_key,
                                 vehicle_class=vc,
+                                color_sig=color_sig,
                                 local_track_id=int(local_track_id),
                                 now=now,
                                 mode=AssocMode.STICKY,
@@ -878,6 +916,7 @@ class MtmcAssociator:
                         reid_person_id=reid_person_id,
                         local_track_id=int(local_track_id) if local_track_id is not None else None,
                         vehicle_class=vc,
+                        color_sig=color_sig,
                         now=now,
                     )
                     if score is None:
@@ -913,8 +952,15 @@ class MtmcAssociator:
                 if best_breakdown.get("reid") is not None
                 else best_score
             )
+            # 行人：final 含颜色/时序加成，用作确认分；避免弱外观永远卡在 candidate
+            if object_type == "person" and best_score is not None and best_score >= 0:
+                tier_score = max(float(tier_score or -1), float(best_score))
+            confirm_need = self.confirm_thresh
+            if object_type == "person" and self.confirm_thresh <= self.appear_thresh + 0.08:
+                # 默认配置下放宽；显式高 confirm（三档 candidate 测试）不受影响
+                confirm_need = min(self.confirm_thresh, max(0.30, self.appear_thresh - 0.14))
             if best_gid is not None:
-                if tier_score >= self.confirm_thresh:
+                if tier_score >= confirm_need:
                     tier = "confirm"
                 elif tier_score >= self.candidate_thresh:
                     tier = "candidate"
@@ -935,6 +981,7 @@ class MtmcAssociator:
                     display_name=display_name,
                     visual_key=visual_key,
                     vehicle_class=vc,
+                    color_sig=color_sig,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     now=now,
                     mode=AssocMode.LONG_TERM,
@@ -968,6 +1015,7 @@ class MtmcAssociator:
                     identity_key=identity_key,
                     visual_key=visual_key,
                     vehicle_class=vc,
+                    color_sig=_l2(color_sig) if color_sig is not None else None,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     last_assoc_mode=AssocMode.CANDIDATE.value,
                 )
@@ -1013,6 +1061,7 @@ class MtmcAssociator:
                     identity_key=identity_key,
                     visual_key=visual_key,
                     vehicle_class=vc,
+                    color_sig=_l2(color_sig) if color_sig is not None else None,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     last_assoc_mode=AssocMode.NEW.value,
                 )
