@@ -116,7 +116,7 @@ def load_models():
 
 def _vehicle_fuse_from_track(t, frame, models: dict):
     from services.mtmc_engine import _crop
-    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.vehicle_track import _plate_candidates, _ocr_plate
 
     crop = _crop(frame, t.bbox)
@@ -294,10 +294,10 @@ def process_video_fast(
     conf: float = 0.28,
 ):
     """高效跨镜评估：YOLO + ByteTrack + ReID + MtmcAssociator（与线上一致的核心关联逻辑）。"""
-    from services.mtmc_engine import _detect, _crop, _sort_vehicle_tracks_for_assoc
+    from services.mtmc_engine import _detect, _crop, _sort_vehicle_tracks_for_assoc, supplement_orphan_vehicle_dets
     from services.mtmc_local_track import create_local_tracker
     from services.strong_reid import extract_person_embedding
-    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.reid_gallery import l2_normalize
 
     cid = video["camera_id"]
@@ -321,6 +321,8 @@ def process_video_fast(
         raw_v = _detect(det_path, small, conf, [1, 2, 3, 5, 7])
         tracks_p = tracker_p.update(raw_p, frame=small)
         tracks_v = tracker_v.update(raw_v, frame=small)
+        sh, sw = small.shape[:2]
+        tracks_v = supplement_orphan_vehicle_dets(tracks_v, raw_v, frame_w=sw, frame_h=sh)
 
         eval_state.det_frames[cid] += 1
         eval_state.det_counts[cid].append(len(tracks_p) + len(tracks_v))
@@ -370,13 +372,16 @@ def process_video_fast(
             emb, fuse = _vehicle_fuse_from_track(t, small, models)
             if emb is None:
                 continue
+            sh, sw = small.shape[:2]
             g = associator.associate(
                 object_type="vehicle",
                 camera_id=cid,
                 embedding=emb,
                 identity_key=fuse.get("identityKey"),
                 plate=fuse.get("plate"),
-                vehicle_class=getattr(t, "class_name", None),
+                vehicle_class=infer_vehicle_class(
+                    getattr(t, "class_name", None), t.bbox, frame_h=sh, frame_w=sw,
+                ),
                 local_track_id=int(t.track_id),
                 exclude_gids=claimed_v,
                 now=now,
@@ -433,10 +438,10 @@ def run_interleaved_eval(
     from services.mtmc_local_track import create_local_tracker
     from services.mtmc_engine import _detect, _crop
     from services.strong_reid import extract_person_embedding
-    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.reid_gallery import l2_normalize
 
-    from services.mtmc_engine import _sort_vehicle_tracks_for_assoc
+    from services.mtmc_engine import _sort_vehicle_tracks_for_assoc, supplement_orphan_vehicle_dets
 
     trackers = {
         v["camera_id"]: (
@@ -478,6 +483,8 @@ def run_interleaved_eval(
             raw_v = _detect(models["det_person_path"], small, 0.28, [1, 2, 3, 5, 7])
             tracks_p = tp.update(raw_p, frame=small)
             tracks_v = tv.update(raw_v, frame=small)
+            sh, sw = small.shape[:2]
+            tracks_v = supplement_orphan_vehicle_dets(tracks_v, raw_v, frame_w=sw, frame_h=sh)
             eval_state.det_frames[cid] += 1
             eval_state.det_counts[cid].append(len(tracks_p) + len(tracks_v))
             claimed_p: set[str] = set()
@@ -512,11 +519,14 @@ def run_interleaved_eval(
                 emb, fuse = _vehicle_fuse_from_track(tr, small, models)
                 if emb is None:
                     continue
+                sh, sw = small.shape[:2]
                 cams_before = set(eval_state.global_cams.get("", set()))
                 g = session.associator.associate(
                     object_type="vehicle", camera_id=cid, embedding=emb,
                     identity_key=fuse.get("identityKey"), plate=fuse.get("plate"),
-                    vehicle_class=getattr(tr, "class_name", None),
+                    vehicle_class=infer_vehicle_class(
+                        getattr(tr, "class_name", None), tr.bbox, frame_h=sh, frame_w=sw,
+                    ),
                     local_track_id=int(tr.track_id), exclude_gids=claimed_v, now=now,
                 )
                 claimed_v.add(g.global_id)

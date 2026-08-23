@@ -175,6 +175,29 @@ def vehicle_class_conflict(a: str | None, b: str | None) -> bool:
     return ba != bb
 
 
+def infer_vehicle_class(
+    class_name: str | None,
+    bbox: list | tuple | None = None,
+    *,
+    frame_h: int = 0,
+    frame_w: int = 0,
+) -> str | None:
+    """检测类 + 框面积启发式，缓解 YOLO 将货车误标为 car。"""
+    n = (class_name or "").strip().lower()
+    bucket = vehicle_class_bucket(n)
+    area_ratio = 0.0
+    if bbox is not None and len(bbox) >= 4 and frame_h > 0 and frame_w > 0:
+        x1, y1, x2, y2 = (float(bbox[i]) for i in range(4))
+        area_ratio = max(0.0, x2 - x1) * max(0.0, y2 - y1) / float(frame_h * frame_w)
+    if area_ratio >= 0.10 and bucket != "large":
+        return "truck"
+    if bucket != "unknown":
+        return n
+    if area_ratio >= 0.035:
+        return "car"
+    return n or None
+
+
 def plate_reliable(plate: str | None, score: float | None = None) -> bool:
     """车牌 OCR 是否可信：低分或过短视为噪声，不参与硬冲突/身份键。"""
     p = (plate or "").strip().upper()

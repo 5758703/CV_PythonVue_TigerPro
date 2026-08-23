@@ -412,6 +412,29 @@ def test_vehicle_cross_cam_takeover_same_cam_sibling():
     assert ("vehicle", 71, 3) not in assoc._local_bind
 
 
+def test_supplement_orphan_vehicle_dets():
+    from services.mtmc_engine import supplement_orphan_vehicle_dets
+    from services.mtmc_local_track import Tracklet
+
+    car = Tracklet(track_id=1, bbox=[100, 100, 150, 140], class_name="car", conf=0.7)
+    raw = [
+        {"bbox": [102, 102, 148, 138], "confidence": 0.68, "className": "car"},
+        {"bbox": [10, 10, 400, 300], "confidence": 0.65, "className": "truck"},
+    ]
+    out = supplement_orphan_vehicle_dets([car], raw, frame_w=640, frame_h=360)
+    assert len(out) == 2
+    assert any(getattr(t, "attrs", {}).get("orphanDet") for t in out)
+    assert any(getattr(t, "class_name", None) == "truck" for t in out)
+    out2 = supplement_orphan_vehicle_dets([car], [{"bbox": [10, 10, 400, 300], "confidence": 0.65, "className": "car"}], frame_w=640, frame_h=360)
+    assert len(out2) == 1
+
+
+def test_infer_vehicle_class_large_bbox():
+    from services.vehicle_reid_feat import infer_vehicle_class
+    bbox = [10, 10, 450, 350]
+    assert infer_vehicle_class("car", bbox, frame_h=360, frame_w=640) == "truck"
+
+
 def test_vehicle_class_mismatch_blocks_cross_cam_merge():
     """货车与轿车类别互斥时，即使视觉相似也不应跨镜合并。"""
     assoc = MtmcAssociator(appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48)

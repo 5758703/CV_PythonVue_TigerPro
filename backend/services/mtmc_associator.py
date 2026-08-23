@@ -76,6 +76,7 @@ class GlobalTrack:
     identity_key: str | None = None
     visual_key: str | None = None
     vehicle_class: str | None = None
+    vehicle_class_by_cam: dict[int, str] = field(default_factory=dict)
     hit_count: int = 1
     trail_by_cam: dict[int, list] = field(default_factory=dict)
     local_track_id: int | None = None
@@ -190,6 +191,22 @@ class MtmcAssociator:
     def _gallery_remove(self, object_type: str, global_id: str) -> None:
         self._gallery.remove(object_type, global_id)
 
+    def _peer_vehicle_class(self, g: GlobalTrack, camera_id: int) -> str | None:
+        """跨镜比对时用对侧相机记录的类别，避免本侧误标污染。"""
+        peer = [cls for cam, cls in g.vehicle_class_by_cam.items() if int(cam) != int(camera_id)]
+        if peer:
+            return peer[-1]
+        return g.vehicle_class
+
+    def _cross_cam_recency_weight(self, g: GlobalTrack, camera_id: int, now: float) -> float:
+        """跨镜：优先刚在对侧相机出现的 Global；本侧 centroid 已污染则略降权。"""
+        if g.camera_id == camera_id:
+            return 0.90
+        dt = now - g.last_seen
+        if dt <= 5.0:
+            return 1.0 + 0.05 * max(0.0, (5.0 - dt) / 5.0)
+        return 1.0
+
     def _hard_conflict(
         self,
         object_type: str,
@@ -197,6 +214,7 @@ class MtmcAssociator:
         plate: str | None,
         identity_key: str | None,
         vehicle_class: str | None = None,
+        camera_id: int | None = None,
         target: GlobalTrack,
     ) -> bool:
         """硬冲突：高置信车牌不一致时拒绝合并。
@@ -205,7 +223,12 @@ class MtmcAssociator:
         """
         if object_type != "vehicle":
             return False
-        if vehicle_class_conflict(vehicle_class, target.vehicle_class):
+        ref_cls = (
+            self._peer_vehicle_class(target, int(camera_id))
+            if camera_id is not None
+            else target.vehicle_class
+        )
+        if vehicle_class_conflict(vehicle_class, ref_cls):
             return True
         ik = _valid_identity_key(identity_key)
         g_ik = _valid_identity_key(target.identity_key)
@@ -468,7 +491,9 @@ class MtmcAssociator:
         if visual_key:
             g.visual_key = visual_key
         if vehicle_class:
-            g.vehicle_class = str(vehicle_class).strip().lower()
+            vc_norm = str(vehicle_class).strip().lower()
+            g.vehicle_class = vc_norm
+            g.vehicle_class_by_cam[int(camera_id)] = vc_norm
         return g
 
     def _is_lost_for_revive(self, g: GlobalTrack, camera_id: int, now: float) -> bool:
@@ -591,8 +616,9 @@ class MtmcAssociator:
                 score, reid_raw = 0.92, cos if cos >= 0 else None
             else:
                 centroid_cos = _cos(embedding, g.embedding)
+                peer_cls = self._peer_vehicle_class(g, camera_id)
                 if not same_cam and cross_proto >= 0:
-                    if vehicle_class_conflict(vehicle_class, g.vehicle_class):
+                    if vehicle_class_conflict(vehicle_class, peer_cls):
                         return None, {
                             "topology": topo_w, "time": time_w,
                             "reid": centroid_cos, "final": None, "classConflict": True,
@@ -611,12 +637,18 @@ class MtmcAssociator:
                 score = reid_raw
                 if score < appear_need:
                     return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
-        final = float(score * topo_w)
+        recency_w = (
+            self._cross_cam_recency_weight(g, camera_id, now)
+            if object_type == "vehicle" and g.camera_id != camera_id
+            else 1.0
+        )
+        final = float(score * topo_w * recency_w)
         return final, {
             "reid": reid_raw,
             "crossProto": cross_proto if cross_proto >= 0 else None,
             "topology": topo_w,
             "time": time_w,
+            "recency": recency_w,
             "final": final,
             "candidateGlobalId": g.global_id,
         }
@@ -669,6 +701,14 @@ class MtmcAssociator:
                         ):
                             bind_at = self._local_bind_at.get(bkey)
                             if bind_at is not None and (now - bind_at) < self.vehicle_sticky_warmup_sec:
+                                skip_sticky = True
+                        if (
+                            not skip_sticky
+                            and object_type == "vehicle"
+                            and vc
+                        ):
+                            peer_cls = self._peer_vehicle_class(g, camera_id)
+                            if vehicle_class_conflict(vc, peer_cls):
                                 skip_sticky = True
                         if (
                             not skip_sticky
@@ -763,6 +803,7 @@ class MtmcAssociator:
                         plate=plate,
                         identity_key=identity_key,
                         vehicle_class=vc,
+                        camera_id=camera_id,
                         target=g,
                     ):
                         continue
@@ -974,6 +1015,9 @@ class MtmcAssociator:
                 keep.visual_key = drop.visual_key
             if drop.vehicle_class and not keep.vehicle_class:
                 keep.vehicle_class = drop.vehicle_class
+            for cam, cls in (drop.vehicle_class_by_cam or {}).items():
+                if cls and int(cam) not in keep.vehicle_class_by_cam:
+                    keep.vehicle_class_by_cam[int(cam)] = cls
             keep.last_seen = max(keep.last_seen, drop.last_seen)
             keep.first_seen = min(keep.first_seen, drop.first_seen)
             keep.camera_id = drop.camera_id

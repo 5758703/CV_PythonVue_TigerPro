@@ -7,11 +7,12 @@ sys.path.insert(0, ROOT)
 
 from scripts.diag_vehicle_cross_cam_batch import CASES, ref_embedding, load_models, cosine
 from scripts.eval_mtmc_cross_cam import build_session, open_captures, resize_frame, _vehicle_fuse_from_track
-from services.mtmc_engine import _detect, _sort_vehicle_tracks_for_assoc
+from services.mtmc_engine import _detect, _sort_vehicle_tracks_for_assoc, supplement_orphan_vehicle_dets
 from services.mtmc_local_track import create_local_tracker
 
-VEHICLE_CLS = [1, 2, 3, 5, 7]
+from services.vehicle_reid_feat import infer_vehicle_class
 
+VEHICLE_CLS = [1, 2, 3, 5, 7]
 
 def run_case(case_idx: int):
     name, t71, t81, pref = CASES[case_idx]
@@ -61,7 +62,10 @@ def run_case(case_idx: int):
                 continue
             now = base + t
             small = resize_frame(frame)
-            tracks = trackers[cid].update(_detect(det, small, 0.28, VEHICLE_CLS), frame=small)
+            raw = _detect(det, small, 0.28, VEHICLE_CLS)
+            tracks = trackers[cid].update(raw, frame=small)
+            sh, sw = small.shape[:2]
+            tracks = supplement_orphan_vehicle_dets(tracks, raw, frame_w=sw, frame_h=sh)
             claimed = set()
             tt = t71 if cid == 71 else t81
             if abs(t - tt) > 0.01:
@@ -72,9 +76,14 @@ def run_case(case_idx: int):
                 emb, fuse = _vehicle_fuse_from_track(tr, small, models)
                 if emb is None:
                     continue
+                sh, sw = small.shape[:2]
+                vcls = infer_vehicle_class(
+                    getattr(tr, "class_name", None), tr.bbox, frame_h=sh, frame_w=sw,
+                )
                 g = session.associator.associate(
                     object_type="vehicle", camera_id=cid, embedding=emb,
                     identity_key=fuse.get("identityKey"), plate=fuse.get("plate"),
+                    vehicle_class=vcls,
                     local_track_id=int(tr.track_id), exclude_gids=claimed, now=now,
                 )
                 claimed.add(g.global_id)
@@ -84,6 +93,7 @@ def run_case(case_idx: int):
                     "mode": session.associator.last_mode.value,
                     "cos": cosine(emb, ref),
                     "conf": tr.conf,
+                    "cls": vcls or getattr(tr, "class_name", None),
                     "plate": fuse.get("plate"),
                 })
 
@@ -98,7 +108,7 @@ def run_case(case_idx: int):
                 mark = " ***" if r["cos"] > 0.88 else ""
                 print(
                     f"  L{r['local']:2d} {r['global']} mode={r['mode']:8s} "
-                    f"cos={r['cos']:.3f} conf={r['conf']:.2f} plate={r['plate']!r}{mark}"
+                    f"cos={r['cos']:.3f} conf={r['conf']:.2f} cls={r.get('cls')!r} plate={r['plate']!r}{mark}"
                 )
         g71 = {r["global"] for r in rows_by_t[tt][71]}
         g81 = {r["global"] for r in rows_by_t[tt][81]}

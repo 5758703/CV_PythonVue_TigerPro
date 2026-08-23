@@ -625,8 +625,82 @@ def _finalize_removed_builders(
             log.debug("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
 
 
+def _bbox_area(bbox) -> float:
+    if not bbox or len(bbox) < 4:
+        return 0.0
+    return max(0.0, float(bbox[2]) - float(bbox[0])) * max(0.0, float(bbox[3]) - float(bbox[1]))
+
+
+def _bbox_iou(a, b) -> float:
+    ax1, ay1, ax2, ay2 = (float(v) for v in a[:4])
+    bx1, by1, bx2, by2 = (float(v) for v in b[:4])
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def supplement_orphan_vehicle_dets(
+    tracks,
+    raw_dets: list[dict],
+    *,
+    frame_w: int,
+    frame_h: int,
+    iou_thresh: float = 0.22,
+    min_conf: float = 0.42,
+    min_area_ratio: float = 0.055,
+):
+    """ByteTrack 漏跟时，为大号/货车 orphan 检测补虚拟 track（仅当帧关联）。"""
+    from services.mtmc_local_track import Tracklet
+
+    if not raw_dets:
+        return tracks
+    frame_area = max(float(frame_w * frame_h), 1.0)
+    matched: set[int] = set()
+    for tr in tracks:
+        for i, det in enumerate(raw_dets):
+            if _bbox_iou(tr.bbox, det.get("bbox") or []) >= iou_thresh:
+                matched.add(i)
+    extras = []
+    eid = 900001
+    for i, det in enumerate(raw_dets):
+        if i in matched:
+            continue
+        conf = float(det.get("confidence") or 0)
+        if conf < min_conf:
+            continue
+        bbox = [float(v) for v in (det.get("bbox") or [])[:4]]
+        if len(bbox) < 4:
+            continue
+        area_ratio = _bbox_area(bbox) / frame_area
+        cls = str(det.get("className") or "object").strip().lower()
+        if cls not in ("truck", "bus"):
+            continue
+        if area_ratio < min_area_ratio:
+            continue
+        cx, cy = (bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5
+        extras.append(
+            Tracklet(
+                track_id=eid,
+                bbox=bbox,
+                class_name=str(det.get("className") or "object"),
+                conf=conf,
+                is_new=True,
+                trail=[(cx, cy)],
+                attrs={"orphanDet": True},
+            )
+        )
+        eid += 1
+    return list(tracks) + extras
+
+
 def _sort_vehicle_tracks_for_assoc(tracks, associator, camera_id: int, now: float):
-    """未绑定 Global 的 local 优先关联，避免旧 sticky 占坑阻断跨镜匹配。"""
+    """未绑定 Global 的 local 优先关联；同优先级时大框优先（跨镜货车漏跟补救）。"""
 
     def _key(tr):
         sticky = associator.peek_sticky(
@@ -635,7 +709,11 @@ def _sort_vehicle_tracks_for_assoc(tracks, associator, camera_id: int, now: floa
             local_track_id=int(tr.track_id),
             now=now,
         )
-        return (0 if sticky is None else 1, -float(getattr(tr, "conf", 0) or 0))
+        return (
+            0 if sticky is None else 1,
+            -_bbox_area(getattr(tr, "bbox", None)),
+            -float(getattr(tr, "conf", 0) or 0),
+        )
 
     return sorted(tracks, key=_key)
 
@@ -668,7 +746,7 @@ def _make_local_tracker(cfg: MtmcConfig):
 
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
     from services.strong_reid import extract_person_embedding
-    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.vehicle_track import congestion_level, get_session as get_vsession
     from services.reid_gallery import l2_normalize
 
@@ -823,6 +901,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     if cfg.enable_vehicle and cfg.det_vehicle_path:
         raw_v = _detect(cfg.det_vehicle_path, frame, cfg.conf, [1, 2, 3, 5, 7])
         tracks_v = cam_state.tracker_vehicle.update(raw_v, frame=frame)
+        tracks_v = supplement_orphan_vehicle_dets(
+            tracks_v, raw_v, frame_w=fw, frame_h=fh,
+        )
         active_vehicle_local = {int(t.track_id) for t in tracks_v}
         cong = congestion_level(len(tracks_v))
         cam_state.congestion = cong
@@ -919,7 +1000,12 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     identity_key=fuse.get("identityKey"),
                     plate=fuse.get("plate") or plate_text,
                     visual_key=fuse.get("visualKey"),
-                    vehicle_class=getattr(t, "class_name", None),
+                    vehicle_class=infer_vehicle_class(
+                        getattr(t, "class_name", None),
+                        t.bbox,
+                        frame_h=fh,
+                        frame_w=fw,
+                    ),
                     exclude_gids=claimed_vehicle,
                     now=now,
                 )

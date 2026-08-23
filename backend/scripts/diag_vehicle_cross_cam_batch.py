@@ -22,9 +22,9 @@ from scripts.eval_mtmc_cross_cam import (
     resize_frame,
 )
 from services.mtmc_associator import MtmcAssociator, AssocMode
-from services.mtmc_engine import _detect, _crop, _sort_vehicle_tracks_for_assoc
+from services.mtmc_engine import _detect, _crop, _sort_vehicle_tracks_for_assoc, supplement_orphan_vehicle_dets
 from services.mtmc_local_track import create_local_tracker
-from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, cosine
+from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, cosine, infer_vehicle_class
 from services.vehicle_track import _plate_candidates, _ocr_plate
 
 P71 = os.path.join(
@@ -183,7 +183,10 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
                 continue
             now = base_ts + t
             small = resize_frame(frame)
-            tracks = trackers[cid].update(_detect(det, small, 0.28, VEHICLE_CLS), frame=small)
+            raw = _detect(det, small, 0.28, VEHICLE_CLS)
+            tracks = trackers[cid].update(raw, frame=small)
+            sh, sw = small.shape[:2]
+            tracks = supplement_orphan_vehicle_dets(tracks, raw, frame_w=sw, frame_h=sh)
             claimed: set[str] = set()
             tt = t71 if cid == 71 else t81
             ref_emb = r71["emb"] if cid == 71 else r81["emb"]
@@ -191,10 +194,13 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
                 emb, fuse = _vehicle_fuse_from_track(tr, small, models)
                 if emb is None:
                     continue
+                sh, sw = small.shape[:2]
                 g = session.associator.associate(
                     object_type="vehicle", camera_id=cid, embedding=emb,
                     identity_key=fuse.get("identityKey"), plate=fuse.get("plate"),
-                    vehicle_class=getattr(tr, "class_name", None),
+                    vehicle_class=infer_vehicle_class(
+                        getattr(tr, "class_name", None), tr.bbox, frame_h=sh, frame_w=sw,
+                    ),
                     local_track_id=int(tr.track_id), exclude_gids=claimed, now=now,
                 )
                 claimed.add(g.global_id)
