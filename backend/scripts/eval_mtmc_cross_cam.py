@@ -390,7 +390,119 @@ def _record_track(eval_state: EvalState, otype: str, cam_id: int, lid: int, gid:
         eval_state.global_locals[gid][cam_id].add(lid)
 
 
-def run_eval(duration_sec: float, sample_fps: float, base_ts: float, mode: str = "fast") -> dict:
+def run_interleaved_eval(
+    session, eval_state, caps, meta, models, dur, sample_fps, base_ts, t0: float,
+):
+    """按统一时间轴交错处理两路（在线 MTMC 时序，跨镜时间窗正确）。"""
+    from services.mtmc_local_track import create_local_tracker
+    from services.mtmc_engine import _detect, _crop
+    from services.strong_reid import extract_person_embedding
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual
+    from services.reid_gallery import l2_normalize
+
+    trackers = {
+        v["camera_id"]: (
+            create_local_tracker("bytetrack", max_age=30, iou_thresh=0.3),
+            create_local_tracker("bytetrack", max_age=30, iou_thresh=0.3),
+        )
+        for v in VIDEOS
+    }
+    frame_idx = {v["camera_id"]: 0 for v in VIDEOS}
+    step = {v["camera_id"]: max(1, int(round(meta[v["camera_id"]]["fps"] / sample_fps))) for v in VIDEOS}
+    max_frame = {v["camera_id"]: int(dur * meta[v["camera_id"]]["fps"]) for v in VIDEOS}
+    total_steps = max(1, int(dur * sample_fps))
+
+    for si in range(total_steps + 1):
+        t = si / sample_fps
+        if t > dur:
+            break
+        for v in VIDEOS:
+            cid = v["camera_id"]
+            target = min(si * step[cid], max_frame[cid])
+            cap = caps[cid]
+            cur = frame_idx[cid]
+            while cur < target:
+                if not cap.grab():
+                    break
+                cur += 1
+            if cur > max_frame[cid]:
+                frame_idx[cid] = cur
+                continue
+            ok, frame = cap.read()
+            cur += 1
+            frame_idx[cid] = cur
+            if not ok or frame is None:
+                continue
+            now = base_ts + t
+            small = resize_frame(frame)
+            tp, tv = trackers[cid]
+            raw_p = _detect(models["det_person_path"], small, 0.28, [0])
+            raw_v = _detect(models["det_person_path"], small, 0.28, [1, 2, 3, 5, 7])
+            tracks_p = tp.update(raw_p, frame=small)
+            tracks_v = tv.update(raw_v, frame=small)
+            eval_state.det_frames[cid] += 1
+            eval_state.det_counts[cid].append(len(tracks_p) + len(tracks_v))
+            claimed_p: set[str] = set()
+            claimed_v: set[str] = set()
+            for tr in tracks_p:
+                crop = _crop(small, tr.bbox)
+                if crop is None:
+                    continue
+                try:
+                    emb, _ = extract_person_embedding(
+                        crop, youtu_root=models["youtu_root"], strong_root=models["strong_reid_root"],
+                    )
+                    emb = l2_normalize(emb)
+                except Exception:
+                    continue
+                cams_before = set(eval_state.global_cams.get("", set()))
+                g = session.associator.associate(
+                    object_type="person", camera_id=cid, embedding=emb,
+                    local_track_id=int(tr.track_id), exclude_gids=claimed_p, now=now,
+                )
+                claimed_p.add(g.global_id)
+                cams_before = set(eval_state.global_cams.get(g.global_id, set()))
+                _record_track(eval_state, "person", cid, int(tr.track_id), g.global_id, now)
+                if cid not in cams_before and len(eval_state.global_cams.get(g.global_id, set())) >= 2:
+                    other = next(c for c in eval_state.global_cams[g.global_id] if c != cid)
+                    eval_state.cross_events.append({
+                        "globalId": g.global_id, "objectType": "person",
+                        "fromCameraId": other, "toCameraId": cid,
+                        "transitSec": round(t, 2), "ts": now,
+                    })
+            for tr in tracks_v:
+                crop = _crop(small, tr.bbox)
+                if crop is None:
+                    continue
+                emb, _ = extract_vehicle_embedding(models["vehicle_reid_root"], crop)
+                fuse = fuse_plate_visual(plate=None, plate_score=0, emb_a=emb, emb_b=emb)
+                cams_before = set(eval_state.global_cams.get("", set()))
+                g = session.associator.associate(
+                    object_type="vehicle", camera_id=cid, embedding=emb,
+                    identity_key=fuse.get("identityKey"), local_track_id=int(tr.track_id),
+                    exclude_gids=claimed_v, now=now,
+                )
+                claimed_v.add(g.global_id)
+                cams_before = set(eval_state.global_cams.get(g.global_id, set()))
+                _record_track(eval_state, "vehicle", cid, int(tr.track_id), g.global_id, now)
+                if cid not in cams_before and len(eval_state.global_cams.get(g.global_id, set())) >= 2:
+                    other = next(c for c in eval_state.global_cams[g.global_id] if c != cid)
+                    eval_state.cross_events.append({
+                        "globalId": g.global_id, "objectType": "vehicle",
+                        "fromCameraId": other, "toCameraId": cid,
+                        "transitSec": round(t, 2), "ts": now,
+                    })
+        if si % 20 == 0 and si > 0:
+            print(f"  interleaved t={t:.0f}s/{dur:.0f}s elapsed={time.time()-t0:.0f}s", flush=True)
+
+
+def run_eval(
+    duration_sec: float,
+    sample_fps: float,
+    base_ts: float,
+    mode: str = "fast",
+    interleaved: bool = False,
+) -> dict:
     from services.mtmc_local_track import create_local_tracker
 
     models = load_models()
@@ -407,7 +519,7 @@ def run_eval(duration_sec: float, sample_fps: float, base_ts: float, mode: str =
     print(f"      vehicle_det={models['det_vehicle_path']}")
     print(f"      youtu={models['youtu_root']} strong={models['strong_reid_root']}")
     print(f"      vehicle_reid={models['vehicle_reid_root']} onnx={models['has_vehicle_reid']}")
-    print(f"评估时长 {dur:.1f}s, 采样 {sample_fps} fps, step={step}")
+    print(f"评估时长 {dur:.1f}s, 采样 {sample_fps} fps, step={step}, 交错={interleaved}")
 
     t0 = time.time()
 
@@ -447,6 +559,9 @@ def run_eval(duration_sec: float, sample_fps: float, base_ts: float, mode: str =
                 break
         for v in VIDEOS:
             finalize_builders(session, v["camera_id"])
+    elif interleaved:
+        print("交错时间轴处理 cam71 + cam81 ...", flush=True)
+        run_interleaved_eval(session, eval_state, caps, meta, models, dur, sample_fps, base_ts, t0)
     else:
         # 按视频顺序处理，共享 associator；视频时间轴对齐（同一起点 base_ts）
         for v in VIDEOS:
@@ -475,13 +590,19 @@ def run_eval(duration_sec: float, sample_fps: float, base_ts: float, mode: str =
             _record_track(eval_state, otype, int(cid), int(lid), gid, base_ts)
 
     elapsed = time.time() - t0
-    report = build_report(session, eval_state, meta, models, dur, sample_fps, elapsed, mode=mode)
+    report = build_report(
+        session, eval_state, meta, models, dur, sample_fps, elapsed,
+        mode=mode, interleaved=interleaved,
+    )
     for cap in caps.values():
         cap.release()
     return report
 
 
-def build_report(session, eval_state: EvalState, meta, models, dur, sample_fps, elapsed, mode: str = "fast") -> dict:
+def build_report(
+    session, eval_state: EvalState, meta, models, dur, sample_fps, elapsed,
+    mode: str = "fast", interleaved: bool = False,
+) -> dict:
     def summarize_type(object_type: str) -> dict:
         locals_by_cam: dict[int, list[TrackRecord]] = defaultdict(list)
         for rec in eval_state.local_tracks.values():
@@ -589,6 +710,7 @@ def build_report(session, eval_state: EvalState, meta, models, dur, sample_fps, 
             "hasVehicleReidOnnx": models["has_vehicle_reid"],
             "associatorVehicleAppearThresh": session.associator.vehicle_appear_thresh,
             "mode": mode,
+            "interleaved": interleaved,
         },
         "person": person,
         "vehicle": vehicle,
@@ -601,6 +723,7 @@ def print_markdown(report: dict) -> str:
         "# 跨镜 MTMC 双视频评估报告",
         "",
         f"- 评估模式: **{report['meta'].get('mode', 'fast')}**",
+        f"- 时间交错: **{report['meta'].get('interleaved', False)}**",
         f"- 评估时长: **{report['meta']['durationSec']:.1f}s**",
         f"- 采样率: **{report['meta']['sampleFps']} fps**",
         f"- 耗时: **{report['meta']['elapsedSec']}s**",
@@ -704,7 +827,8 @@ def print_markdown(report: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="MTMC 双视频跨镜评估")
-    parser.add_argument("--mode", choices=("fast", "engine"), default="fast", help="fast=直接关联(推荐); engine=完整 tracklet 引擎")
+    parser.add_argument("--mode", choices=("fast", "engine"), default="fast")
+    parser.add_argument("--interleaved", action="store_true", help="按时间交错处理两路（更接近在线 MTMC）")
     parser.add_argument("--duration", type=float, default=0, help="评估秒数，0=全片")
     parser.add_argument("--sample-fps", type=float, default=2.0)
     parser.add_argument("--base-ts", type=float, default=1_700_000_000.0, help="模拟时间轴起点")
@@ -718,7 +842,7 @@ def main():
     )
     args = parser.parse_args()
 
-    report = run_eval(args.duration, args.sample_fps, args.base_ts, mode=args.mode)
+    report = run_eval(args.duration, args.sample_fps, args.base_ts, mode=args.mode, interleaved=args.interleaved)
     md = print_markdown(report)
 
     out_json = os.path.abspath(args.out_json)
