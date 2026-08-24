@@ -722,3 +722,38 @@ def test_ffmpeg_scale_caps_long_side():
     vf = cmd[cmd.index("-vf") + 1]
     assert "force_original_aspect_ratio=decrease" in vf
     assert "scale=960:-2" not in vf
+
+
+def test_resize_max_side_caps_portrait():
+    import numpy as np
+    from services.mtmc_engine import _resize_max_side
+
+    frame = np.zeros((1280, 584, 3), dtype=np.uint8)
+    out = _resize_max_side(frame, 720)
+    assert max(out.shape[:2]) == 720
+    assert out.shape[0] > out.shape[1]
+
+
+def test_engine_jpegs_yields_only_new_seq():
+    from unittest.mock import patch
+    from services.camera_stream import mjpeg_stream_mtmc_engine_jpegs
+    from services.mtmc_engine import CamState, MtmcConfig, MtmcSession
+    from services.mtmc_associator import MtmcAssociator
+
+    cfg = MtmcConfig(camera_ids=[1], detect_only=True)
+    session = MtmcSession("eng-jpeg", cfg, MtmcAssociator(appear_thresh=0.48, time_window_sec=60))
+    session.running = True
+    cam = CamState(camera_id=1, fast_preview=True)
+    cam.overlay_jpeg = b"\xff\xd8fakejpg"
+    cam.frame_seq = 3
+    session.cams[1] = cam
+
+    gen = mjpeg_stream_mtmc_engine_jpegs("eng-jpeg", 1, "overlay")
+    with patch("services.mtmc_engine.get_session", return_value=session):
+        with patch("services.camera_stream._request_disconnected", return_value=False):
+            with patch("services.camera_stream.time.sleep", return_value=None):
+                first = next(gen)
+                session.running = False
+                rest = list(gen)
+    assert b"--frame" in first
+    assert rest == []

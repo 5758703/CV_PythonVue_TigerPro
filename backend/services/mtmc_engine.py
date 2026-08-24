@@ -125,6 +125,7 @@ class CamState:
     last_persist_at: float = 0.0
     plate_cache: dict = field(default_factory=dict)
     raw_jpeg: bytes | None = None
+    fast_preview: bool = False
 
 
 def _public_live_det(d: dict) -> dict:
@@ -366,6 +367,8 @@ def _cam_worker_static_image(session: MtmcSession, cam_state: CamState, source_p
         cam_state.last_error = f"图片读取失败：{os.path.basename(source_path)}"
         session.stats["errors"] += 1
         return
+    if session.cfg.detect_only:
+        frame = _resize_max_side(frame, 720)
     interval = 1.0 / max(0.2, float(session.cfg.sample_fps))
     seq = 0
     while not session._stop.is_set():
@@ -402,6 +405,20 @@ def _open_video_capture(path: str):
     return None
 
 
+def _resize_max_side(frame, max_side: int = 720):
+    """预览/叠加缩小最长边，降低双路 JPEG 编码成本。"""
+    if frame is None or max_side <= 0:
+        return frame
+    h, w = frame.shape[:2]
+    m = max(int(h), int(w))
+    if m <= max_side:
+        return frame
+    scale = float(max_side) / float(m)
+    nw = max(2, int(w * scale) // 2 * 2)
+    nh = max(2, int(h * scale) // 2 * 2)
+    return cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_AREA)
+
+
 def _cam_worker_local_file(session: MtmcSession, cam_state: CamState, source_path: str):
     """本地视频：OpenCV 循环读帧检测，不依赖 ffmpeg hub（竖屏/中文路径下 hub 经常无帧）。"""
     cap = _open_video_capture(source_path)
@@ -416,6 +433,8 @@ def _cam_worker_local_file(session: MtmcSession, cam_state: CamState, source_pat
     frame_interval = 1.0 / max(1.0, src_fps)
     sample_fps = max(0.2, float(session.cfg.sample_fps))
     sample_stride = max(1, int(round(src_fps / sample_fps)))
+    detect_only = bool(session.cfg.detect_only)
+    display_side = 720 if detect_only else 960
     seq = 0
     frame_idx = 0
     next_tick = time.monotonic()
@@ -432,6 +451,7 @@ def _cam_worker_local_file(session: MtmcSession, cam_state: CamState, source_pat
                 frame_idx = 0
                 next_tick = time.monotonic()
             frame_idx += 1
+            frame = _resize_max_side(frame, display_side)
             try:
                 if frame_idx == 1 or (frame_idx % sample_stride == 0):
                     _process_frame(session, cam_state, frame, {"seq": seq, "localFile": True})
@@ -450,8 +470,15 @@ def _cam_worker_local_file(session: MtmcSession, cam_state: CamState, source_pat
             wait_s = next_tick - time.monotonic()
             if wait_s > 0:
                 session._stop.wait(wait_s)
-            elif wait_s < -1.5:
-                # 处理明显落后时重置时钟，防止无意义追帧导致“快进感”
+            elif wait_s < -0.04:
+                # 检测/编码落后时丢帧，保持接近原视频节拍，避免一顿一顿追帧
+                skip = min(int((-wait_s) / frame_interval), 24)
+                for _ in range(skip):
+                    if not cap.grab():
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        frame_idx = 0
+                        break
+                    frame_idx += 1
                 next_tick = time.monotonic()
     finally:
         cap.release()
@@ -696,7 +723,7 @@ def _draw_label_pil(img_bgr, text: str, origin, *, color=(0, 200, 80), font_size
     return cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
 
 
-def _draw_overlay(frame, items: list[dict], congestion: dict | None = None):
+def _draw_overlay(frame, items: list[dict], congestion: dict | None = None, jpeg_quality: int | None = None):
     """绘制检测框/轨迹/中文标签。PIL 只转一次，保证实时叠加不卡。"""
     vis = frame.copy()
     labels = []
@@ -738,15 +765,19 @@ def _draw_overlay(frame, items: list[dict], congestion: dict | None = None):
             )
             draw.text((x, y), text, font=font, fill=(255, 255, 255))
         vis = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
-    ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    quality = 70 if jpeg_quality is None else int(jpeg_quality)
+    ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     return buf.tobytes() if ok else None
 
 
 def _publish_overlay(cam_state: CamState, frame, items, congestion=None):
-    ok_raw, raw_buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    fast = bool(getattr(cam_state, "fast_preview", False))
+    quality = 52 if fast else 70
+    preview = _resize_max_side(frame, 720 if fast else 960)
+    ok_raw, raw_buf = cv2.imencode(".jpg", preview, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if ok_raw:
         cam_state.raw_jpeg = raw_buf.tobytes()
-    jpeg = _draw_overlay(frame, items or [], congestion)
+    jpeg = _draw_overlay(preview, items or [], congestion, jpeg_quality=quality)
     if jpeg:
         cam_state.overlay_jpeg = jpeg
         cam_state.frame_seq += 1
@@ -1660,7 +1691,7 @@ def start_session(
     cam_rows = list(cameras or []) or list((video_sources or {}).values())
     for cam in cam_rows:
         cid = int(cam.id)
-        session.cams[cid] = CamState(camera_id=cid)
+        session.cams[cid] = CamState(camera_id=cid, fast_preview=bool(cfg.detect_only))
     session.running = True
     with _sessions_lock:
         _sessions[sid] = session

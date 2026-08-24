@@ -576,9 +576,48 @@ def mjpeg_stream_shared(camera_id, source_type, source, width=640, fps=15):
     yield from hub.subscribe()
 
 
+def mjpeg_stream_mtmc_engine_jpegs(session_id: str, camera_id: int, which: str = "overlay"):
+    """只推送检测线程已编码的 JPEG，不另开 ffmpeg（本地视频实时检测用）。"""
+    from services import mtmc_engine
+
+    last_seq = -1
+    idle_n = 0
+    which = "raw" if which == "raw" else "overlay"
+    while True:
+        if _request_disconnected():
+            break
+        sess = mtmc_engine.get_session(session_id)
+        if not sess or not sess.running:
+            idle_n += 1
+            if idle_n > 250:
+                break
+            time.sleep(0.04)
+            continue
+        cam_st = sess.cams.get(int(camera_id))
+        jpeg = None
+        seq = last_seq
+        if cam_st:
+            jpeg = cam_st.raw_jpeg if which == "raw" else cam_st.overlay_jpeg
+            seq = cam_st.frame_seq
+        if jpeg and seq != last_seq:
+            last_seq = seq
+            idle_n = 0
+            yield _pack_frame(jpeg)
+            continue
+        idle_n += 1
+        if idle_n > 250 and (not sess or not sess.running):
+            break
+        time.sleep(0.02)
+
+
 def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, source, width=640, fps=15):
     """MTMC AI 叠加流：复用共享拉流，优先输出引擎标注帧，否则回退原帧。"""
     from services import mtmc_engine
+
+    sess = mtmc_engine.get_session(session_id)
+    if sess and getattr(sess.cfg, "detect_only", False):
+        yield from mjpeg_stream_mtmc_engine_jpegs(session_id, camera_id, "overlay")
+        return
 
     hub = ensure_shared_hub(camera_id, source_type, source, width, fps)
     last_overlay_seq = -1
@@ -613,8 +652,8 @@ def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, sour
                     break
                 raw = hub.latest
                 seq = hub.frame_seq
-            if overlay:
-                # 保持 AI 叠加流不断：处理慢时重复推送最近叠加帧
+            if overlay and cam_st and cam_st.frame_seq != last_overlay_seq:
+                last_overlay_seq = cam_st.frame_seq
                 idle_n = 0
                 yield _pack_frame(overlay)
             elif raw is not None and seq != last_raw_seq:
@@ -636,31 +675,8 @@ def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, sour
 
 
 def mjpeg_stream_mtmc_raw(session_id: str, camera_id: int, source_type, source, width=640, fps=15):
-    """原视频 MJPEG：优先输出检测线程同步原帧，保证与结果画面同节拍。"""
-    from services import mtmc_engine
-
-    last_seq = -1
-    idle_n = 0
-    while True:
-        if _request_disconnected():
-            break
-        raw = mtmc_engine.get_raw_jpeg(session_id, camera_id)
-        sess = mtmc_engine.get_session(session_id)
-        cam_st = sess.cams.get(int(camera_id)) if sess else None
-        seq = cam_st.frame_seq if cam_st else last_seq
-        if raw and seq != last_seq:
-            last_seq = seq
-            idle_n = 0
-            yield _pack_frame(raw)
-            continue
-        if raw:
-            idle_n = 0
-            yield _pack_frame(raw)
-        else:
-            idle_n += 1
-            if idle_n > 400:
-                break
-        time.sleep(0.04)
+    """原视频 MJPEG：只在检测线程产出新帧时推送，避免浏览器反复解码同一张图。"""
+    yield from mjpeg_stream_mtmc_engine_jpegs(session_id, camera_id, "raw")
 
 
 def mjpeg_stream(source_type, source, width=640, fps=15):

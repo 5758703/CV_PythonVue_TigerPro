@@ -105,6 +105,7 @@
           </el-form-item>
           <el-form-item label="采样 FPS">
             <el-input-number v-model="detectForm.sampleFps" :min="0.5" :max="15" :step="0.5" />
+            <span class="form-hint">仅控制检测频率；播放跟原视频帧率，处理落后时会丢帧保流畅</span>
           </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="detectBusy" v-permission="'ai:mtmc:edit'" @click="onDetectStart">启动检测</el-button>
@@ -1441,6 +1442,7 @@ onBeforeUnmount(() => {
 }
 .cell-h-meta { color: #8aa0c2; font-size: 11px; white-space: nowrap; }
 .cell-v { width: 100%; display: block; min-height: 160px; object-fit: contain; background: #060c18; }
+.form-hint { margin-left: 10px; color: #8aa0c2; font-size: 12px; }
 .cell-dets {
   background: #0f1728;
   padding: 6px;
