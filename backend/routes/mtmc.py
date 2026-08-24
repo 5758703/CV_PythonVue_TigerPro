@@ -86,7 +86,7 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         enable_person=_form_bool(data.get("enablePerson"), True),
         enable_vehicle=_form_bool(data.get("enableVehicle"), True),
         conf=float(data.get("conf") or 0.28),
-        sample_fps=float(data.get("sampleFps") or 2.0),
+        sample_fps=float(data.get("sampleFps") or 4.0),
         meters_per_pixel=float(data.get("metersPerPixel") or 0.05),
         appear_thresh=float(data.get("appearThresh") or 0.48),
         vehicle_appear_thresh=float(data.get("vehicleAppearThresh") or 0),
@@ -96,9 +96,11 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         gallery_model_key=(data.get("galleryModelKey") or "").strip() or None,
         time_window_sec=float(data.get("timeWindowSec") or 90),
         fuse_weight_strong=float(data.get("fuseWeightStrong") or 0.65),
-        width=int(data.get("width") or 640),
+        width=int(data.get("width") or 960),
         fps=int(data.get("fps") or 10),
-        persist_events=_form_bool(data.get("persistEvents"), True),
+        persist_events=_form_bool(data.get("persistEvents"), False),
+        reid_budget=int(data.get("reidBudget") or 2),
+        plate_budget=int(data.get("plateBudget") or 1),
         local_track_backend=track_backend,
         local_track_max_age=int(data.get("localTrackMaxAge") or 30),
         local_track_iou_thresh=float(data.get("localTrackIouThresh") or 0.3),
@@ -106,6 +108,7 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         enable_mask_cue=_form_bool(data.get("enableMaskCue"), False),
         lost_revive_sec=float(data.get("lostReviveSec") or 1.0),
         mcbyte_decouple=_form_bool(data.get("mcbyteDecouple"), True),
+        detect_only=_form_bool(data.get("detectOnly"), False),
     )
 
 
@@ -114,13 +117,83 @@ def _validate_mtmc_config(cfg: MtmcConfig):
         return "人员检测模型未就绪，请先拉取 YOLO"
     if cfg.enable_person and not os.path.isfile(cfg.det_person_path):
         return f"人员检测模型路径无效（非文件）: {cfg.det_person_path}"
-    if cfg.enable_person and not cfg.youtu_root and not cfg.strong_reid_root:
-        return "请至少准备 Youtu 或强 ReID（OSNet/CLIP）权重"
     if cfg.enable_vehicle and not cfg.det_vehicle_path:
         return "车辆检测模型未就绪"
     if cfg.enable_vehicle and not os.path.isfile(cfg.det_vehicle_path):
         return f"车辆检测模型路径无效（非文件）: {cfg.det_vehicle_path}"
     return None
+
+
+def _resolve_mtmc_video_path(raw_path: str, upload_folder: str) -> str:
+    """解析 MTMC 服务器本地视频路径（uploads 相对路径 / docs/test_data / 绝对路径）。"""
+    src = (raw_path or "").strip().replace("\\", "/")
+    if not src:
+        raise ValueError("路径为空")
+    if os.path.isabs(src):
+        p = os.path.abspath(src)
+        if os.path.isfile(p):
+            return p
+        raise FileNotFoundError(f"视频不存在：{raw_path}")
+    upload_base = os.path.abspath(upload_folder)
+    p_up = os.path.abspath(os.path.join(upload_base, src))
+    if p_up.startswith(upload_base) and os.path.isfile(p_up):
+        return p_up
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = os.path.dirname(backend_dir)
+    docs_base = os.path.join(repo_root, "docs", "test_data")
+    p_docs = os.path.abspath(os.path.join(docs_base, src))
+    if p_docs.startswith(docs_base) and os.path.isfile(p_docs):
+        return p_docs
+    raise FileNotFoundError(f"视频不存在：{raw_path}")
+
+
+def _start_mtmc_video_session(
+    *,
+    video_items: list[tuple[str, str, str]],
+    params: dict,
+    upload_dir: str | None = None,
+    source_type: str = "file",
+):
+    """video_items: [(abs_path_or_url, display_name, original_filename), ...]"""
+    detect_only = _form_bool(params.get("detectOnly"), False)
+    if detect_only and len(video_items) > 1:
+        video_items = video_items[:1]
+    cam_ids: list[int] = []
+    video_sources: dict[int, VirtualVideoSource] = {}
+    st = (source_type or "file").strip().lower()
+    for idx, (abs_path, label, orig_name) in enumerate(video_items):
+        cid = next_virtual_cam_id()
+        cam_ids.append(cid)
+        ext = os.path.splitext(abs_path)[1].lower()
+        img_ext = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+        item_st = "image" if ext in img_ext else st
+        is_stream = item_st in ("rtsp", "device")
+        video_sources[cid] = VirtualVideoSource(
+            id=cid,
+            name=label or os.path.splitext(orig_name)[0] or f"镜头{idx + 1}",
+            abs_path="" if is_stream else abs_path,
+            source=abs_path if is_stream else "",
+            source_type=item_st,
+            original_filename=orig_name or os.path.basename(abs_path),
+            resolution=int(params.get("width") or 960),
+            fps=int(params.get("fps") or 10),
+        )
+    if detect_only:
+        params = {**params, "persistEvents": False, "reidBudget": 0, "plateBudget": 0}
+    cfg = _parse_session_params({**params, "cameraIds": cam_ids})
+    err = _validate_mtmc_config(cfg)
+    if err:
+        return None, err
+    edges = None if detect_only else mtmc_engine._auto_topology_edges(cam_ids)
+    session = mtmc_engine.start_session(
+        cfg,
+        video_sources=video_sources,
+        upload_folder=current_app.config["UPLOAD_FOLDER"],
+        app=current_app._get_current_object(),
+        topology_edges=edges,
+        upload_dir=upload_dir,
+    )
+    return session, None
 
 
 def _abs_weight(m: AiModel | None) -> str | None:
@@ -302,8 +375,8 @@ def start_session_videos():
             if key.startswith("video"):
                 files.append(request.files[key])
     files = [f for f in files if f and f.filename]
-    if len(files) < 2:
-        return jsonify(code=400, message="跨镜重识别请至少上传 2 个本地视频"), 400
+    if len(files) < 1:
+        return jsonify(code=400, message="请至少上传 1 个本地视频或图片"), 400
 
     names_raw = (request.form.get("videoNames") or "").strip()
     names: list[str] = []
@@ -319,48 +392,160 @@ def start_session_videos():
     batch_dir = os.path.join(upload_root, "mtmc_videos", uuid.uuid4().hex[:16])
     os.makedirs(batch_dir, exist_ok=True)
 
-    video_sources: dict[int, VirtualVideoSource] = {}
-    cam_ids: list[int] = []
     allowed = current_app.config.get("VIDEO_ALLOWED_EXT") or {".mp4", ".avi", ".mov", ".mkv"}
+    img_allowed = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    video_items: list[tuple[str, str, str]] = []
+    session_source_type = "file"
 
     for idx, vf in enumerate(files):
         ext = os.path.splitext(vf.filename)[1].lower()
-        if ext not in allowed:
-            return jsonify(code=400, message=f"不支持的视频格式：{vf.filename}"), 400
+        if ext not in allowed and ext not in img_allowed:
+            return jsonify(code=400, message=f"不支持的文件格式：{vf.filename}"), 400
+        if ext in img_allowed:
+            session_source_type = "image"
         base = secure_filename(os.path.splitext(vf.filename)[0]) or f"cam{idx}"
         fname = f"cam_{idx}_{base}{ext}"
         abs_path = os.path.join(batch_dir, fname)
         vf.save(abs_path)
         if not os.path.isfile(abs_path):
-            return jsonify(code=400, message=f"视频保存失败：{vf.filename}"), 400
-        cid = next_virtual_cam_id()
-        cam_ids.append(cid)
+            return jsonify(code=400, message=f"文件保存失败：{vf.filename}"), 400
         label = names[idx] if idx < len(names) and names[idx] else os.path.splitext(vf.filename)[0]
-        video_sources[cid] = VirtualVideoSource(
-            id=cid,
-            name=label,
-            abs_path=abs_path,
-            original_filename=vf.filename,
-            resolution=int(request.form.get("width") or 640),
-            fps=int(request.form.get("fps") or 10),
-        )
+        video_items.append((abs_path, label, vf.filename))
 
     form_data = {k: request.form.get(k) for k in request.form.keys()}
-    cfg = _parse_session_params({**form_data, "cameraIds": cam_ids})
+    session, err = _start_mtmc_video_session(
+        video_items=video_items,
+        params=form_data,
+        upload_dir=batch_dir,
+        source_type=session_source_type,
+    )
+    if err:
+        return jsonify(code=400, message=err), 400
+    return jsonify(code=0, message="本地视频跨镜会话已启动", data=session.to_dict())
+
+
+@mtmc_bp.post("/sessions/start-video-paths")
+@permission_required("ai:mtmc:edit")
+def start_session_video_paths():
+    """使用服务器已有视频路径启动跨镜（免上传，适合 docs/test_data 大文件）。"""
+    data = request.get_json(silent=True) or {}
+    paths = data.get("videoPaths") or []
+    if isinstance(paths, str):
+        paths = [p.strip() for p in paths.split(",") if p.strip()]
+    if len(paths) < 1:
+        return jsonify(code=400, message="请至少提供 1 个服务器视频/图片路径"), 400
+
+    names = data.get("videoNames") or []
+    if isinstance(names, str):
+        names = [n.strip() for n in names.split(",") if n.strip()]
+
+    upload_root = current_app.config["UPLOAD_FOLDER"]
+    allowed = current_app.config.get("VIDEO_ALLOWED_EXT") or {".mp4", ".avi", ".mov", ".mkv"}
+    img_allowed = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    video_items: list[tuple[str, str, str]] = []
+    session_source_type = "file"
+
+    for idx, raw in enumerate(paths):
+        ext = os.path.splitext(str(raw))[1].lower()
+        if ext not in allowed and ext not in img_allowed:
+            return jsonify(code=400, message=f"不支持的文件格式：{raw}"), 400
+        if ext in img_allowed:
+            session_source_type = "image"
+        try:
+            abs_path = _resolve_mtmc_video_path(str(raw), upload_root)
+        except (ValueError, FileNotFoundError) as e:
+            return jsonify(code=400, message=str(e)), 400
+        orig = os.path.basename(abs_path)
+        label = names[idx] if idx < len(names) and names[idx] else os.path.splitext(orig)[0]
+        video_items.append((abs_path, label, orig))
+
+    session, err = _start_mtmc_video_session(
+        video_items=video_items,
+        params=data,
+        upload_dir=None,
+        source_type=session_source_type,
+    )
+    if err:
+        return jsonify(code=400, message=err), 400
+    return jsonify(code=0, message="服务器视频跨镜会话已启动", data=session.to_dict())
+
+
+@mtmc_bp.post("/sessions/start-sources")
+@permission_required("ai:mtmc:edit")
+def start_session_sources():
+    """混合源启动：file/path/image/rtsp/device，至少 1 路。"""
+    data = request.get_json(silent=True) or {}
+    sources = data.get("sources") or []
+    if not isinstance(sources, list) or len(sources) < 1:
+        return jsonify(code=400, message="请至少配置 1 路视频源"), 400
+    detect_only = _form_bool(data.get("detectOnly"), False)
+    if detect_only:
+        sources = sources[:1]
+        data = {**data, "persistEvents": False, "reidBudget": 0, "plateBudget": 0}
+
+    upload_root = current_app.config["UPLOAD_FOLDER"]
+    video_items: list[tuple[str, str, str]] = []
+    # 同源类型会话：若混用，以首路为准；rtsp/device 与 file 可混但各自 VirtualVideoSource.source_type 独立
+    # 这里按路独立创建，不共用 session_source_type
+    cam_ids: list[int] = []
+    video_sources: dict[int, VirtualVideoSource] = {}
+    for idx, row in enumerate(sources):
+        if not isinstance(row, dict):
+            return jsonify(code=400, message=f"第 {idx + 1} 路源格式无效"), 400
+        st = str(row.get("type") or row.get("sourceType") or "file").strip().lower()
+        name = (row.get("name") or f"镜头{idx + 1}").strip()
+        cid = next_virtual_cam_id()
+        width = int(data.get("width") or row.get("width") or 960)
+        fps = int(data.get("fps") or row.get("fps") or 10)
+        if st == "rtsp":
+            url = (row.get("url") or row.get("source") or "").strip()
+            if not url.startswith("rtsp://"):
+                return jsonify(code=400, message=f"{name}: RTSP 地址无效"), 400
+            video_sources[cid] = VirtualVideoSource(
+                id=cid, name=name, abs_path="", source=url, source_type="rtsp",
+                original_filename=url, resolution=width, fps=fps,
+            )
+        elif st == "device":
+            device = (row.get("device") or row.get("source") or "").strip()
+            if not device:
+                return jsonify(code=400, message=f"{name}: 请填写本机摄像头设备名"), 400
+            video_sources[cid] = VirtualVideoSource(
+                id=cid, name=name, abs_path="", source=device, source_type="device",
+                original_filename=device, resolution=width, fps=fps,
+            )
+        elif st in ("file", "path", "image", "video"):
+            raw = (row.get("path") or row.get("source") or "").strip()
+            if not raw:
+                return jsonify(code=400, message=f"{name}: 请填写文件路径"), 400
+            try:
+                abs_path = _resolve_mtmc_video_path(raw, upload_root)
+            except (ValueError, FileNotFoundError) as e:
+                return jsonify(code=400, message=str(e)), 400
+            ext = os.path.splitext(abs_path)[1].lower()
+            img_ext = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+            vst = "image" if ext in img_ext or st == "image" else "file"
+            video_sources[cid] = VirtualVideoSource(
+                id=cid, name=name, abs_path=abs_path, source="", source_type=vst,
+                original_filename=os.path.basename(abs_path), resolution=width, fps=fps,
+            )
+        else:
+            return jsonify(code=400, message=f"不支持的源类型：{st}"), 400
+        cam_ids.append(cid)
+
+    cfg = _parse_session_params({**data, "cameraIds": cam_ids})
     err = _validate_mtmc_config(cfg)
     if err:
         return jsonify(code=400, message=err), 400
-
-    edges = mtmc_engine._auto_topology_edges(cam_ids)
+    edges = None if detect_only else (mtmc_engine._auto_topology_edges(cam_ids) if len(cam_ids) >= 2 else [])
     session = mtmc_engine.start_session(
         cfg,
         video_sources=video_sources,
         upload_folder=upload_root,
         app=current_app._get_current_object(),
         topology_edges=edges,
-        upload_dir=batch_dir,
+        upload_dir=None,
     )
-    return jsonify(code=0, message="本地视频跨镜会话已启动", data=session.to_dict())
+    return jsonify(code=0, message="实时检测会话已启动", data=session.to_dict())
 
 
 @mtmc_bp.post("/sessions/<sid>/stop")
@@ -702,6 +887,38 @@ def overlay_stream(sid, cid):
         gen = mjpeg_stream_mtmc_overlay(sid, cid, stype, source, width, fps)
         resp = Response(stream_with_context(gen), mimetype="multipart/x-mixed-replace; boundary=frame")
         resp.headers["X-Mtmc-Overlay"] = "active"
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["X-Accel-Buffering"] = "no"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+@mtmc_bp.get("/raw/<sid>/<int:cid>/stream")
+def raw_stream(sid, cid):
+    """实时检测测试：原视频 MJPEG（query jwt），与 overlay 同节拍。"""
+    try:
+        verify_jwt_in_request(locations=["query_string"])
+    except Exception:  # noqa: BLE001
+        return jsonify(code=401, message="未登录或令牌无效"), 401
+    user = current_user()
+    if not has_perm(user, "ai:mtmc:query") and not has_perm(user, "camera:query"):
+        return jsonify(code=403, message="没有访问权限"), 403
+    s = mtmc_engine.get_session(sid)
+    if not s or not s.running:
+        return jsonify(code=404, message="检测会话不存在或未运行"), 404
+    if cid not in s.cfg.camera_ids:
+        return jsonify(code=400, message="该源不在当前会话中"), 400
+    upload_folder = current_app.config["UPLOAD_FOLDER"]
+    from services.camera_stream import mjpeg_stream_mtmc_raw
+    cam_row, source, width, fps = mtmc_engine.resolve_overlay_source(s, cid, upload_folder)
+    if cam_row is None or not source:
+        return jsonify(code=404, message="视频源不存在或无法解析"), 404
+    width = s.cfg.width or width
+    fps = s.cfg.fps or fps
+    stype = getattr(cam_row, "source_type", "file")
+    gen = mjpeg_stream_mtmc_raw(sid, cid, stype, source, width, fps)
+    resp = Response(stream_with_context(gen), mimetype="multipart/x-mixed-replace; boundary=frame")
+    resp.headers["X-Mtmc-Raw"] = "active"
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["X-Accel-Buffering"] = "no"
     resp.headers["Access-Control-Allow-Origin"] = "*"

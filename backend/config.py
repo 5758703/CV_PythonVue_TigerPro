@@ -37,7 +37,11 @@ class Config:
     DATASET_FOLDER = os.path.join(UPLOAD_FOLDER, "datasets")  # 训练数据集
     TRAINING_FOLDER = os.path.join(UPLOAD_FOLDER, "training")  # 训练产物
     BADMINTON_FOLDER = os.path.join(UPLOAD_FOLDER, "badminton")  # 羽毛球分析产物
-    MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 单文件上限 500MB（权重/视频文件较大）
+    try:
+        _max_mb = int(os.getenv("MAX_CONTENT_LENGTH_MB") or "4096")
+    except ValueError:
+        _max_mb = 4096
+    MAX_CONTENT_LENGTH = max(500, _max_mb) * 1024 * 1024  # 默认 4GB（跨镜双视频联调）
     MODEL_ALLOWED_EXT = {".pt", ".pth", ".onnx", ".engine", ".weights"}
     VIDEO_ALLOWED_EXT = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
     AUDIO_ALLOWED_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}

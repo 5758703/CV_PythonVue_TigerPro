@@ -49,6 +49,8 @@ request.interceptors.response.use(
       const userStore = useUserStore()
       userStore.logout()
       router.push('/login')
+    } else if (status === 413) {
+      message = data?.message || '上传文件过大，请改用「服务器路径」模式或压缩视频'
     }
     ElMessage.error(message || '网络错误')
     return Promise.reject(error)

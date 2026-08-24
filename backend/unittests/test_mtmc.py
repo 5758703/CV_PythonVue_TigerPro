@@ -604,3 +604,121 @@ def test_public_live_det_omits_full_trail():
     assert out["assocMode"] == "long_term"
     assert out["globalId"] == "P000001-abc"
     assert out["localTrackId"] == 3
+
+
+def test_read_image_bgr_unicode_path(tmp_path):
+    import cv2
+    import numpy as np
+    from services.mtmc_engine import _read_image_bgr
+
+    img = np.zeros((48, 64, 3), dtype=np.uint8)
+    img[:, :] = (0, 128, 255)
+    p = tmp_path / "测试图片.png"
+    cv2.imencode(".png", img)[1].tofile(str(p))
+    out = _read_image_bgr(str(p))
+    assert out is not None
+    assert out.shape[:2] == (48, 64)
+
+
+def test_static_image_worker_detects_vehicle(tmp_path):
+    import threading
+    import time
+    import cv2
+    import numpy as np
+    from unittest.mock import patch
+    from services.mtmc_engine import MtmcConfig, MtmcSession, CamState, _cam_worker_static_image
+    from services.mtmc_associator import MtmcAssociator
+
+    img = np.full((120, 200, 3), 180, dtype=np.uint8)
+    cv2.rectangle(img, (30, 40), (170, 100), (20, 20, 200), -1)
+    p = tmp_path / "car.png"
+    cv2.imencode(".png", img)[1].tofile(str(p))
+
+    cfg = MtmcConfig(
+        camera_ids=[910001],
+        enable_person=False,
+        enable_vehicle=True,
+        det_vehicle_path="fake.pt",
+        sample_fps=8,
+    )
+    session = MtmcSession("img-test", cfg, MtmcAssociator(appear_thresh=0.48, time_window_sec=60))
+    session.running = True
+    cam_state = CamState(camera_id=910001)
+    session.cams[910001] = cam_state
+    fake_det = [{"bbox": [30.0, 40.0, 170.0, 100.0], "confidence": 0.9, "classId": 2, "className": "car"}]
+
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], fake_det)):
+        th = threading.Thread(
+            target=_cam_worker_static_image,
+            args=(session, cam_state, str(p)),
+            daemon=True,
+        )
+        th.start()
+        deadline = time.time() + 3.0
+        while time.time() < deadline and session.stats["frames"] < 1:
+            time.sleep(0.05)
+        session._stop.set()
+        th.join(timeout=2.0)
+
+    assert session.stats["frames"] >= 1
+    assert len(cam_state.last_dets) >= 1
+    assert cam_state.overlay_jpeg
+
+
+def test_local_file_worker_detects_vehicle(tmp_path):
+    import threading
+    import time
+    import cv2
+    import numpy as np
+    from unittest.mock import patch
+    from services.mtmc_engine import MtmcConfig, MtmcSession, CamState, _cam_worker_local_file
+    from services.mtmc_associator import MtmcAssociator
+
+    p = tmp_path / "clip.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    wr = cv2.VideoWriter(str(p), fourcc, 8, (200, 120))
+    assert wr.isOpened()
+    for _ in range(8):
+        img = np.full((120, 200, 3), 180, dtype=np.uint8)
+        cv2.rectangle(img, (30, 40), (170, 100), (20, 20, 200), -1)
+        wr.write(img)
+    wr.release()
+
+    cfg = MtmcConfig(
+        camera_ids=[910002],
+        enable_person=False,
+        enable_vehicle=True,
+        det_vehicle_path="fake.pt",
+        sample_fps=8,
+    )
+    session = MtmcSession("file-test", cfg, MtmcAssociator(appear_thresh=0.48, time_window_sec=60))
+    session.running = True
+    cam_state = CamState(camera_id=910002)
+    session.cams[910002] = cam_state
+    fake_det = [{"bbox": [30.0, 40.0, 170.0, 100.0], "confidence": 0.9, "classId": 2, "className": "car"}]
+
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], fake_det)):
+        th = threading.Thread(
+            target=_cam_worker_local_file,
+            args=(session, cam_state, str(p)),
+            daemon=True,
+        )
+        th.start()
+        deadline = time.time() + 3.0
+        while time.time() < deadline and session.stats["frames"] < 1:
+            time.sleep(0.05)
+        session._stop.set()
+        th.join(timeout=2.0)
+
+    assert session.stats["frames"] >= 1
+    assert len(cam_state.last_dets) >= 1
+    assert cam_state.overlay_jpeg
+
+
+def test_ffmpeg_scale_caps_long_side():
+    from services.camera_stream import build_ffmpeg_cmd
+
+    cmd = build_ffmpeg_cmd("ffmpeg", "file", "a.mp4", 960, 10)
+    vf = cmd[cmd.index("-vf") + 1]
+    assert "force_original_aspect_ratio=decrease" in vf
+    assert "scale=960:-2" not in vf

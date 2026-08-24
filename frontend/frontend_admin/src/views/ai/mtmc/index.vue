@@ -9,39 +9,173 @@
     />
 
     <el-tabs v-model="tab" type="border-card">
-      <el-tab-pane label="会话控制" name="session">
+      <el-tab-pane label="实时检测测试" name="detect">
+        <el-alert
+          type="success"
+          :closable="false"
+          show-icon
+          class="mb"
+          title="单路实时检测：仅 YOLO 人/车画框叠加，不做 Tracklet / ReID / 跨镜关联；与「会话控制」互不影响。"
+        />
         <el-form :inline="true" label-width="100px" class="cfg">
           <el-form-item label="视频源">
-            <el-radio-group v-model="form.sourceMode">
-              <el-radio value="camera">摄像头</el-radio>
+            <el-radio-group v-model="detectForm.sourceMode">
               <el-radio value="upload">本地视频</el-radio>
+              <el-radio value="image">图片</el-radio>
+              <el-radio value="stream">网络流 RTSP</el-radio>
+              <el-radio value="device">本机摄像头</el-radio>
             </el-radio-group>
           </el-form-item>
-          <el-form-item v-if="form.sourceMode === 'camera'" label="摄像头">
-            <el-select v-model="form.cameraIds" multiple filterable collapse-tags style="width: 320px" placeholder="多选">
-              <el-option v-for="c in cameras" :key="c.id" :label="`${c.name} (#${c.id})`" :value="c.id" />
-            </el-select>
-          </el-form-item>
-          <template v-if="form.sourceMode === 'upload'">
-            <div class="upload-slots">
-              <div v-for="(slot, idx) in uploadSlots" :key="idx" class="upload-slot">
-                <el-input v-model="slot.name" :placeholder="`镜头${idx + 1}名称`" style="width: 140px" />
+          <template v-if="detectForm.sourceMode === 'upload'">
+            <el-form-item label="载入方式">
+              <el-radio-group v-model="uploadMode">
+                <el-radio value="path">服务器路径</el-radio>
+                <el-radio value="file">本地上传</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <div v-if="uploadMode === 'path'" class="upload-slots">
+              <div class="upload-slot">
+                <el-input v-model="pathSlots[0].name" placeholder="名称" style="width: 140px" />
+                <el-input
+                  v-model="pathSlots[0].path"
+                  placeholder="相对 docs/test_data，如 video/行人和车辆视频.mp4"
+                  style="width: 420px"
+                  clearable
+                />
+              </div>
+              <p class="hint upload-hint">单路测试。路径相对 docs/test_data 或 uploads</p>
+            </div>
+            <div v-else class="upload-slots">
+              <div class="upload-slot">
+                <el-input v-model="uploadSlots[0].name" placeholder="名称" style="width: 140px" />
                 <el-upload
                   :auto-upload="false"
                   :limit="1"
                   accept="video/*,.mp4,.avi,.mov,.mkv,.webm"
-                  :on-change="(f) => onVideoPick(idx, f)"
-                  :on-remove="() => onVideoRemove(idx)"
-                  :file-list="slot.fileList"
+                  :on-change="(f) => onVideoPick(0, f)"
+                  :on-remove="() => onVideoRemove(0)"
+                  :file-list="uploadSlots[0].fileList"
                 >
-                  <el-button type="primary" plain>选择视频 {{ idx + 1 }}</el-button>
+                  <el-button type="primary" plain>选择视频</el-button>
                 </el-upload>
-                <el-button v-if="uploadSlots.length > 2" link type="danger" @click="removeUploadSlot(idx)">移除</el-button>
               </div>
-              <el-button v-if="uploadSlots.length < 4" link type="primary" @click="addUploadSlot">+ 添加镜头</el-button>
             </div>
-            <p class="hint upload-hint">至少上传 2 路视频（同场景不同视角）；无需在摄像头管理预配置</p>
           </template>
+          <template v-if="detectForm.sourceMode === 'image'">
+            <div class="upload-slots">
+              <div class="upload-slot">
+                <el-input v-model="imageSlots[0].name" placeholder="名称" style="width: 140px" />
+                <el-input v-model="imageSlots[0].path" placeholder="服务器图片路径（可选）" style="width: 280px" clearable />
+                <el-upload
+                  :auto-upload="false"
+                  :limit="1"
+                  accept="image/*,.jpg,.jpeg,.png,.bmp,.webp"
+                  :on-change="(f) => onImagePick(0, f)"
+                  :on-remove="() => onImageRemove(0)"
+                  :file-list="imageSlots[0].fileList"
+                >
+                  <el-button type="primary" plain>选择图片</el-button>
+                </el-upload>
+              </div>
+            </div>
+          </template>
+          <template v-if="detectForm.sourceMode === 'stream'">
+            <div class="upload-slots">
+              <div class="upload-slot">
+                <el-input v-model="streamSlots[0].name" placeholder="名称" style="width: 140px" />
+                <el-input v-model="streamSlots[0].url" placeholder="rtsp://..." style="width: 420px" clearable />
+              </div>
+            </div>
+          </template>
+          <template v-if="detectForm.sourceMode === 'device'">
+            <div class="upload-slots">
+              <div class="upload-slot">
+                <el-input v-model="deviceSlots[0].name" placeholder="名称" style="width: 140px" />
+                <el-select v-model="deviceSlots[0].device" filterable allow-create placeholder="本机采集设备" style="width: 360px">
+                  <el-option v-for="d in devices" :key="d" :label="d" :value="d" />
+                </el-select>
+              </div>
+            </div>
+          </template>
+          <el-form-item label="人员">
+            <el-switch v-model="detectForm.enablePerson" />
+          </el-form-item>
+          <el-form-item label="车辆">
+            <el-switch v-model="detectForm.enableVehicle" />
+          </el-form-item>
+          <el-form-item label="采样 FPS">
+            <el-input-number v-model="detectForm.sampleFps" :min="0.5" :max="15" :step="0.5" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :loading="detectBusy" v-permission="'ai:mtmc:edit'" @click="onDetectStart">启动检测</el-button>
+            <el-button type="danger" :disabled="!detectSessionId" v-permission="'ai:mtmc:edit'" @click="onDetectStop">停止</el-button>
+            <el-button @click="refreshSession">刷新状态</el-button>
+          </el-form-item>
+        </el-form>
+
+        <el-descriptions v-if="detectSession" :column="4" border size="small" class="mb">
+          <el-descriptions-item label="检测会话">{{ detectSession.sessionId }}</el-descriptions-item>
+          <el-descriptions-item label="运行">{{ detectSession.running ? '是' : '否' }}</el-descriptions-item>
+          <el-descriptions-item label="源">{{ sourceModeLabel(detectSession.sourceMode) }}</el-descriptions-item>
+          <el-descriptions-item label="策略">纯检测（无 Tracklet）</el-descriptions-item>
+          <el-descriptions-item label="帧数">{{ detectSession.stats?.frames }}</el-descriptions-item>
+          <el-descriptions-item label="人员命中">{{ detectSession.stats?.persons }}</el-descriptions-item>
+          <el-descriptions-item label="车辆命中">{{ detectSession.stats?.vehicles }}</el-descriptions-item>
+          <el-descriptions-item label="当前检出">{{ detectCamId ? camDetCount(detectCamId, detectSession) : 0 }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div v-if="detectSession?.running && detectCamId" class="detect-views">
+          <div class="cell">
+            <div class="cell-h"><span>原视频</span></div>
+            <img :src="detectRawSrc" class="cell-v" @error="bustDetectStream" />
+          </div>
+          <div class="cell">
+            <div class="cell-h">
+              <span>结果视频（AI 叠加）</span>
+              <span class="cell-h-meta">
+                检出 {{ camDetCount(detectCamId, detectSession) }}
+                <template v-if="camMeta(detectCamId, detectSession).lastError"> · {{ camMeta(detectCamId, detectSession).lastError }}</template>
+              </span>
+            </div>
+            <img :src="detectOverlaySrc" class="cell-v" @error="bustDetectStream" />
+          </div>
+        </div>
+        <el-table
+          v-if="detectSession?.running && detectCamId"
+          :data="camDetections(detectCamId, detectSession)"
+          size="small"
+          border
+          stripe
+          class="mb"
+          max-height="220"
+          empty-text="本帧暂无检出"
+        >
+          <el-table-column label="类型" width="70">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.objectType === 'vehicle' ? 'warning' : 'success'" effect="plain">
+                {{ row.objectType === 'vehicle' ? '车' : '人' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="label" label="标签" min-width="140" show-overflow-tooltip />
+          <el-table-column label="分" width="70">
+            <template #default="{ row }">{{ formatScore(row.score) }}</template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane label="会话控制" name="session">
+        <el-form :inline="true" label-width="100px" class="cfg">
+          <el-form-item label="跨镜源">
+            <el-radio-group v-model="form.sourceMode">
+              <el-radio value="camera">摄像头（仅跨镜）</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="摄像头">
+            <el-select v-model="form.cameraIds" multiple filterable collapse-tags style="width: 320px" placeholder="多选">
+              <el-option v-for="c in cameras" :key="c.id" :label="`${c.name} (#${c.id})`" :value="c.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="人员">
             <el-switch v-model="form.enablePerson" />
           </el-form-item>
@@ -80,16 +214,17 @@
             <el-button type="primary" :loading="busy" v-permission="'ai:mtmc:edit'" @click="onStart">启动跨镜</el-button>
             <el-button type="danger" :disabled="!sessionId" v-permission="'ai:mtmc:edit'" @click="onStop">停止</el-button>
             <el-button @click="refreshSession">刷新状态</el-button>
-            <el-button type="success" :disabled="!sessionId" @click="goWall">打开监控墙叠加</el-button>
+            <el-button type="success" :disabled="!sessionId" @click="goWall">打开监控墙</el-button>
           </el-form-item>
         </el-form>
+        <p class="hint mb">本页仅用于跨镜关联；本地视频/图片/RTSP/本机摄像头请在「实时检测测试」页使用。</p>
 
-        <el-descriptions v-if="session" :column="3" border size="small" class="mb">
+        <el-descriptions v-if="session && !isDetectKind(session)" :column="3" border size="small" class="mb">
           <el-descriptions-item label="会话">{{ session.sessionId }}</el-descriptions-item>
           <el-descriptions-item label="运行">{{ session.running ? '是' : '否' }}</el-descriptions-item>
-          <el-descriptions-item label="模式">{{ session.sourceMode === 'upload' ? '本地视频' : '摄像头' }}</el-descriptions-item>
+          <el-descriptions-item label="模式">{{ sourceModeLabel(session.sourceMode) }}</el-descriptions-item>
           <el-descriptions-item label="视频源">
-            <template v-if="session.sourceMode === 'upload'">
+            <template v-if="session.sourceMode === 'upload' || session.sourceMode === 'image'">
               {{ (session.videoSources || []).map((v) => v.name).join(' · ') || '—' }}
             </template>
             <template v-else>{{ (session.cameraIds || []).join(', ') }}</template>
@@ -99,10 +234,10 @@
           <el-descriptions-item label="车辆命中">{{ session.stats?.vehicles }}</el-descriptions-item>
           <el-descriptions-item label="局部跟踪">{{ session.localTrackBackend || '-' }}</el-descriptions-item>
           <el-descriptions-item label="CMC">{{ session.enableCmc ? '开' : '关' }}</el-descriptions-item>
-          <el-descriptions-item label="McByte++解耦">{{ session.mcbyteDecouple === false ? '关' : '开' }}</el-descriptions-item>
+          <el-descriptions-item label="跨镜策略">{{ session.mcbyteDecouple === false ? '标准' : '增强' }}</el-descriptions-item>
         </el-descriptions>
 
-        <div class="grid-preview" v-if="session?.running">
+        <div class="grid-preview" v-if="session?.running && !isDetectKind(session)">
           <div v-for="cid in (session?.cameraIds || [])" :key="cid" class="cell">
             <div class="cell-h">
               <span>{{ cameraTitle(cid) }}</span>
@@ -110,6 +245,7 @@
                 检出 {{ camDetCount(cid) }}
                 <template v-if="camMeta(cid).frameSeq"> · 帧 #{{ camMeta(cid).frameSeq }}</template>
                 <template v-if="camCongestionLabel(cid)"> · {{ camCongestionLabel(cid) }}</template>
+                <template v-if="camMeta(cid).lastError"> · {{ camMeta(cid).lastError }}</template>
               </span>
             </div>
             <img :src="overlaySrc(cid)" class="cell-v" @error="bustOverlay(cid)" />
@@ -587,11 +723,14 @@ import { cameraApi } from '../../../api/camera'
 import { mtmcApi } from '../../../api/mtmc'
 
 const router = useRouter()
-const tab = ref('session')
+const tab = ref('detect')
 const busy = ref(false)
+const detectBusy = ref(false)
 const cameras = ref([])
 const sessionId = ref('')
 const session = ref(null)
+const detectSessionId = ref('')
+const detectSession = ref(null)
 const topology = ref([])
 const events = ref([])
 const passes = ref([])
@@ -609,7 +748,7 @@ const form = reactive({
   cameraIds: [],
   enablePerson: true,
   enableVehicle: true,
-  sampleFps: 2,
+  sampleFps: 4,
   appearThresh: 0.48,
   confirmThresh: 0,
   candidateThresh: 0,
@@ -620,10 +759,57 @@ const form = reactive({
   mcbyteDecouple: true,
 })
 
+const detectForm = reactive({
+  sourceMode: 'upload',
+  enablePerson: true,
+  enableVehicle: true,
+  sampleFps: 4,
+})
+
+const uploadMode = ref('path')
+
 const uploadSlots = reactive([
   { name: '镜头A', file: null, fileList: [] },
-  { name: '镜头B', file: null, fileList: [] },
 ])
+
+const pathSlots = reactive([
+  {
+    name: '镜头A',
+    path: 'video/行人和车辆视频.mp4',
+  },
+])
+
+const imageSlots = reactive([{ name: '图片A', path: '', file: null, fileList: [] }])
+const streamSlots = reactive([{ name: 'RTSP-A', url: '' }])
+const deviceSlots = reactive([{ name: '本机摄像头', device: '' }])
+const devices = ref([])
+
+const sessionPayload = () => ({
+  enablePerson: form.enablePerson,
+  enableVehicle: form.enableVehicle,
+  sampleFps: form.sampleFps,
+  appearThresh: form.appearThresh,
+  confirmThresh: form.confirmThresh,
+  candidateThresh: form.candidateThresh,
+  useFaissGallery: form.useFaissGallery,
+  timeWindowSec: form.timeWindowSec,
+  localTrackBackend: form.localTrackBackend,
+  enableCmc: form.enableCmc,
+  mcbyteDecouple: form.mcbyteDecouple,
+  persistEvents: false,
+  detectOnly: false,
+})
+
+const detectPayload = () => ({
+  enablePerson: detectForm.enablePerson,
+  enableVehicle: detectForm.enableVehicle,
+  sampleFps: detectForm.sampleFps,
+  persistEvents: false,
+  detectOnly: true,
+  localTrackBackend: 'iou',
+  reidBudget: 0,
+  plateBudget: 0,
+})
 
 const onVideoPick = (idx, file) => {
   const slot = uploadSlots[idx]
@@ -642,8 +828,52 @@ const addUploadSlot = () => {
   uploadSlots.push({ name: `镜头${String.fromCharCode(65 + uploadSlots.length)}`, file: null, fileList: [] })
 }
 const removeUploadSlot = (idx) => {
-  if (uploadSlots.length <= 2) return
+  if (uploadSlots.length <= 1) return
   uploadSlots.splice(idx, 1)
+}
+const addPathSlot = () => {
+  if (pathSlots.length >= 4) return
+  pathSlots.push({ name: `镜头${String.fromCharCode(65 + pathSlots.length)}`, path: '' })
+}
+const removePathSlot = (idx) => {
+  if (pathSlots.length <= 1) return
+  pathSlots.splice(idx, 1)
+}
+const onImagePick = (idx, file) => {
+  const slot = imageSlots[idx]
+  if (!slot || !file?.raw) return
+  slot.file = file.raw
+  slot.fileList = [file]
+}
+const onImageRemove = (idx) => {
+  const slot = imageSlots[idx]
+  if (!slot) return
+  slot.file = null
+  slot.fileList = []
+}
+const addImageSlot = () => {
+  if (imageSlots.length >= 4) return
+  imageSlots.push({ name: `图片${String.fromCharCode(65 + imageSlots.length)}`, path: '', file: null, fileList: [] })
+}
+const removeImageSlot = (idx) => {
+  if (imageSlots.length <= 1) return
+  imageSlots.splice(idx, 1)
+}
+const addStreamSlot = () => {
+  if (streamSlots.length >= 4) return
+  streamSlots.push({ name: `RTSP-${streamSlots.length + 1}`, url: '' })
+}
+const removeStreamSlot = (idx) => {
+  if (streamSlots.length <= 1) return
+  streamSlots.splice(idx, 1)
+}
+const addDeviceSlot = () => {
+  if (deviceSlots.length >= 4) return
+  deviceSlots.push({ name: `设备${deviceSlots.length + 1}`, device: '' })
+}
+const removeDeviceSlot = (idx) => {
+  if (deviceSlots.length <= 1) return
+  deviceSlots.splice(idx, 1)
 }
 
 const topoForm = reactive({
@@ -671,7 +901,7 @@ const paramGuide = [
   { name: '摄像头', desc: '参与跨镜的多路视频源，须已在「摄像头管理」配置且可预览；多路须同时运行', suggest: '先 2 路联调' },
   { name: '本地视频', desc: '直接上传 2 路及以上 MP4 等视频，无需预建摄像头；自动全互通拓扑（minTransitSec=0）', suggest: '演示/离线联调' },
   { name: '人员 / 车辆', desc: '是否启用人员 MTMC、车辆 MTMC（含车牌融合与视觉 ReID）', suggest: '按场景开关' },
-  { name: '采样 FPS', desc: '每路每秒处理帧数，越高越耗 CPU', suggest: '1～2' },
+  { name: '采样 FPS', desc: '每路每秒处理帧数，越高越耗 CPU', suggest: '2～4' },
   { name: '外观阈值', desc: '长时外观匹配的 ReID 下限；确认阈值默认值。行人跨镜后端会略放宽', suggest: '0.45～0.55' },
   { name: '确认阈值', desc: 'P1 三档：ReID 分 ≥ 此值自动合并到候选 Global（long_term）', suggest: '0 或同外观阈值' },
   { name: '候选阈值', desc: 'P1 三档：ReID 分介于候选～确认时新建并标记 candidate', suggest: '0 或约外观×0.82' },
@@ -706,10 +936,12 @@ const bustOverlay = (cid) => {
   overlayBust[cid] = String(Date.now())
 }
 
-const camMeta = (cid) => session.value?.cams?.[String(cid)] || {}
-const camDetections = (cid) => camMeta(cid).detections || []
-const camDetCount = (cid) => {
-  const m = camMeta(cid)
+const isDetectKind = (row) => row && (row.kind === 'detect' || row.detectOnly === true)
+
+const camMeta = (cid, sess = session.value) => sess?.cams?.[String(cid)] || {}
+const camDetections = (cid, sess = session.value) => camMeta(cid, sess).detections || []
+const camDetCount = (cid, sess = session.value) => {
+  const m = camMeta(cid, sess)
   if (typeof m.detCount === 'number') return m.detCount
   return (m.detections || []).length
 }
@@ -725,12 +957,40 @@ const cameraTitle = (cid) => {
   const name = row?.name || ''
   return name ? `${name} (#${cid})` : `Cam #${cid}`
 }
+const detectCamId = computed(() => {
+  const ids = detectSession.value?.cameraIds || []
+  return ids.length ? ids[0] : null
+})
+const detectBust = ref('')
+const detectOverlaySrc = computed(() => {
+  if (!detectSessionId.value || !detectSession.value?.running || !detectCamId.value) return ''
+  return mtmcApi.overlayUrl(detectSessionId.value, detectCamId.value, detectBust.value)
+})
+const detectRawSrc = computed(() => {
+  if (!detectSessionId.value || !detectSession.value?.running || !detectCamId.value) return ''
+  return mtmcApi.rawUrl(detectSessionId.value, detectCamId.value, detectBust.value)
+})
+const bustDetectStream = () => {
+  if (!detectSession.value?.running) return
+  detectBust.value = String(Date.now())
+}
 const formatScore = (v) => {
   if (v == null || v === '') return '—'
   const n = Number(v)
   if (Number.isNaN(n)) return '—'
   return n.toFixed(2)
 }
+const sourceModeLabel = (mode) => {
+  const map = {
+    camera: '摄像头',
+    upload: '本地视频',
+    image: '图片',
+    stream: 'RTSP 流',
+    device: '本机摄像头',
+  }
+  return map[mode] || mode || '—'
+}
+
 const assocModeClass = (mode) => {
   if (!mode) return 'muted'
   if (mode === 'long_term' || mode === 'promoted') return 'mode-ok'
@@ -745,9 +1005,54 @@ const clearSavedSession = () => {
   localStorage.removeItem('mtmc-session-id')
 }
 
+const clearDetectSession = () => {
+  detectSessionId.value = ''
+  detectSession.value = null
+  detectBust.value = ''
+  localStorage.removeItem('mtmc-detect-session-id')
+}
+
+const applyLiveRow = (row) => {
+  if (!row) return
+  if (isDetectKind(row)) {
+    detectSessionId.value = row.sessionId
+    detectSession.value = row
+    localStorage.setItem('mtmc-detect-session-id', detectSessionId.value)
+  } else {
+    sessionId.value = row.sessionId
+    session.value = row
+    localStorage.setItem('mtmc-session-id', sessionId.value)
+  }
+}
+
+const pingSaved = async (id, kind) => {
+  if (!id) return false
+  try {
+    const alive = await mtmcApi.sessionAlive(id)
+    if (!alive.data?.active) return false
+    const res = await mtmcApi.getSession(id)
+    const data = res.data
+    if (kind === 'detect' && !isDetectKind(data)) return false
+    if (kind === 'mtmc' && isDetectKind(data)) return false
+    applyLiveRow(data)
+    return true
+  } catch (_) {
+    return false
+  }
+}
+
 const loadCameras = async () => {
   const res = await cameraApi.list({ pageNum: 1, pageSize: 100, status: '0' })
   cameras.value = res.data.rows || []
+}
+
+const loadDevices = async () => {
+  try {
+    const res = await cameraApi.devices()
+    devices.value = res.data?.rows || res.data || []
+  } catch (_) {
+    devices.value = []
+  }
 }
 
 const loadTopo = async () => {
@@ -756,79 +1061,136 @@ const loadTopo = async () => {
 }
 
 const refreshSession = async () => {
+  let sawDetect = false
+  let sawMtmc = false
   try {
     const list = await mtmcApi.listSessions()
     const rows = list.data.rows || []
-    const live = rows.find((r) => r.running)
-    if (live) {
-      sessionId.value = live.sessionId
-      session.value = live
-      localStorage.setItem('mtmc-session-id', sessionId.value)
-      return
+    const liveDetect = rows.find((r) => r.running && isDetectKind(r))
+    const liveMtmc = rows.find((r) => r.running && !isDetectKind(r))
+    if (liveDetect) {
+      applyLiveRow(liveDetect)
+      sawDetect = true
+    }
+    if (liveMtmc) {
+      applyLiveRow(liveMtmc)
+      sawMtmc = true
     }
   } catch (_) {
     /* 列表失败时不打断页面 */
   }
-  if (sessionId.value) {
-    try {
-      const alive = await mtmcApi.sessionAlive(sessionId.value)
-      if (alive.data?.active) {
-        const res = await mtmcApi.getSession(sessionId.value)
-        session.value = res.data
-        return
-      }
-    } catch (_) {
-      /* ignore stale id */
-    }
+  if (!sawDetect) {
+    const saved = detectSessionId.value || localStorage.getItem('mtmc-detect-session-id')
+    sawDetect = await pingSaved(saved, 'detect')
+    if (!sawDetect) clearDetectSession()
   }
-  clearSavedSession()
+  if (!sawMtmc) {
+    const saved = sessionId.value || localStorage.getItem('mtmc-session-id')
+    sawMtmc = await pingSaved(saved, 'mtmc')
+    if (!sawMtmc) clearSavedSession()
+  }
 }
 
 const onStart = async () => {
-  if (form.sourceMode === 'camera' && !form.cameraIds.length) {
+  if (!form.cameraIds.length) {
     ElMessage.warning('请选择至少一路摄像头')
     return
-  }
-  if (form.sourceMode === 'upload') {
-    const picked = uploadSlots.filter((s) => s.file)
-    if (picked.length < 2) {
-      ElMessage.warning('本地视频模式请至少上传 2 个视频')
-      return
-    }
   }
   busy.value = true
   try {
     if (sessionId.value) {
       try { await mtmcApi.stopSession(sessionId.value) } catch (_) { /* ignore */ }
     }
-    let res
-    if (form.sourceMode === 'upload') {
-      const fd = new FormData()
-      uploadSlots.forEach((slot) => {
-        if (slot.file) fd.append('videos', slot.file)
-      })
-      fd.append('videoNames', JSON.stringify(uploadSlots.filter((s) => s.file).map((s) => s.name || '')))
-      fd.append('enablePerson', String(form.enablePerson))
-      fd.append('enableVehicle', String(form.enableVehicle))
-      fd.append('sampleFps', String(form.sampleFps))
-      fd.append('appearThresh', String(form.appearThresh))
-      fd.append('confirmThresh', String(form.confirmThresh))
-      fd.append('candidateThresh', String(form.candidateThresh))
-      fd.append('useFaissGallery', String(form.useFaissGallery))
-      fd.append('timeWindowSec', String(form.timeWindowSec))
-      fd.append('localTrackBackend', form.localTrackBackend)
-      fd.append('enableCmc', String(form.enableCmc))
-      fd.append('mcbyteDecouple', String(form.mcbyteDecouple))
-      res = await mtmcApi.startSessionVideos(fd)
-    } else {
-      res = await mtmcApi.startSession({ ...form })
-    }
+    const res = await mtmcApi.startSession({ ...form, ...sessionPayload(), sourceMode: 'camera' })
     sessionId.value = res.data.sessionId
     session.value = res.data
     localStorage.setItem('mtmc-session-id', sessionId.value)
-    ElMessage.success(form.sourceMode === 'upload' ? '本地视频跨镜会话已启动' : '跨镜会话已启动')
+    ElMessage.success('跨镜会话已启动')
   } finally {
     busy.value = false
+  }
+}
+
+const onDetectStart = async () => {
+  const mode = detectForm.sourceMode
+  if (mode === 'upload') {
+    if (uploadMode.value === 'path') {
+      if (!(pathSlots[0]?.path || '').trim()) {
+        ElMessage.warning('请填写服务器视频路径')
+        return
+      }
+    } else if (!uploadSlots[0]?.file) {
+      ElMessage.warning('请选择一个视频')
+      return
+    }
+  }
+  if (mode === 'image') {
+    if (!(imageSlots[0]?.path || '').trim() && !imageSlots[0]?.file) {
+      ElMessage.warning('请上传图片或填写服务器图片路径')
+      return
+    }
+  }
+  if (mode === 'stream' && !(streamSlots[0]?.url || '').trim().startsWith('rtsp://')) {
+    ElMessage.warning('请填写有效的 RTSP 地址')
+    return
+  }
+  if (mode === 'device' && !(deviceSlots[0]?.device || '').trim()) {
+    ElMessage.warning('请选择本机摄像头设备')
+    return
+  }
+  detectBusy.value = true
+  try {
+    if (detectSessionId.value) {
+      try { await mtmcApi.stopSession(detectSessionId.value) } catch (_) { /* ignore */ }
+    }
+    let res
+    const payload = detectPayload()
+    if (mode === 'upload') {
+      if (uploadMode.value === 'path') {
+        res = await mtmcApi.startSessionVideoPaths({
+          ...payload,
+          videoPaths: [pathSlots[0].path.trim()],
+          videoNames: [pathSlots[0].name || '检测源'],
+        })
+      } else {
+        const fd = new FormData()
+        fd.append('videos', uploadSlots[0].file)
+        fd.append('videoNames', JSON.stringify([uploadSlots[0].name || '检测源']))
+        Object.entries(payload).forEach(([k, v]) => fd.append(k, String(v)))
+        res = await mtmcApi.startSessionVideos(fd)
+      }
+    } else if (mode === 'image') {
+      if (imageSlots[0].file) {
+        const fd = new FormData()
+        fd.append('videos', imageSlots[0].file)
+        fd.append('videoNames', JSON.stringify([imageSlots[0].name || '图片']))
+        Object.entries(payload).forEach(([k, v]) => fd.append(k, String(v)))
+        res = await mtmcApi.startSessionVideos(fd)
+      } else {
+        res = await mtmcApi.startSessionVideoPaths({
+          ...payload,
+          videoPaths: [imageSlots[0].path.trim()],
+          videoNames: [imageSlots[0].name || '图片'],
+        })
+      }
+    } else if (mode === 'stream') {
+      res = await mtmcApi.startSessionSources({
+        ...payload,
+        sources: [{ type: 'rtsp', name: streamSlots[0].name || 'RTSP', url: streamSlots[0].url.trim() }],
+      })
+    } else {
+      res = await mtmcApi.startSessionSources({
+        ...payload,
+        sources: [{ type: 'device', name: deviceSlots[0].name || '本机摄像头', device: deviceSlots[0].device.trim() }],
+      })
+    }
+    detectSessionId.value = res.data.sessionId
+    detectSession.value = res.data
+    detectBust.value = String(Date.now())
+    localStorage.setItem('mtmc-detect-session-id', detectSessionId.value)
+    ElMessage.success('实时检测已启动')
+  } finally {
+    detectBusy.value = false
   }
 }
 
@@ -840,7 +1202,18 @@ const onStop = async () => {
     /* 会话已失效也视为停止 */
   }
   clearSavedSession()
-  ElMessage.success('已停止')
+  ElMessage.success('已停止跨镜会话')
+}
+
+const onDetectStop = async () => {
+  if (!detectSessionId.value) return
+  try {
+    await mtmcApi.stopSession(detectSessionId.value)
+  } catch (_) {
+    /* ignore */
+  }
+  clearDetectSession()
+  ElMessage.success('已停止实时检测')
 }
 
 const goWall = () => {
@@ -1015,6 +1388,7 @@ const showTraj = async (gid) => {
 
 onMounted(async () => {
   await loadCameras()
+  await loadDevices()
   await loadTopo()
   form.cameraIds = []
   await refreshSession()
@@ -1037,6 +1411,15 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 12px;
   margin: 12px 0;
+}
+.detect-views {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+}
+@media (max-width: 1100px) {
+  .detect-views { grid-template-columns: 1fr; }
 }
 .cell {
   background: #0b1220;

@@ -17,12 +17,18 @@ export const mtmcApi = {
   /** 探活：会话不存在或未运行时 active=false，不弹错误 toast */
   sessionAlive: (id) => request.get(`/ai/mtmc/sessions/${id}/alive`),
   startSession: (data) => request.post('/ai/mtmc/sessions/start', data),
-  /** 上传本地视频启动跨镜（multipart，至少 2 个视频） */
+  /** 上传本地视频/图片启动（multipart，至少 1 个文件） */
   startSessionVideos: (formData) =>
     request.post('/ai/mtmc/sessions/start-videos', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 300000,
+      timeout: 600000,
     }),
+  /** 服务器已有视频路径（免上传，适合大文件 / docs/test_data） */
+  startSessionVideoPaths: (data) =>
+    request.post('/ai/mtmc/sessions/start-video-paths', data, { timeout: 120000 }),
+  /** 混合源：file/path/image/rtsp/device */
+  startSessionSources: (data) =>
+    request.post('/ai/mtmc/sessions/start-sources', data, { timeout: 120000 }),
   stopSession: (id) => request.post(`/ai/mtmc/sessions/${id}/stop`),
   listEvents: (params) => request.get('/ai/mtmc/events', { params }),
   listPasses: (params) => request.get('/ai/mtmc/passes', { params }),
@@ -47,5 +53,11 @@ export const mtmcApi = {
     const q = bust ? `&_=${encodeURIComponent(bust)}` : ''
     const origin = streamOrigin()
     return `${origin}/api/ai/mtmc/overlay/${sessionId}/${cameraId}/stream?jwt=${encodeURIComponent(token)}${q}`
+  },
+  rawUrl: (sessionId, cameraId, bust = '') => {
+    const token = useUserStore().token
+    const q = bust ? `&_=${encodeURIComponent(bust)}` : ''
+    const origin = streamOrigin()
+    return `${origin}/api/ai/mtmc/raw/${sessionId}/${cameraId}/stream?jwt=${encodeURIComponent(token)}${q}`
   },
 }

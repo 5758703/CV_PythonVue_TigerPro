@@ -1,4 +1,5 @@
 from flask import Flask, jsonify
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from config import Config
 from extensions import db, cors, jwt
@@ -36,6 +37,15 @@ def create_app():
     @jwt.expired_token_loader
     def _expired_token(header, payload):
         return jsonify(code=401, message="登录已过期，请重新登录"), 401
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def _payload_too_large(_e):
+        limit_mb = app.config.get("MAX_CONTENT_LENGTH", 0) // (1024 * 1024)
+        return jsonify(
+            code=413,
+            message=f"上传内容过大（上限约 {limit_mb}MB）。大体积视频请改用「服务器路径」模式，"
+            f"或在 .env 中提高 MAX_CONTENT_LENGTH_MB",
+        ), 413
 
     with app.app_context():
         # 确保 ORM 模型（含人脸/行人底库）在 create_all 前完成注册

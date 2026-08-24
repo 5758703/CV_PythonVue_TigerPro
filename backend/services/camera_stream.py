@@ -67,6 +67,8 @@ def build_ffmpeg_cmd(ffmpeg_exe, source_type, source, width, fps):
         ]
     elif source_type == "device":
         src = ["-f", "dshow", "-i", f"video={source}"]
+    elif source_type == "image":
+        src = ["-loop", "1", "-framerate", "2", "-i", source]
     else:
         src = [
             "-stream_loop", "-1",
@@ -75,15 +77,46 @@ def build_ffmpeg_cmd(ffmpeg_exe, source_type, source, width, fps):
         ]
     w = max(160, min(int(width or 640), 1920))
     f = max(1, min(int(fps or 15), 30))
+    # 按最长边限制，避免竖屏视频被拉到 960 宽后高达 2000+ 导致 MJPEG 极慢
+    vf = (
+        f"scale={w}:{w}:force_original_aspect_ratio=decrease:flags=fast_bilinear,"
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuvj420p"
+    )
     return [
         ffmpeg_exe, *common_in, *src,
         "-an",
-        "-vf", f"scale={w}:-2:flags=fast_bilinear,format=yuvj420p",
+        "-vf", vf,
         "-r", str(f),
         "-c:v", "mjpeg",
         "-f", "mjpeg", "-q:v", "5",
         "pipe:1",
     ]
+
+
+def ensure_ffmpeg_readable_path(path: str) -> str:
+    """非 ASCII 路径复制到临时 ASCII 文件，避免 Windows ffmpeg 打不开中文文件名。"""
+    if not path:
+        return path
+    try:
+        path.encode("ascii")
+        return path
+    except UnicodeEncodeError:
+        pass
+    if not os.path.isfile(path):
+        return path
+    import hashlib
+    import tempfile
+
+    ext = os.path.splitext(path)[1] or ".mp4"
+    digest = hashlib.md5(os.path.abspath(path).encode("utf-8")).hexdigest()[:16]
+    dst = os.path.join(tempfile.gettempdir(), f"mtmc_src_{digest}{ext}")
+    try:
+        if not os.path.isfile(dst) or os.path.getsize(dst) != os.path.getsize(path):
+            import shutil
+            shutil.copy2(path, dst)
+        return dst
+    except OSError:
+        return path
 
 
 def iter_jpeg_frames(chunks):
@@ -124,6 +157,21 @@ def list_dshow_devices(ffmpeg_exe=None):
 def _resolve_source(camera, upload_folder=None):
     if camera.source_type in ("rtsp", "device"):
         return camera.source
+    if camera.source_type == "image":
+        src = (camera.source or "").strip()
+        if os.path.isabs(src) and os.path.isfile(src):
+            return src
+        upload_base = os.path.abspath(upload_folder or current_app.config["UPLOAD_FOLDER"])
+        p = os.path.abspath(os.path.join(upload_base, src))
+        if p.startswith(upload_base) and os.path.isfile(p):
+            return p
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        repo_root = os.path.dirname(backend_dir)
+        docs_base = os.path.join(repo_root, "docs", "test_data")
+        p_docs = os.path.abspath(os.path.join(docs_base, src))
+        if p_docs.startswith(docs_base) and os.path.isfile(p_docs):
+            return p_docs
+        raise FileNotFoundError(f"图片不存在：{camera.source}")
     src = (camera.source or "").strip()
     if not src:
         raise ValueError("缺少视频路径")
@@ -161,6 +209,9 @@ def check_source_ready(camera, upload_folder=None):
             return str(camera.source).startswith("rtsp://")
         if camera.source_type == "device":
             return bool(str(camera.source).strip())
+        if camera.source_type == "image":
+            _resolve_source(camera, upload_folder)
+            return True
     except (ValueError, FileNotFoundError, OSError):
         return False
     return False
@@ -351,7 +402,10 @@ class SharedMjpegHub:
             if not self._wait_for_clients():
                 break
             err_bucket: list[bytes] = []
-            cmd = build_ffmpeg_cmd(exe, self.source_type, self.source, self.width, self.fps)
+            source = self.source
+            if self.source_type in ("file", "image"):
+                source = ensure_ffmpeg_readable_path(self.source)
+            cmd = build_ffmpeg_cmd(exe, self.source_type, source, self.width, self.fps)
             try:
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             except Exception as e:  # noqa: BLE001
@@ -554,17 +608,22 @@ def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, sour
             with hub._cond:
                 if hub._epoch != start_epoch:
                     break
-                hub._cond.wait(timeout=0.2)
+                hub._cond.wait(timeout=0.15)
                 if hub._epoch != start_epoch:
                     break
                 raw = hub.latest
                 seq = hub.frame_seq
-            if raw is not None and seq != last_raw_seq and overlay is None:
+            if overlay:
+                # 保持 AI 叠加流不断：处理慢时重复推送最近叠加帧
+                idle_n = 0
+                yield _pack_frame(overlay)
+            elif raw is not None and seq != last_raw_seq:
                 last_raw_seq = seq
+                idle_n = 0
                 yield _pack_frame(raw)
             else:
                 idle_n += 1
-                if idle_n > 250:
+                if idle_n > 400:
                     break
     finally:
         with hub._cond:
@@ -574,6 +633,34 @@ def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, sour
         if gone:
             hub._kill_proc()
             hub._schedule_idle_stop()
+
+
+def mjpeg_stream_mtmc_raw(session_id: str, camera_id: int, source_type, source, width=640, fps=15):
+    """原视频 MJPEG：优先输出检测线程同步原帧，保证与结果画面同节拍。"""
+    from services import mtmc_engine
+
+    last_seq = -1
+    idle_n = 0
+    while True:
+        if _request_disconnected():
+            break
+        raw = mtmc_engine.get_raw_jpeg(session_id, camera_id)
+        sess = mtmc_engine.get_session(session_id)
+        cam_st = sess.cams.get(int(camera_id)) if sess else None
+        seq = cam_st.frame_seq if cam_st else last_seq
+        if raw and seq != last_seq:
+            last_seq = seq
+            idle_n = 0
+            yield _pack_frame(raw)
+            continue
+        if raw:
+            idle_n = 0
+            yield _pack_frame(raw)
+        else:
+            idle_n += 1
+            if idle_n > 400:
+                break
+        time.sleep(0.04)
 
 
 def mjpeg_stream(source_type, source, width=640, fps=15):

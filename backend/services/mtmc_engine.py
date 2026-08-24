@@ -52,7 +52,7 @@ class VirtualVideoSource:
             "id": self.id,
             "name": self.name,
             "sourceType": self.source_type,
-            "originalFilename": self.original_filename or os.path.basename(self.abs_path),
+            "originalFilename": self.original_filename or os.path.basename(self.abs_path or self.source or ""),
         }
 
 
@@ -80,7 +80,7 @@ class MtmcConfig:
     enable_person: bool = True
     enable_vehicle: bool = True
     conf: float = 0.28
-    sample_fps: float = 2.0
+    sample_fps: float = 4.0
     meters_per_pixel: float = 0.05
     appear_thresh: float = 0.48
     vehicle_appear_thresh: float = 0.0
@@ -90,9 +90,11 @@ class MtmcConfig:
     gallery_model_key: str | None = None
     time_window_sec: float = 90.0
     fuse_weight_strong: float = 0.65
-    width: int = 640
+    width: int = 960
     fps: int = 10
-    persist_events: bool = True
+    persist_events: bool = False
+    reid_budget: int = 2
+    plate_budget: int = 1
     # 局部跟踪：bytetrack（默认）| botsort | iou
     local_track_backend: str = "bytetrack"
     local_track_max_age: int = 30
@@ -102,6 +104,8 @@ class MtmcConfig:
     enable_mask_cue: bool = False
     lost_revive_sec: float = 1.0
     mcbyte_decouple: bool = True
+    # 实时检测测试：仅 YOLO 画框，不做 Tracklet / ReID / 跨镜关联
+    detect_only: bool = False
 
 
 @dataclass
@@ -117,6 +121,10 @@ class CamState:
     congestion: dict = field(default_factory=dict)
     person_builders: dict = field(default_factory=dict)
     vehicle_builders: dict = field(default_factory=dict)
+    last_error: str | None = None
+    last_persist_at: float = 0.0
+    plate_cache: dict = field(default_factory=dict)
+    raw_jpeg: bytes | None = None
 
 
 def _public_live_det(d: dict) -> dict:
@@ -169,6 +177,7 @@ class MtmcSession:
         self._global_last_cam: dict[str, int] = {}
         self._global_last_seen_ts: dict[str, float] = {}
         self.source_mode: str = "camera"  # camera | upload
+        self.kind: str = "detect" if cfg.detect_only else "mtmc"
         self.video_sources: dict[int, VirtualVideoSource] = {}
         self.upload_dir: str | None = None
 
@@ -182,6 +191,8 @@ class MtmcSession:
         return {
             "sessionId": self.session_id,
             "running": self.running,
+            "kind": self.kind,
+            "detectOnly": bool(self.cfg.detect_only),
             "sourceMode": self.source_mode,
             "cameraIds": list(self.cfg.camera_ids),
             "videoSources": [v.to_dict() for v in self.video_sources.values()],
@@ -206,6 +217,7 @@ class MtmcSession:
                     "detCount": len(st.last_dets),
                     "congestion": st.congestion,
                     "updatedAt": st.last_process_at,
+                    "lastError": getattr(st, "last_error", None),
                     "detections": [_public_live_det(d) for d in (st.last_dets or [])],
                 }
                 for cid, st in self.cams.items()
@@ -246,6 +258,12 @@ def stop_session(session_id: str) -> bool:
 
 
 def _resolve_cam_source(camera_row, upload_folder: str) -> str:
+    st = (getattr(camera_row, "source_type", None) or "file").strip().lower()
+    if st in ("rtsp", "device"):
+        src = (getattr(camera_row, "source", None) or getattr(camera_row, "abs_path", None) or "").strip()
+        if not src:
+            raise ValueError(f"缺少 {st} 地址")
+        return src
     abs_path = getattr(camera_row, "abs_path", None)
     if abs_path and os.path.isfile(abs_path):
         return abs_path
@@ -258,7 +276,11 @@ def resolve_overlay_source(session: MtmcSession | None, cam_id: int, upload_fold
     if session:
         vs = session.video_sources.get(int(cam_id))
         if vs is not None:
-            return vs, vs.abs_path, vs.resolution or 640, vs.fps or 10
+            if vs.source_type in ("rtsp", "device"):
+                src = vs.source
+            else:
+                src = vs.abs_path
+            return vs, src, vs.resolution or 960, vs.fps or 10
     from models import Camera
     cam = Camera.query.get(int(cam_id))
     if cam is None:
@@ -300,9 +322,139 @@ def get_overlay_jpeg(session_id: str, camera_id: int) -> bytes | None:
     return st.overlay_jpeg if st else None
 
 
+def get_raw_jpeg(session_id: str, camera_id: int) -> bytes | None:
+    s = get_session(session_id)
+    if not s:
+        return None
+    st = s.cams.get(int(camera_id))
+    return st.raw_jpeg if st else None
+
+
 def _decode_jpeg(data: bytes):
     arr = np.frombuffer(data, dtype=np.uint8)
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
+
+def _read_image_bgr(path: str):
+    """读取图片为 BGR；Windows 下支持中文/特殊字符路径。"""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        if data.size == 0:
+            return None
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is not None:
+            return img
+    except OSError:
+        pass
+    return cv2.imread(path)
+
+
+def _hub_stream_params(session: MtmcSession, camera_row) -> tuple[int, int]:
+    """与 overlay 流一致的 hub 宽高/FPS，避免 cam_worker 与预览各用一套 hub。"""
+    width = int(session.cfg.width or getattr(camera_row, "resolution", None) or 960)
+    fps = int(session.cfg.fps or getattr(camera_row, "fps", None) or 10)
+    return width, fps
+
+
+def _cam_worker_static_image(session: MtmcSession, cam_state: CamState, source_path: str):
+    """静态图片：直接 cv2 读图循环检测，不依赖 ffmpeg MJPEG（避免 hub 断流后 worker 退出）。"""
+    frame = _read_image_bgr(source_path)
+    if frame is None:
+        log.error("mtmc image load failed cam=%s path=%s", cam_state.camera_id, source_path)
+        cam_state.last_error = f"图片读取失败：{os.path.basename(source_path)}"
+        session.stats["errors"] += 1
+        return
+    interval = 1.0 / max(0.2, float(session.cfg.sample_fps))
+    seq = 0
+    while not session._stop.is_set():
+        try:
+            _process_frame(session, cam_state, frame, {"seq": seq, "staticImage": True})
+        except Exception as e:  # noqa: BLE001
+            session.stats["errors"] += 1
+            cam_state.last_error = str(e)
+            log.warning("mtmc image process cam=%s: %s", cam_state.camera_id, e)
+            try:
+                _publish_overlay(cam_state, frame, cam_state.last_dets, cam_state.congestion)
+            except Exception:  # noqa: BLE001
+                pass
+        seq += 1
+        session._stop.wait(interval)
+
+
+def _open_video_capture(path: str):
+    """打开本地视频；中文路径失败时走 ASCII 副本。"""
+    if not path or not os.path.isfile(path):
+        return None
+    cap = cv2.VideoCapture(path)
+    if cap.isOpened():
+        return cap
+    cap.release()
+    from services.camera_stream import ensure_ffmpeg_readable_path
+
+    alt = ensure_ffmpeg_readable_path(path)
+    if alt and alt != path:
+        cap = cv2.VideoCapture(alt)
+        if cap.isOpened():
+            return cap
+        cap.release()
+    return None
+
+
+def _cam_worker_local_file(session: MtmcSession, cam_state: CamState, source_path: str):
+    """本地视频：OpenCV 循环读帧检测，不依赖 ffmpeg hub（竖屏/中文路径下 hub 经常无帧）。"""
+    cap = _open_video_capture(source_path)
+    if cap is None:
+        log.error("mtmc video open failed cam=%s path=%s", cam_state.camera_id, source_path)
+        cam_state.last_error = f"视频打开失败：{os.path.basename(source_path)}"
+        session.stats["errors"] += 1
+        return
+    src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0)
+    if src_fps <= 1e-3 or src_fps > 120:
+        src_fps = float(session.cfg.fps or 25)
+    frame_interval = 1.0 / max(1.0, src_fps)
+    sample_fps = max(0.2, float(session.cfg.sample_fps))
+    sample_stride = max(1, int(round(src_fps / sample_fps)))
+    seq = 0
+    frame_idx = 0
+    next_tick = time.monotonic()
+    try:
+        while not session._stop.is_set():
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    cam_state.last_error = "视频无可用帧"
+                    session.stats["errors"] += 1
+                    break
+                frame_idx = 0
+                next_tick = time.monotonic()
+            frame_idx += 1
+            try:
+                if frame_idx == 1 or (frame_idx % sample_stride == 0):
+                    _process_frame(session, cam_state, frame, {"seq": seq, "localFile": True})
+                else:
+                    _publish_overlay(cam_state, frame, cam_state.last_dets, cam_state.congestion)
+            except Exception as e:  # noqa: BLE001
+                session.stats["errors"] += 1
+                cam_state.last_error = str(e)
+                log.warning("mtmc file process cam=%s: %s", cam_state.camera_id, e)
+                try:
+                    _publish_overlay(cam_state, frame, cam_state.last_dets, cam_state.congestion)
+                except Exception:  # noqa: BLE001
+                    pass
+            seq += 1
+            next_tick += frame_interval
+            wait_s = next_tick - time.monotonic()
+            if wait_s > 0:
+                session._stop.wait(wait_s)
+            elif wait_s < -1.5:
+                # 处理明显落后时重置时钟，防止无意义追帧导致“快进感”
+                next_tick = time.monotonic()
+    finally:
+        cap.release()
 
 
 def _detect(model_path: str | None, frame, conf: float, classes: list[int] | None):
@@ -317,7 +469,7 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
     try:
         from inference import _get_model, _yolo_predict_kwargs
         model = _get_model(path)
-        kw = _yolo_predict_kwargs(conf=conf, classes=classes)
+        kw = _yolo_predict_kwargs(conf=conf, classes=classes, imgsz=640)
         r = model.predict(frame, **kw)[0]
         out = []
         if r.boxes is None:
@@ -338,6 +490,95 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
             _detect_fail_logged.add(key)
             log.error("mtmc detect failed path=%s: %s", path, e)
         return []
+
+
+_PV_CLASSES = [0, 1, 2, 3, 5, 7]
+
+
+def _detect_person_vehicle(cfg: MtmcConfig, frame):
+    """人员+车辆一次 YOLO，避免每帧两次推理。"""
+    person_conf = min(float(cfg.conf), 0.18) if cfg.enable_person else float(cfg.conf)
+    vehicle_conf = float(cfg.conf)
+    if (
+        cfg.enable_person and cfg.enable_vehicle
+        and cfg.det_person_path and cfg.det_vehicle_path
+        and cfg.det_person_path == cfg.det_vehicle_path
+    ):
+        raw = _detect(cfg.det_person_path, frame, min(person_conf, vehicle_conf), _PV_CLASSES)
+        persons = [d for d in raw if int(d.get("classId", -1)) == 0]
+        vehicles = [d for d in raw if int(d.get("classId", -1)) in (1, 2, 3, 5, 7)]
+        return persons, vehicles
+    persons = []
+    vehicles = []
+    if cfg.enable_person and cfg.det_person_path:
+        persons = _detect(cfg.det_person_path, frame, person_conf, _PERSON_DET_CLASSES)
+    if cfg.enable_vehicle and cfg.det_vehicle_path:
+        vehicles = _detect(cfg.det_vehicle_path, frame, vehicle_conf, _VEHICLE_DET_CLASSES)
+    return persons, vehicles
+
+
+def _detect_items_from_raw(raw_p: list[dict], raw_v: list[dict]) -> list[dict]:
+    """纯检测框，不经过 Tracklet / 跟踪器。"""
+    items = []
+    for i, det in enumerate(raw_p or []):
+        bbox = [float(v) for v in (det.get("bbox") or [])[:4]]
+        if len(bbox) < 4:
+            continue
+        conf = float(det.get("confidence") or det.get("score") or 0)
+        items.append({
+            "objectType": "person",
+            "globalId": None,
+            "localTrackId": i + 1,
+            "bbox": bbox,
+            "trail": [],
+            "score": conf,
+            "label": f"人 {conf:.2f}",
+            "attrs": {"className": det.get("className") or "person", "detectOnly": True},
+        })
+    for i, det in enumerate(raw_v or []):
+        bbox = [float(v) for v in (det.get("bbox") or [])[:4]]
+        if len(bbox) < 4:
+            continue
+        conf = float(det.get("confidence") or det.get("score") or 0)
+        cls = str(det.get("className") or "车")
+        items.append({
+            "objectType": "vehicle",
+            "globalId": None,
+            "localTrackId": i + 1,
+            "bbox": bbox,
+            "trail": [],
+            "score": conf,
+            "label": f"{cls} {conf:.2f}",
+            "attrs": {"className": cls, "detectOnly": True},
+        })
+    return items
+
+
+def _tracks_or_raw(tracker, raw: list[dict], frame, *, id_base: int = 800001):
+    """跟踪器空结果时仍用原始检测框出叠加，避免画面无框。"""
+    from services.mtmc_local_track import Tracklet
+
+    tracks = tracker.update(raw, frame=frame) if tracker is not None else []
+    if tracks or not raw:
+        return list(tracks)
+    extras = []
+    for i, det in enumerate(raw):
+        bbox = [float(v) for v in (det.get("bbox") or [])[:4]]
+        if len(bbox) < 4:
+            continue
+        cx, cy = (bbox[0] + bbox[2]) * 0.5, (bbox[1] + bbox[3]) * 0.5
+        extras.append(
+            Tracklet(
+                track_id=id_base + i,
+                bbox=bbox,
+                class_name=str(det.get("className") or "object"),
+                conf=float(det.get("confidence") or 0),
+                is_new=True,
+                trail=[(cx, cy)],
+                attrs={"rawFallback": True},
+            )
+        )
+    return extras
 
 
 def _crop(img, bbox, pad=0.05):
@@ -456,30 +697,60 @@ def _draw_label_pil(img_bgr, text: str, origin, *, color=(0, 200, 80), font_size
 
 
 def _draw_overlay(frame, items: list[dict], congestion: dict | None = None):
-    """绘制检测框/轨迹/中文标签（PIL，避免 putText 显示 ???）。"""
+    """绘制检测框/轨迹/中文标签。PIL 只转一次，保证实时叠加不卡。"""
     vis = frame.copy()
+    labels = []
     for it in items:
         bbox = it.get("bbox") or []
         if len(bbox) < 4:
             continue
         x1, y1, x2, y2 = [int(v) for v in bbox]
         ot = it.get("objectType") or "person"
-        gid = it.get("globalId") or "?"
-        color = _color_for(gid, _PERSON_COLORS if ot == "person" else _VEHICLE_COLORS)
+        gid = it.get("globalId") or str(it.get("localTrackId") or "?")
+        color = _color_for(str(gid), _PERSON_COLORS if ot == "person" else _VEHICLE_COLORS)
         trail = it.get("trail") or []
         if len(trail) >= 2:
             pts = np.array([[int(p[0]), int(p[1])] for p in trail], dtype=np.int32)
             cv2.polylines(vis, [pts], False, color, 2, lineType=cv2.LINE_AA)
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
         label = it.get("label") or gid
-        # 标签画在框上方；空间不够则画在框内顶部
         ty = y1 - 22 if y1 >= 24 else y1 + 4
-        vis = _draw_label_pil(vis, str(label), (x1, ty), color=color, font_size=16)
+        labels.append((str(label), (x1, ty), color, 16))
+    n_p = sum(1 for it in items if it.get("objectType") == "person")
+    n_v = sum(1 for it in items if it.get("objectType") == "vehicle")
+    hud = f"检出 人:{n_p} 车:{n_v}"
     if congestion:
-        txt = f"拥堵:{congestion.get('label', '')} 车:{congestion.get('vehicleCount', 0)}"
-        vis = _draw_label_pil(vis, txt, (8, 8), color=(0, 220, 255), font_size=18)
+        hud += f"  拥堵:{congestion.get('label', '')}"
+    labels.append((hud, (8, 8), (0, 220, 255), 18))
+    if labels:
+        from PIL import Image, ImageDraw
+        pil = Image.fromarray(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil)
+        for text, origin, color, font_size in labels:
+            font = _hud_font(font_size)
+            x, y = int(origin[0]), int(origin[1])
+            bbox = draw.textbbox((x, y), text, font=font)
+            pad = 3
+            fill = (max(0, color[2] - 40), max(0, color[1] - 40), max(0, color[0] - 40))
+            draw.rectangle(
+                [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad],
+                fill=fill,
+            )
+            draw.text((x, y), text, font=font, fill=(255, 255, 255))
+        vis = cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR)
     ok, buf = cv2.imencode(".jpg", vis, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     return buf.tobytes() if ok else None
+
+
+def _publish_overlay(cam_state: CamState, frame, items, congestion=None):
+    ok_raw, raw_buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    if ok_raw:
+        cam_state.raw_jpeg = raw_buf.tobytes()
+    jpeg = _draw_overlay(frame, items or [], congestion)
+    if jpeg:
+        cam_state.overlay_jpeg = jpeg
+        cam_state.frame_seq += 1
+    cam_state.last_dets = list(items or [])
 
 
 def _persist_event(app, row: dict):
@@ -881,25 +1152,33 @@ def _make_local_tracker(cfg: MtmcConfig):
 
 
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
-    from services.strong_reid import extract_person_embedding, color_signature
-    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
-    from services.vehicle_track import congestion_level, get_session as get_vsession
-    from services.reid_gallery import l2_normalize
-
     cfg = session.cfg
     cam_id = cam_state.camera_id
     now = float(now if now is not None else time.time())
     min_interval = 1.0 / max(0.2, float(cfg.sample_fps))
     if now - cam_state.last_process_at < min_interval:
-        # 仍刷新 overlay 用上一帧结果画在新帧上
-        if cam_state.last_dets:
-            jpeg = _draw_overlay(frame, cam_state.last_dets, cam_state.congestion)
-            if jpeg:
-                cam_state.overlay_jpeg = jpeg
-                cam_state.frame_seq += 1
+        _publish_overlay(cam_state, frame, cam_state.last_dets, cam_state.congestion)
         return
     cam_state.last_process_at = now
     fh, fw = frame.shape[:2]
+    cam_state.last_error = None
+
+    if cfg.detect_only:
+        raw_p, raw_v = _detect_person_vehicle(cfg, frame)
+        items = _detect_items_from_raw(
+            raw_p if cfg.enable_person else [],
+            raw_v if cfg.enable_vehicle else [],
+        )
+        session.stats["persons"] += sum(1 for it in items if it.get("objectType") == "person")
+        session.stats["vehicles"] += sum(1 for it in items if it.get("objectType") == "vehicle")
+        _publish_overlay(cam_state, frame, items, None)
+        session.stats["frames"] += 1
+        return
+
+    from services.strong_reid import extract_person_embedding, color_signature
+    from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
+    from services.vehicle_track import congestion_level, get_session as get_vsession
+    from services.reid_gallery import l2_normalize
 
     if cam_state.tracker_person is None:
         cam_state.tracker_person = _make_local_tracker(cfg)
@@ -909,17 +1188,15 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     items = []
     claimed_person: set[str] = set()
     claimed_vehicle: set[str] = set()
+    reid_left = max(0, int(cfg.reid_budget or 0))
+    plate_left = max(0, int(cfg.plate_budget or 0))
+    raw_p, raw_v = _detect_person_vehicle(cfg, frame)
     # ---- 人员 ----
     if cfg.enable_person and cfg.det_person_path:
-        # 骑行人/远距小人框置信度偏低，略降阈值
-        person_conf = min(float(cfg.conf), 0.18)
-        raw = _detect(cfg.det_person_path, frame, person_conf, _PERSON_DET_CLASSES)
-        tracks = cam_state.tracker_person.update(raw, frame=frame)
+        tracks = _tracks_or_raw(cam_state.tracker_person, raw_p, frame, id_base=800001)
         active_person_local = {int(t.track_id) for t in tracks}
         for t in tracks:
             crop = _crop(frame, t.bbox)
-            if crop is None:
-                continue
             builder = _get_tracklet_builder(
                 cam_state,
                 session_id=session.session_id,
@@ -927,17 +1204,33 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 local_track_id=int(t.track_id),
                 now=now,
             )
+            if crop is None:
+                items.append({
+                    "objectType": "person",
+                    "globalId": None,
+                    "localTrackId": t.track_id,
+                    "trackletId": builder.tracklet_id,
+                    "displayName": "匿名",
+                    "bbox": t.bbox,
+                    "trail": list(t.trail),
+                    "score": float(t.conf or 0),
+                    "label": f"人 L{t.track_id}",
+                    "attrs": {"cameraId": cam_id, "className": getattr(t, "class_name", "person")},
+                })
+                session.stats["persons"] += 1
+                continue
             sticky_gid = session.associator.peek_sticky(
                 object_type="person",
                 camera_id=cam_id,
                 local_track_id=int(t.track_id),
                 now=now,
             )
-            need_reid = sticky_gid is None or bool(getattr(t, "is_new", False))
+            need_reid = (sticky_gid is None or bool(getattr(t, "is_new", False))) and reid_left > 0
             emb, meta = None, {}
             c_sig = None
             gallery = {"matched": False, "name": None, "personId": None, "score": 0.0}
             if need_reid:
+                reid_left -= 1
                 try:
                     emb, meta = extract_person_embedding(
                         crop,
@@ -994,7 +1287,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 name = g.display_name or "匿名"
                 label = f"{g.global_id}|{name}"
             else:
-                label = f"L{t.track_id}"
+                label = f"人 L{t.track_id}"
                 name = "匿名"
             speed = _speed_from_trail(t.trail, cfg.meters_per_pixel, cfg.sample_fps)
             item = {
@@ -1018,8 +1311,8 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 },
             }
             items.append(item)
+            session.stats["persons"] += 1
             if g is not None:
-                session.stats["persons"] += 1
                 row = {
                     "sessionId": session.session_id,
                     "cameraId": cam_id,
@@ -1030,8 +1323,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     session.events.append({**row, "ts": now})
                     if len(session.events) > 500:
                         session.events = session.events[-400:]
-                if cfg.persist_events:
+                if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
                     _persist_event(session.app, row)
+                    cam_state.last_persist_at = now
         _finalize_removed_builders(session, cam_state, "person", active_person_local)
         try:
             session.associator.prune_inactive_locals("person", cam_id, active_person_local)
@@ -1040,8 +1334,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
-        raw_v = _detect(cfg.det_vehicle_path, frame, cfg.conf, _VEHICLE_DET_CLASSES)
-        tracks_v = cam_state.tracker_vehicle.update(raw_v, frame=frame)
+        tracks_v = _tracks_or_raw(cam_state.tracker_vehicle, raw_v, frame, id_base=810001)
         tracks_v = supplement_orphan_vehicle_dets(
             tracks_v, raw_v, frame_w=fw, frame_h=fh,
         )
@@ -1054,8 +1347,6 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
 
         for t in _sort_vehicle_tracks_for_assoc(tracks_v, session.associator, cam_id, now):
             crop = _crop(frame, t.bbox)
-            if crop is None:
-                continue
             builder = _get_tracklet_builder(
                 cam_state,
                 session_id=session.session_id,
@@ -1063,22 +1354,44 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 local_track_id=int(t.track_id),
                 now=now,
             )
+            if crop is None:
+                cls = getattr(t, "class_name", None) or "车"
+                items.append({
+                    "objectType": "vehicle",
+                    "globalId": None,
+                    "localTrackId": t.track_id,
+                    "trackletId": builder.tracklet_id,
+                    "bbox": t.bbox,
+                    "trail": list(t.trail),
+                    "score": float(t.conf or 0),
+                    "label": f"{cls} L{t.track_id}",
+                    "attrs": {"cameraId": cam_id, "className": cls},
+                })
+                session.stats["vehicles"] += 1
+                continue
             sticky_gid = session.associator.peek_sticky(
                 object_type="vehicle",
                 camera_id=cam_id,
                 local_track_id=int(t.track_id),
                 now=now,
             )
-            need_reid = sticky_gid is None or bool(getattr(t, "is_new", False))
+            need_reid = (sticky_gid is None or bool(getattr(t, "is_new", False))) and reid_left > 0
             emb, vmeta = None, {}
             plate_text, plate_score = None, 0.0
             fuse = {
                 "identityKey": None, "plate": None, "visualKey": None,
                 "fuseScore": 0, "plateScore": 0, "visualScore": 0,
             }
+            cached_plate = cam_state.plate_cache.get(int(t.track_id)) or {}
+            if cached_plate.get("text"):
+                plate_text = cached_plate.get("text")
+                plate_score = float(cached_plate.get("score") or 0)
             if need_reid:
+                reid_left -= 1
                 emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
-                if cfg.ocr_fn is not None:
+                do_ocr = cfg.ocr_fn is not None and plate_left > 0 and not plate_text
+                if do_ocr:
+                    plate_left -= 1
                     try:
                         from services.vehicle_track import _plate_candidates, _ocr_plate
                         for pb, _src, _q, warp in _plate_candidates(
@@ -1090,6 +1403,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                             if plate_text:
                                 vsession.plates[t.track_id] = {
                                     "text": plate_text, "score": plate_score, "source": "mtmc",
+                                }
+                                cam_state.plate_cache[int(t.track_id)] = {
+                                    "text": plate_text, "score": plate_score,
                                 }
                                 break
                     except Exception:  # noqa: BLE001
@@ -1153,10 +1469,12 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             if g is not None:
                 claimed_vehicle.add(g.global_id)
                 plate_show = g.plate or fuse.get("plate") or plate_text or "无牌"
+                cls = getattr(t, "class_name", None) or "车"
                 label = f"{g.global_id}|{plate_show}"
             else:
                 plate_show = fuse.get("plate") or plate_text or "无牌"
-                label = f"L{t.track_id}|{plate_show}"
+                cls = getattr(t, "class_name", None) or "车"
+                label = f"{cls} L{t.track_id}|{plate_show}"
             speed = _speed_from_trail(t.trail, cfg.meters_per_pixel, cfg.sample_fps)
             if speed is not None and g is not None:
                 cx = (t.bbox[0] + t.bbox[2]) * 0.5
@@ -1191,15 +1509,16 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 },
             }
             items.append(item)
+            session.stats["vehicles"] += 1
             if g is not None:
-                session.stats["vehicles"] += 1
                 row = {"sessionId": session.session_id, "cameraId": cam_id, **item}
                 with session._events_lock:
                     session.events.append({**row, "ts": now})
                     if len(session.events) > 500:
                         session.events = session.events[-400:]
-                if cfg.persist_events:
+                if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
                     _persist_event(session.app, row)
+                    cam_state.last_persist_at = now
                     pass_key = f"{g.global_id}:{cam_id}"
                     seen = getattr(session, "_pass_seen", None)
                     if seen is None:
@@ -1231,11 +1550,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         except Exception:  # noqa: BLE001
             pass
 
-    cam_state.last_dets = items
-    jpeg = _draw_overlay(frame, items, cam_state.congestion)
-    if jpeg:
-        cam_state.overlay_jpeg = jpeg
-        cam_state.frame_seq += 1
+    _publish_overlay(cam_state, frame, items, cam_state.congestion)
     session.stats["frames"] += 1
 
 
@@ -1244,6 +1559,7 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
 
     cam_id = int(camera_row.id)
     cam_state = session.cams[cam_id]
+    source_type = (getattr(camera_row, "source_type", None) or "file").strip().lower()
     try:
         source = _resolve_cam_source(camera_row, upload_folder)
     except Exception as e:  # noqa: BLE001
@@ -1251,35 +1567,43 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
         session.stats["errors"] += 1
         return
 
-    hub = ensure_shared_hub(
-        cam_id, camera_row.source_type, source,
-        session.cfg.width or getattr(camera_row, "resolution", None) or 640,
-        session.cfg.fps or getattr(camera_row, "fps", None) or 10,
-    )
-    # 保持 hub 有订阅，避免空闲停掉
-    sub = hub.subscribe_raw()
-    last_seq = -1
-    try:
-        for jpeg, seq in sub:
-            if session._stop.is_set():
-                break
-            if seq == last_seq:
-                continue
-            last_seq = seq
-            frame = _decode_jpeg(jpeg)
-            if frame is None:
-                continue
-            try:
-                if session.app is not None:
-                    with session.app.app_context():
-                        _process_frame(session, cam_state, frame, {"seq": seq})
-                else:
+    if source_type == "image":
+        _cam_worker_static_image(session, cam_state, source)
+        return
+    if source_type == "file":
+        _cam_worker_local_file(session, cam_state, source)
+        return
+
+    width, fps = _hub_stream_params(session, camera_row)
+    hub = ensure_shared_hub(cam_id, source_type, source, width, fps)
+    # hub epoch 变化（ffmpeg 重启）后重新订阅，避免 worker 永久退出
+    while not session._stop.is_set():
+        last_seq = -1
+        try:
+            for jpeg, seq in hub.subscribe_raw():
+                if session._stop.is_set():
+                    break
+                if seq == last_seq:
+                    continue
+                last_seq = seq
+                frame = _decode_jpeg(jpeg)
+                if frame is None:
+                    continue
+                try:
                     _process_frame(session, cam_state, frame, {"seq": seq})
-            except Exception as e:  # noqa: BLE001
-                session.stats["errors"] += 1
-                log.warning("mtmc process cam=%s: %s", cam_id, e)
-    finally:
-        pass
+                except Exception as e:  # noqa: BLE001
+                    session.stats["errors"] += 1
+                    cam_state.last_error = str(e)
+                    log.warning("mtmc process cam=%s: %s", cam_id, e)
+                    try:
+                        _publish_overlay(cam_state, frame, cam_state.last_dets, cam_state.congestion)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception as e:  # noqa: BLE001
+            log.warning("mtmc hub subscribe cam=%s: %s", cam_id, e)
+        if session._stop.is_set():
+            break
+        session._stop.wait(0.3)
 
 
 def start_session(
@@ -1323,6 +1647,14 @@ def start_session(
         associator.set_topology(topology_edges)
     session = MtmcSession(sid, cfg, associator, app=app)
     session.source_mode = "upload" if video_sources else "camera"
+    if video_sources:
+        types = {vs.source_type for vs in video_sources.values()}
+        if types == {"image"}:
+            session.source_mode = "image"
+        elif "rtsp" in types:
+            session.source_mode = "stream"
+        elif "device" in types:
+            session.source_mode = "device"
     session.video_sources = dict(video_sources or {})
     session.upload_dir = upload_dir
     cam_rows = list(cameras or []) or list((video_sources or {}).values())
