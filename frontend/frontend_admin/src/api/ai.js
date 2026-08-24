@@ -268,6 +268,16 @@ export const fallApi = {
     request.get(`/ai/fall/output/${name}`, { responseType: 'blob', timeout: 0 }),
 }
 
+// ---------------- 缺陷诊断（YOLO + 框引导分割 + Qwen-VL）
+export const defectApi = {
+  status: () => request.get('/ai/defect/status'),
+  diagnose: (formData) =>
+    request.post('/ai/defect/diagnose', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 0,
+    }),
+}
+
 // ---------------- 羽毛球视频分析
 export const badmintonApi = {
   extractFrame: (formData) =>

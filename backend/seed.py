@@ -115,6 +115,7 @@ def _regroup_ai_menus():
         (276, 230, "/ai/alert"),
         (278, 230, "/ai/table"),
         (286, 230, "/ai/inpaint"),
+        (296, 230, "/ai/defect"),
         # 280/282 已并入目标追踪场景
         (280, 230, "/ai/track"),
         (282, 230, "/ai/track"),
@@ -478,6 +479,11 @@ def seed_ai_menus():
                     order=13, grant_common=True)
     _ensure_ai_menu(2941, 294, "跨镜重识别查询", "F", "ai:mtmc:query", grant_common=True)
     _ensure_ai_menu(2942, 294, "跨镜会话控制", "F", "ai:mtmc:edit")
+    # 缺陷诊断（YOLO + 框引导分割 + Qwen-VL 云端诊断）
+    _ensure_ai_menu(296, 230, "缺陷诊断", "C", "ai:defect:list",
+                    path="/ai/defect", component="ai/defect/index", icon="DocumentChecked",
+                    order=17, grant_common=True)
+    _ensure_ai_menu(2961, 296, "缺陷诊断查询", "F", "ai:defect:query", grant_common=True)
     # 检测告警（视觉识别 230 下）
     _ensure_ai_menu(276, 230, "检测告警", "C", "ai:alert:list",
                     path="/ai/alert", component="ai/alert/index", icon="Bell",
@@ -868,6 +874,17 @@ def seed_ai_models():
     """AI 模型种子（按标识幂等，老库也会补齐新增的范例模型）。"""
     _purge_cosyvoice_models()
     created = False
+    created |= _ensure_ai_model("qwen3-vl-seg-cloud", dict(
+        model_name="Qwen3-VL-Seg 云端诊断（说明）", category="工业质检",
+        task="visual-diagnosis", library="qwen-vl-api", version="cloud",
+        source_url="https://arxiv.org/abs/2605.07141",
+        description=(
+            "缺陷诊断页云端引擎说明项：YOLO 快筛 + MobileSAM/EfficientSAM 框引导掩码 + "
+            "DashScope/OpenAI 兼容 Qwen-VL 语义诊断。无需本地下载 Seg 权重；"
+            "请在 .env 配置 QWEN_VL_API_KEY（或 DASHSCOPE_API_KEY）。"
+        ),
+        status="1",
+    ))
     created |= _ensure_ai_model("fire-smoke-detection", dict(
         model_name="烟雾探测", category="烟火检测",
         task="object-detection", library="ultralytics", version="v1",

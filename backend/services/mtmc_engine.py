@@ -25,6 +25,9 @@ _PERSON_COLORS = [
 _VEHICLE_COLORS = [
     (40, 180, 255), (0, 140, 255), (30, 200, 120), (200, 100, 40),
 ]
+# COCO 检测类别：行人 class=0；骑车人常被标为 bicycle(1)/motorcycle(3)，归入车辆分支
+_PERSON_DET_CLASSES = [0]
+_VEHICLE_DET_CLASSES = [1, 2, 3, 5, 7]
 
 
 def _color_for(gid: str, palette) -> tuple:
@@ -765,12 +768,18 @@ def _make_local_tracker(cfg: MtmcConfig):
         cfg.local_track_backend = "iou"
     else:
         cfg.local_track_backend = backend
+    sample_fps = max(0.2, float(cfg.sample_fps))
+    # 与 MTMC 采样率对齐，避免 ByteTrack 按 30FPS 预测导致低采样下轨迹永不激活
+    frame_rate = max(2, int(round(sample_fps)))
+    track_act = min(0.25, max(0.12, float(cfg.conf) * 0.75))
     return create_local_tracker(
         backend,  # type: ignore[arg-type]
         max_age=int(cfg.local_track_max_age or 30),
         iou_thresh=float(cfg.local_track_iou_thresh or 0.3),
         enable_cmc=bool(cfg.enable_cmc),
         enable_mask_cue=bool(cfg.enable_mask_cue),
+        frame_rate=frame_rate,
+        track_activation_threshold=track_act,
     )
 
 
@@ -807,7 +816,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     if cfg.enable_person and cfg.det_person_path:
         # 骑行人/远距小人框置信度偏低，略降阈值
         person_conf = min(float(cfg.conf), 0.18)
-        raw = _detect(cfg.det_person_path, frame, person_conf, [0])
+        raw = _detect(cfg.det_person_path, frame, person_conf, _PERSON_DET_CLASSES)
         tracks = cam_state.tracker_person.update(raw, frame=frame)
         active_person_local = {int(t.track_id) for t in tracks}
         for t in tracks:
@@ -934,7 +943,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
-        raw_v = _detect(cfg.det_vehicle_path, frame, cfg.conf, [1, 2, 3, 5, 7])
+        raw_v = _detect(cfg.det_vehicle_path, frame, cfg.conf, _VEHICLE_DET_CLASSES)
         tracks_v = cam_state.tracker_vehicle.update(raw_v, frame=frame)
         tracks_v = supplement_orphan_vehicle_dets(
             tracks_v, raw_v, frame_w=fw, frame_h=fh,

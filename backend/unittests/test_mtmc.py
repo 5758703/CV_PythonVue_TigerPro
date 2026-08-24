@@ -145,6 +145,20 @@ def test_bytetrack_local_tracker_keeps_id():
     assert b and b[0].track_id == tid
 
 
+def test_bytetrack_emits_tentative_detections():
+    """低置信/未激活轨迹仍应输出（MTMC 2FPS 采样下 UI 需可见）。"""
+    if not bytetrack_available():
+        return
+    tr = ByteTrackLocalTracker(iou_thresh=0.3, max_age=5, track_activation_threshold=0.25)
+    dets = [
+        {"bbox": [100, 100, 180, 220], "confidence": 0.36, "className": "car"},
+        {"bbox": [300, 120, 380, 240], "confidence": 0.49, "className": "car"},
+    ]
+    out = tr.update(dets)
+    assert len(out) >= 1
+    assert any(getattr(t, "attrs", {}).get("tentative") for t in out) or len(out) == len(dets)
+
+
 def test_associator_same_frame_unique_gids():
     """同帧两辆相似车不得共用 Global ID。"""
     assoc = MtmcAssociator(

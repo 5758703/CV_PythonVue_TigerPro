@@ -74,6 +74,22 @@ class Config:
     )
     DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
+    # Qwen-VL（缺陷诊断云端多模态）：OpenAI 兼容接口（默认阿里云百炼 Token Plan 国内）
+    QWEN_VL_API_KEY = (
+        os.getenv("QWEN_VL_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or ""
+    )
+    QWEN_VL_BASE_URL = os.getenv(
+        "QWEN_VL_BASE_URL",
+        "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    )
+    QWEN_VL_MODEL = os.getenv("QWEN_VL_MODEL", "qwen3.8-max-preview")
+    try:
+        DEFECT_SUSPICIOUS_CONF = float(os.getenv("DEFECT_SUSPICIOUS_CONF") or "0.45")
+    except ValueError:
+        DEFECT_SUSPICIOUS_CONF = 0.45
+
     # 开放平台 / 对象存储（P1–P3）
     OBJECT_STORE_BACKEND = (os.getenv("OBJECT_STORE_BACKEND") or "local").strip().lower()
     S3_BUCKET = os.getenv("S3_BUCKET", "")

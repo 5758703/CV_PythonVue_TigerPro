@@ -15,6 +15,9 @@ import numpy as np
 
 TrackerBackend = Literal["iou", "bytetrack", "botsort"]
 
+# ByteTrack/BoT-SORT 未激活轨迹（tracker_id<0）使用 900001+ 段，避免与正式 track 冲突
+_TENTATIVE_ID_BASE = 900_000
+
 
 def _iou(a, b) -> float:
     ax1, ay1, ax2, ay2 = a
@@ -160,15 +163,48 @@ class _SvTrackerAdapter:
         trail_len: int = 40,
         pass_frame: bool = False,
         mask_cue: MaskCueHelper | None = None,
+        iou_thresh: float = 0.3,
     ):
         self._tracker = tracker
         self.trail_len = int(trail_len)
         self.pass_frame = bool(pass_frame)
         self.mask_cue = mask_cue or MaskCueHelper(False)
+        self.iou_thresh = float(iou_thresh)
         self._trails: dict[int, list[tuple[float, float]]] = {}
         self._hits: dict[int, int] = {}
         self._class_names: dict[int, str] = {}
         self._seen_ids: set[int] = set()
+        self._tentative_bbox: dict[int, list[float]] = {}
+        self._next_tentative = 0
+
+    def _promote_tentative_to_confirmed(self, bbox: list[float], confirmed_tid: int) -> int:
+        """未激活→激活：若 IoU 命中临时轨迹则沿用临时 id，保证 MTMC sticky 连续。"""
+        best_tid, best_iou = None, 0.0
+        match_thresh = max(0.15, self.iou_thresh * 0.5)
+        for tid, prev in self._tentative_bbox.items():
+            score = _iou(prev, bbox)
+            if score > best_iou and score >= match_thresh:
+                best_iou, best_tid = score, tid
+        if best_tid is not None:
+            self._tentative_bbox[best_tid] = bbox
+            return best_tid
+        return confirmed_tid
+
+    def _assign_tentative_id(self, bbox: list[float]) -> int:
+        """未激活检测：IoU 续接临时 local id，供 MTMC 低采样率下仍能出框。"""
+        best_tid, best_iou = None, 0.0
+        match_thresh = max(0.15, self.iou_thresh * 0.5)
+        for tid, prev in self._tentative_bbox.items():
+            score = _iou(prev, bbox)
+            if score > best_iou and score >= match_thresh:
+                best_iou, best_tid = score, tid
+        if best_tid is not None:
+            self._tentative_bbox[best_tid] = bbox
+            return best_tid
+        self._next_tentative += 1
+        tid = _TENTATIVE_ID_BASE + self._next_tentative
+        self._tentative_bbox[tid] = bbox
+        return tid
 
     def _match_class_name(self, bbox: list[float], detections: list[dict]) -> str:
         best, best_iou = "object", 0.0
@@ -197,6 +233,7 @@ class _SvTrackerAdapter:
         else:
             tracked = self._tracker.update(self._to_sv_detections(detections))
         active_ids: set[int] = set()
+        active_tentative: set[int] = set()
         out: list[Tracklet] = []
 
         if tracked.tracker_id is None or len(tracked) == 0:
@@ -204,16 +241,22 @@ class _SvTrackerAdapter:
                 self._trails.pop(tid, None)
                 self._hits.pop(tid, None)
                 self._class_names.pop(tid, None)
+            self._tentative_bbox.clear()
             return out
 
         for i in range(len(tracked)):
             raw_tid = int(tracked.tracker_id[i])
-            if raw_tid < 0:
-                continue
-            tid = raw_tid + 1
-            active_ids.add(tid)
             bbox = [float(v) for v in tracked.xyxy[i].tolist()]
             conf = float(tracked.confidence[i]) if tracked.confidence is not None else 0.0
+            tentative = raw_tid < 0
+            if tentative:
+                tid = self._assign_tentative_id(bbox)
+                active_tentative.add(tid)
+            else:
+                tid = self._promote_tentative_to_confirmed(bbox, raw_tid + 1)
+                if tid >= _TENTATIVE_ID_BASE:
+                    active_tentative.add(tid)
+            active_ids.add(tid)
             cls = self._match_class_name(bbox, detections) if detections else self._class_names.get(tid, "object")
             self._class_names[tid] = cls
             self._hits[tid] = self._hits.get(tid, 0) + 1
@@ -235,7 +278,10 @@ class _SvTrackerAdapter:
                     time_since_update=0,
                     trail=list(self._trails[tid]),
                     is_new=is_new,
-                    attrs={"cmc": bool(self.pass_frame and frame is not None)},
+                    attrs={
+                        "cmc": bool(self.pass_frame and frame is not None),
+                        "tentative": tentative,
+                    },
                 )
             )
 
@@ -244,6 +290,9 @@ class _SvTrackerAdapter:
             self._trails.pop(tid, None)
             self._hits.pop(tid, None)
             self._class_names.pop(tid, None)
+        stale_tent = [tid for tid in list(self._tentative_bbox) if tid not in active_tentative]
+        for tid in stale_tent:
+            self._tentative_bbox.pop(tid, None)
         return out
 
 
@@ -272,7 +321,13 @@ class ByteTrackLocalTracker(_SvTrackerAdapter):
             minimum_consecutive_frames=1,
             frame_rate=frame_rate,
         )
-        super().__init__(tracker, trail_len=trail_len, pass_frame=False, mask_cue=mask_cue)
+        super().__init__(
+            tracker,
+            trail_len=trail_len,
+            pass_frame=False,
+            mask_cue=mask_cue,
+            iou_thresh=iou_thresh,
+        )
 
 
 class BotSortLocalTracker(_SvTrackerAdapter):
@@ -309,6 +364,7 @@ class BotSortLocalTracker(_SvTrackerAdapter):
             trail_len=trail_len,
             pass_frame=bool(enable_cmc),
             mask_cue=mask_cue,
+            iou_thresh=iou_thresh,
         )
 
 

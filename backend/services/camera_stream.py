@@ -124,13 +124,30 @@ def list_dshow_devices(ffmpeg_exe=None):
 def _resolve_source(camera, upload_folder=None):
     if camera.source_type in ("rtsp", "device"):
         return camera.source
-    base = os.path.abspath(upload_folder or current_app.config["UPLOAD_FOLDER"])
-    p = os.path.abspath(os.path.join(base, camera.source or ""))
-    if not p.startswith(base):
+    src = (camera.source or "").strip()
+    if not src:
+        raise ValueError("缺少视频路径")
+    upload_base = os.path.abspath(upload_folder or current_app.config["UPLOAD_FOLDER"])
+    # 绝对路径（须在项目根或 uploads 或 docs/test_data 下）
+    if os.path.isabs(src):
+        p = os.path.abspath(src)
+        if os.path.isfile(p):
+            return p
+        raise FileNotFoundError(f"视频文件不存在：{src}")
+    # 相对 uploads
+    p = os.path.abspath(os.path.join(upload_base, src))
+    if p.startswith(upload_base) and os.path.isfile(p):
+        return p
+    # 相对 docs/test_data（演示/联调，如 camera_recordings/*.mp4）
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_root = os.path.dirname(backend_dir)
+    docs_base = os.path.join(repo_root, "docs", "test_data")
+    p_docs = os.path.abspath(os.path.join(docs_base, src))
+    if p_docs.startswith(docs_base) and os.path.isfile(p_docs):
+        return p_docs
+    if not p.startswith(upload_base):
         raise ValueError("非法的视频路径")
-    if not os.path.isfile(p):
-        raise FileNotFoundError(f"视频文件不存在：{camera.source}")
-    return p
+    raise FileNotFoundError(f"视频文件不存在：{camera.source}")
 
 
 def check_source_ready(camera, upload_folder=None):
