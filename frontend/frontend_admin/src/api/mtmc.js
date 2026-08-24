@@ -17,6 +17,12 @@ export const mtmcApi = {
   /** 探活：会话不存在或未运行时 active=false，不弹错误 toast */
   sessionAlive: (id) => request.get(`/ai/mtmc/sessions/${id}/alive`),
   startSession: (data) => request.post('/ai/mtmc/sessions/start', data),
+  /** 上传本地视频启动跨镜（multipart，至少 2 个视频） */
+  startSessionVideos: (formData) =>
+    request.post('/ai/mtmc/sessions/start-videos', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    }),
   stopSession: (id) => request.post(`/ai/mtmc/sessions/${id}/stop`),
   listEvents: (params) => request.get('/ai/mtmc/events', { params }),
   listPasses: (params) => request.get('/ai/mtmc/passes', { params }),

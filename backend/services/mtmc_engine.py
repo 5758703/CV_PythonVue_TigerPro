@@ -36,6 +36,38 @@ def _color_for(gid: str, palette) -> tuple:
 
 
 @dataclass
+class VirtualVideoSource:
+    """本地视频上传模式：无需预建摄像头，会话内临时虚拟镜头。"""
+    id: int
+    name: str
+    abs_path: str
+    source_type: str = "file"
+    source: str = ""
+    resolution: int = 640
+    fps: int = 10
+    original_filename: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "sourceType": self.source_type,
+            "originalFilename": self.original_filename or os.path.basename(self.abs_path),
+        }
+
+
+_VIRTUAL_CAM_ID_SEQ = 910_000
+_virtual_cam_lock = threading.Lock()
+
+
+def next_virtual_cam_id() -> int:
+    global _VIRTUAL_CAM_ID_SEQ
+    with _virtual_cam_lock:
+        _VIRTUAL_CAM_ID_SEQ += 1
+        return _VIRTUAL_CAM_ID_SEQ
+
+
+@dataclass
 class MtmcConfig:
     camera_ids: list[int]
     det_person_path: str | None = None
@@ -136,12 +168,23 @@ class MtmcSession:
         self.cross_events: list[dict] = []
         self._global_last_cam: dict[str, int] = {}
         self._global_last_seen_ts: dict[str, float] = {}
+        self.source_mode: str = "camera"  # camera | upload
+        self.video_sources: dict[int, VirtualVideoSource] = {}
+        self.upload_dir: str | None = None
+
+    def cam_label(self, cam_id: int) -> str:
+        vs = self.video_sources.get(int(cam_id))
+        if vs:
+            return vs.name or vs.original_filename or f"视频#{cam_id}"
+        return f"Cam #{cam_id}"
 
     def to_dict(self) -> dict:
         return {
             "sessionId": self.session_id,
             "running": self.running,
+            "sourceMode": self.source_mode,
             "cameraIds": list(self.cfg.camera_ids),
+            "videoSources": [v.to_dict() for v in self.video_sources.values()],
             "enablePerson": self.cfg.enable_person,
             "enableVehicle": self.cfg.enable_vehicle,
             "localTrackBackend": self.cfg.local_track_backend,
@@ -192,7 +235,61 @@ def stop_session(session_id: str) -> bool:
         return False
     s._stop.set()
     s.running = False
+    upload_dir = getattr(s, "upload_dir", None)
+    if upload_dir and os.path.isdir(upload_dir):
+        try:
+            import shutil
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        except Exception as e:  # noqa: BLE001
+            log.debug("cleanup mtmc upload dir failed: %s", e)
     return True
+
+
+def _resolve_cam_source(camera_row, upload_folder: str) -> str:
+    abs_path = getattr(camera_row, "abs_path", None)
+    if abs_path and os.path.isfile(abs_path):
+        return abs_path
+    from services.camera_stream import _resolve_source
+    return _resolve_source(camera_row, upload_folder)
+
+
+def resolve_overlay_source(session: MtmcSession | None, cam_id: int, upload_folder: str):
+    """解析 MJPEG 拉流源：DB 摄像头或上传视频虚拟镜头。"""
+    if session:
+        vs = session.video_sources.get(int(cam_id))
+        if vs is not None:
+            return vs, vs.abs_path, vs.resolution or 640, vs.fps or 10
+    from models import Camera
+    cam = Camera.query.get(int(cam_id))
+    if cam is None:
+        return None, None, 640, 10
+    try:
+        source = _resolve_cam_source(cam, upload_folder)
+    except (ValueError, FileNotFoundError, OSError):
+        return cam, None, cam.resolution or 640, cam.fps or 10
+    return cam, source, cam.resolution or 640, cam.fps or 10
+
+
+def _auto_topology_edges(cam_ids: list[int]) -> list[dict]:
+    """上传双视频模式：默认全互通、重叠视野 minTransitSec=0。"""
+    edges: list[dict] = []
+    for i, a in enumerate(cam_ids):
+        for b in cam_ids[i + 1 :]:
+            edges.append({
+                "fromCameraId": int(a),
+                "toCameraId": int(b),
+                "minTransitSec": 0,
+                "maxTransitSec": 120,
+                "weight": 1,
+            })
+            edges.append({
+                "fromCameraId": int(b),
+                "toCameraId": int(a),
+                "minTransitSec": 0,
+                "maxTransitSec": 120,
+                "weight": 1,
+            })
+    return edges
 
 
 def get_overlay_jpeg(session_id: str, camera_id: int) -> bytes | None:
@@ -1143,12 +1240,12 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
 
 
 def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
-    from services.camera_stream import ensure_shared_hub, _resolve_source
+    from services.camera_stream import ensure_shared_hub
 
     cam_id = int(camera_row.id)
     cam_state = session.cams[cam_id]
     try:
-        source = _resolve_source(camera_row, upload_folder)
+        source = _resolve_cam_source(camera_row, upload_folder)
     except Exception as e:  # noqa: BLE001
         log.error("mtmc resolve source cam=%s: %s", cam_id, e)
         session.stats["errors"] += 1
@@ -1156,8 +1253,8 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
 
     hub = ensure_shared_hub(
         cam_id, camera_row.source_type, source,
-        session.cfg.width or camera_row.resolution or 640,
-        session.cfg.fps or camera_row.fps or 10,
+        session.cfg.width or getattr(camera_row, "resolution", None) or 640,
+        session.cfg.fps or getattr(camera_row, "fps", None) or 10,
     )
     # 保持 hub 有订阅，避免空闲停掉
     sub = hub.subscribe_raw()
@@ -1185,7 +1282,16 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
         pass
 
 
-def start_session(cfg: MtmcConfig, *, cameras: list, upload_folder: str, app=None, topology_edges=None) -> MtmcSession:
+def start_session(
+    cfg: MtmcConfig,
+    *,
+    cameras: list | None = None,
+    video_sources: dict[int, VirtualVideoSource] | None = None,
+    upload_folder: str,
+    app=None,
+    topology_edges=None,
+    upload_dir: str | None = None,
+) -> MtmcSession:
     from services.mtmc_associator import MtmcAssociator
     from services.vehicle_reid_feat import assets_ready
 
@@ -1216,14 +1322,18 @@ def start_session(cfg: MtmcConfig, *, cameras: list, upload_folder: str, app=Non
     if topology_edges:
         associator.set_topology(topology_edges)
     session = MtmcSession(sid, cfg, associator, app=app)
-    for cam in cameras:
+    session.source_mode = "upload" if video_sources else "camera"
+    session.video_sources = dict(video_sources or {})
+    session.upload_dir = upload_dir
+    cam_rows = list(cameras or []) or list((video_sources or {}).values())
+    for cam in cam_rows:
         cid = int(cam.id)
         session.cams[cid] = CamState(camera_id=cid)
     session.running = True
     with _sessions_lock:
         _sessions[sid] = session
 
-    for cam in cameras:
+    for cam in cam_rows:
         th = threading.Thread(
             target=_cam_worker,
             args=(session, cam, upload_folder),

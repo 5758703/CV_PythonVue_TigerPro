@@ -11,11 +11,37 @@
     <el-tabs v-model="tab" type="border-card">
       <el-tab-pane label="会话控制" name="session">
         <el-form :inline="true" label-width="100px" class="cfg">
-          <el-form-item label="摄像头">
+          <el-form-item label="视频源">
+            <el-radio-group v-model="form.sourceMode">
+              <el-radio value="camera">摄像头</el-radio>
+              <el-radio value="upload">本地视频</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="form.sourceMode === 'camera'" label="摄像头">
             <el-select v-model="form.cameraIds" multiple filterable collapse-tags style="width: 320px" placeholder="多选">
               <el-option v-for="c in cameras" :key="c.id" :label="`${c.name} (#${c.id})`" :value="c.id" />
             </el-select>
           </el-form-item>
+          <template v-if="form.sourceMode === 'upload'">
+            <div class="upload-slots">
+              <div v-for="(slot, idx) in uploadSlots" :key="idx" class="upload-slot">
+                <el-input v-model="slot.name" :placeholder="`镜头${idx + 1}名称`" style="width: 140px" />
+                <el-upload
+                  :auto-upload="false"
+                  :limit="1"
+                  accept="video/*,.mp4,.avi,.mov,.mkv,.webm"
+                  :on-change="(f) => onVideoPick(idx, f)"
+                  :on-remove="() => onVideoRemove(idx)"
+                  :file-list="slot.fileList"
+                >
+                  <el-button type="primary" plain>选择视频 {{ idx + 1 }}</el-button>
+                </el-upload>
+                <el-button v-if="uploadSlots.length > 2" link type="danger" @click="removeUploadSlot(idx)">移除</el-button>
+              </div>
+              <el-button v-if="uploadSlots.length < 4" link type="primary" @click="addUploadSlot">+ 添加镜头</el-button>
+            </div>
+            <p class="hint upload-hint">至少上传 2 路视频（同场景不同视角）；无需在摄像头管理预配置</p>
+          </template>
           <el-form-item label="人员">
             <el-switch v-model="form.enablePerson" />
           </el-form-item>
@@ -61,7 +87,13 @@
         <el-descriptions v-if="session" :column="3" border size="small" class="mb">
           <el-descriptions-item label="会话">{{ session.sessionId }}</el-descriptions-item>
           <el-descriptions-item label="运行">{{ session.running ? '是' : '否' }}</el-descriptions-item>
-          <el-descriptions-item label="摄像头">{{ (session.cameraIds || []).join(', ') }}</el-descriptions-item>
+          <el-descriptions-item label="模式">{{ session.sourceMode === 'upload' ? '本地视频' : '摄像头' }}</el-descriptions-item>
+          <el-descriptions-item label="视频源">
+            <template v-if="session.sourceMode === 'upload'">
+              {{ (session.videoSources || []).map((v) => v.name).join(' · ') || '—' }}
+            </template>
+            <template v-else>{{ (session.cameraIds || []).join(', ') }}</template>
+          </el-descriptions-item>
           <el-descriptions-item label="帧数">{{ session.stats?.frames }}</el-descriptions-item>
           <el-descriptions-item label="人员命中">{{ session.stats?.persons }}</el-descriptions-item>
           <el-descriptions-item label="车辆命中">{{ session.stats?.vehicles }}</el-descriptions-item>
@@ -573,6 +605,7 @@ const overlayBust = reactive({})
 let pollTimer = null
 
 const form = reactive({
+  sourceMode: 'camera',
   cameraIds: [],
   enablePerson: true,
   enableVehicle: true,
@@ -586,6 +619,32 @@ const form = reactive({
   enableCmc: false,
   mcbyteDecouple: true,
 })
+
+const uploadSlots = reactive([
+  { name: '镜头A', file: null, fileList: [] },
+  { name: '镜头B', file: null, fileList: [] },
+])
+
+const onVideoPick = (idx, file) => {
+  const slot = uploadSlots[idx]
+  if (!slot || !file?.raw) return
+  slot.file = file.raw
+  slot.fileList = [file]
+}
+const onVideoRemove = (idx) => {
+  const slot = uploadSlots[idx]
+  if (!slot) return
+  slot.file = null
+  slot.fileList = []
+}
+const addUploadSlot = () => {
+  if (uploadSlots.length >= 4) return
+  uploadSlots.push({ name: `镜头${String.fromCharCode(65 + uploadSlots.length)}`, file: null, fileList: [] })
+}
+const removeUploadSlot = (idx) => {
+  if (uploadSlots.length <= 2) return
+  uploadSlots.splice(idx, 1)
+}
 
 const topoForm = reactive({
   fromCameraId: null,
@@ -610,6 +669,7 @@ const trajEvents = ref([])
 /** 操作说明 Tab：参数对照表 */
 const paramGuide = [
   { name: '摄像头', desc: '参与跨镜的多路视频源，须已在「摄像头管理」配置且可预览；多路须同时运行', suggest: '先 2 路联调' },
+  { name: '本地视频', desc: '直接上传 2 路及以上 MP4 等视频，无需预建摄像头；自动全互通拓扑（minTransitSec=0）', suggest: '演示/离线联调' },
   { name: '人员 / 车辆', desc: '是否启用人员 MTMC、车辆 MTMC（含车牌融合与视觉 ReID）', suggest: '按场景开关' },
   { name: '采样 FPS', desc: '每路每秒处理帧数，越高越耗 CPU', suggest: '1～2' },
   { name: '外观阈值', desc: '长时外观匹配的 ReID 下限；确认阈值默认值。行人跨镜后端会略放宽', suggest: '0.45～0.55' },
@@ -659,6 +719,8 @@ const camCongestionLabel = (cid) => {
   return c.label || c.level || ''
 }
 const cameraTitle = (cid) => {
+  const vs = (session.value?.videoSources || []).find((v) => Number(v.id) === Number(cid))
+  if (vs?.name) return `${vs.name} (#${cid})`
   const row = cameras.value.find((c) => Number(c.id) === Number(cid))
   const name = row?.name || ''
   return name ? `${name} (#${cid})` : `Cam #${cid}`
@@ -723,20 +785,48 @@ const refreshSession = async () => {
 }
 
 const onStart = async () => {
-  if (!form.cameraIds.length) {
+  if (form.sourceMode === 'camera' && !form.cameraIds.length) {
     ElMessage.warning('请选择至少一路摄像头')
     return
+  }
+  if (form.sourceMode === 'upload') {
+    const picked = uploadSlots.filter((s) => s.file)
+    if (picked.length < 2) {
+      ElMessage.warning('本地视频模式请至少上传 2 个视频')
+      return
+    }
   }
   busy.value = true
   try {
     if (sessionId.value) {
       try { await mtmcApi.stopSession(sessionId.value) } catch (_) { /* ignore */ }
     }
-    const res = await mtmcApi.startSession({ ...form })
+    let res
+    if (form.sourceMode === 'upload') {
+      const fd = new FormData()
+      uploadSlots.forEach((slot) => {
+        if (slot.file) fd.append('videos', slot.file)
+      })
+      fd.append('videoNames', JSON.stringify(uploadSlots.filter((s) => s.file).map((s) => s.name || '')))
+      fd.append('enablePerson', String(form.enablePerson))
+      fd.append('enableVehicle', String(form.enableVehicle))
+      fd.append('sampleFps', String(form.sampleFps))
+      fd.append('appearThresh', String(form.appearThresh))
+      fd.append('confirmThresh', String(form.confirmThresh))
+      fd.append('candidateThresh', String(form.candidateThresh))
+      fd.append('useFaissGallery', String(form.useFaissGallery))
+      fd.append('timeWindowSec', String(form.timeWindowSec))
+      fd.append('localTrackBackend', form.localTrackBackend)
+      fd.append('enableCmc', String(form.enableCmc))
+      fd.append('mcbyteDecouple', String(form.mcbyteDecouple))
+      res = await mtmcApi.startSessionVideos(fd)
+    } else {
+      res = await mtmcApi.startSession({ ...form })
+    }
     sessionId.value = res.data.sessionId
     session.value = res.data
     localStorage.setItem('mtmc-session-id', sessionId.value)
-    ElMessage.success('跨镜会话已启动')
+    ElMessage.success(form.sourceMode === 'upload' ? '本地视频跨镜会话已启动' : '跨镜会话已启动')
   } finally {
     busy.value = false
   }
@@ -987,6 +1077,20 @@ onBeforeUnmount(() => {
 .mode-ok { color: #67c23a; }
 .mode-sticky { color: #79bbff; }
 .mode-cand { color: #e6a23c; }
+.upload-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 12px 100px;
+  max-width: 720px;
+}
+.upload-slot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.upload-hint { margin: -4px 0 12px 100px; }
 .hint { color: #8899aa; font-size: 12px; }
 .guide-wrap { padding: 4px 8px 16px; max-width: 960px; }
 .guide-h3 { margin: 18px 0 10px; font-size: 15px; font-weight: 700; color: #1f2d3d; }

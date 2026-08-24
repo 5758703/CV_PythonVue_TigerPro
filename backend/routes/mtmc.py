@@ -1,8 +1,10 @@
 """跨摄像头 / 跨视频 MTMC 重识别 API /api/ai/mtmc。"""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
+import uuid
 from werkzeug.utils import secure_filename
 
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
@@ -24,9 +26,101 @@ from models.mtmc import (
 )
 from security import current_user, has_perm, permission_required
 from services import mtmc_engine
-from services.mtmc_engine import MtmcConfig
+from services.mtmc_engine import MtmcConfig, VirtualVideoSource, next_virtual_cam_id
 
 mtmc_bp = Blueprint("mtmc", __name__, url_prefix="/api/ai/mtmc")
+
+
+def _form_bool(val, default=False) -> bool:
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_session_params(data: dict) -> MtmcConfig:
+    person_m = _pick_model(
+        data.get("personDetModelId"),
+        task="object-detection",
+        keys=["yolo26n", "winedarksea-yolo26n_person", "yolo11n", "yolov8n"],
+    )
+    vehicle_m = _pick_model(
+        data.get("vehicleDetModelId"),
+        task="object-detection",
+        keys=["yolo26n", "yolo11n", "yolov8n"],
+    )
+    youtu_m = _pick_model(
+        data.get("youtuModelId"),
+        task="person-reid",
+        keys=["opencv-person-reid-youtu"],
+    )
+    strong_m = _pick_model(
+        data.get("strongReidModelId"),
+        task="person-reid",
+        keys=["osnet-x1-0", "clip-reid-person", "fastreid-osnet"],
+    )
+    vreid_m = _pick_model(
+        data.get("vehicleReidModelId"),
+        task="vehicle-reid",
+        keys=["transreid-vehicle", "clip-reid-vehicle", "vehicle-vit-reid"],
+    )
+    plate_m = _pick_model(data.get("plateModelId"), keys=["yolo26s-plate-pose", "yolo26n-plate"])
+    ocr_fn = _build_ocr_fn(data.get("ocrDetModelId"), data.get("ocrRecModelId"))
+    track_backend = str(data.get("localTrackBackend") or "bytetrack").strip().lower()
+    if track_backend not in ("iou", "bytetrack", "botsort"):
+        track_backend = "bytetrack"
+    camera_ids = data.get("cameraIds") or []
+    if isinstance(camera_ids, str):
+        camera_ids = [int(x) for x in camera_ids.split(",") if x.strip()]
+    camera_ids = [int(x) for x in camera_ids]
+    return MtmcConfig(
+        camera_ids=camera_ids,
+        det_person_path=_abs_weight(person_m),
+        det_vehicle_path=_abs_weight(vehicle_m),
+        youtu_root=_abs_weight(youtu_m),
+        strong_reid_root=_abs_weight(strong_m),
+        vehicle_reid_root=_abs_weight(vreid_m),
+        plate_model_path=_abs_weight(plate_m),
+        ocr_fn=ocr_fn,
+        enable_person=_form_bool(data.get("enablePerson"), True),
+        enable_vehicle=_form_bool(data.get("enableVehicle"), True),
+        conf=float(data.get("conf") or 0.28),
+        sample_fps=float(data.get("sampleFps") or 2.0),
+        meters_per_pixel=float(data.get("metersPerPixel") or 0.05),
+        appear_thresh=float(data.get("appearThresh") or 0.48),
+        vehicle_appear_thresh=float(data.get("vehicleAppearThresh") or 0),
+        confirm_thresh=float(data.get("confirmThresh") or 0),
+        candidate_thresh=float(data.get("candidateThresh") or 0),
+        use_faiss_gallery=_form_bool(data.get("useFaissGallery"), True),
+        gallery_model_key=(data.get("galleryModelKey") or "").strip() or None,
+        time_window_sec=float(data.get("timeWindowSec") or 90),
+        fuse_weight_strong=float(data.get("fuseWeightStrong") or 0.65),
+        width=int(data.get("width") or 640),
+        fps=int(data.get("fps") or 10),
+        persist_events=_form_bool(data.get("persistEvents"), True),
+        local_track_backend=track_backend,
+        local_track_max_age=int(data.get("localTrackMaxAge") or 30),
+        local_track_iou_thresh=float(data.get("localTrackIouThresh") or 0.3),
+        enable_cmc=_form_bool(data.get("enableCmc"), False),
+        enable_mask_cue=_form_bool(data.get("enableMaskCue"), False),
+        lost_revive_sec=float(data.get("lostReviveSec") or 1.0),
+        mcbyte_decouple=_form_bool(data.get("mcbyteDecouple"), True),
+    )
+
+
+def _validate_mtmc_config(cfg: MtmcConfig):
+    if cfg.enable_person and not cfg.det_person_path:
+        return "人员检测模型未就绪，请先拉取 YOLO"
+    if cfg.enable_person and not os.path.isfile(cfg.det_person_path):
+        return f"人员检测模型路径无效（非文件）: {cfg.det_person_path}"
+    if cfg.enable_person and not cfg.youtu_root and not cfg.strong_reid_root:
+        return "请至少准备 Youtu 或强 ReID（OSNet/CLIP）权重"
+    if cfg.enable_vehicle and not cfg.det_vehicle_path:
+        return "车辆检测模型未就绪"
+    if cfg.enable_vehicle and not os.path.isfile(cfg.det_vehicle_path):
+        return f"车辆检测模型路径无效（非文件）: {cfg.det_vehicle_path}"
+    return None
 
 
 def _abs_weight(m: AiModel | None) -> str | None:
@@ -182,88 +276,10 @@ def start_session():
     if not cams:
         return jsonify(code=400, message="无可用摄像头"), 400
 
-    person_m = _pick_model(
-        data.get("personDetModelId"),
-        task="object-detection",
-        keys=["yolo26n", "winedarksea-yolo26n_person", "yolo11n", "yolov8n"],
-    )
-    vehicle_m = _pick_model(
-        data.get("vehicleDetModelId"),
-        task="object-detection",
-        keys=["yolo26n", "yolo11n", "yolov8n"],
-    )
-    youtu_m = _pick_model(
-        data.get("youtuModelId"),
-        task="person-reid",
-        keys=["opencv-person-reid-youtu"],
-    )
-    strong_m = _pick_model(
-        data.get("strongReidModelId"),
-        task="person-reid",
-        keys=["osnet-x1-0", "clip-reid-person", "fastreid-osnet"],
-    )
-    vreid_m = _pick_model(
-        data.get("vehicleReidModelId"),
-        task="vehicle-reid",
-        keys=["transreid-vehicle", "clip-reid-vehicle", "vehicle-vit-reid"],
-    )
-    plate_m = _pick_model(data.get("plateModelId"), keys=["yolo26s-plate-pose", "yolo26n-plate"])
-
-    ocr_fn = _build_ocr_fn(data.get("ocrDetModelId"), data.get("ocrRecModelId"))
-
-    track_backend = str(data.get("localTrackBackend") or "bytetrack").strip().lower()
-    if track_backend not in ("iou", "bytetrack", "botsort"):
-        track_backend = "bytetrack"
-
-    cfg = MtmcConfig(
-        camera_ids=[c.id for c in cams],
-        det_person_path=_abs_weight(person_m),
-        det_vehicle_path=_abs_weight(vehicle_m),
-        youtu_root=_abs_weight(youtu_m),
-        strong_reid_root=_abs_weight(strong_m),
-        vehicle_reid_root=_abs_weight(vreid_m),
-        plate_model_path=_abs_weight(plate_m),
-        ocr_fn=ocr_fn,
-        enable_person=bool(data.get("enablePerson", True)),
-        enable_vehicle=bool(data.get("enableVehicle", True)),
-        conf=float(data.get("conf") or 0.28),
-        sample_fps=float(data.get("sampleFps") or 2.0),
-        meters_per_pixel=float(data.get("metersPerPixel") or 0.05),
-        appear_thresh=float(data.get("appearThresh") or 0.48),
-        vehicle_appear_thresh=float(data.get("vehicleAppearThresh") or 0),
-        confirm_thresh=float(data.get("confirmThresh") or 0),
-        candidate_thresh=float(data.get("candidateThresh") or 0),
-        use_faiss_gallery=bool(data.get("useFaissGallery", True)),
-        gallery_model_key=(data.get("galleryModelKey") or "").strip() or None,
-        time_window_sec=float(data.get("timeWindowSec") or 90),
-        fuse_weight_strong=float(data.get("fuseWeightStrong") or 0.65),
-        width=int(data.get("width") or 640),
-        fps=int(data.get("fps") or 10),
-        persist_events=bool(data.get("persistEvents", True)),
-        local_track_backend=track_backend,
-        local_track_max_age=int(data.get("localTrackMaxAge") or 30),
-        local_track_iou_thresh=float(data.get("localTrackIouThresh") or 0.3),
-        enable_cmc=bool(data.get("enableCmc", False)),
-        enable_mask_cue=bool(data.get("enableMaskCue", False)),
-        lost_revive_sec=float(data.get("lostReviveSec") or 1.0),
-        mcbyte_decouple=bool(data.get("mcbyteDecouple", True)),
-    )
-    if cfg.enable_person and not cfg.det_person_path:
-        return jsonify(code=400, message="人员检测模型未就绪，请先拉取 YOLO"), 400
-    if cfg.enable_person and not os.path.isfile(cfg.det_person_path):
-        return jsonify(
-            code=400,
-            message=f"人员检测模型路径无效（非文件）: {cfg.det_person_path}",
-        ), 400
-    if cfg.enable_person and not cfg.youtu_root and not cfg.strong_reid_root:
-        return jsonify(code=400, message="请至少准备 Youtu 或强 ReID（OSNet/CLIP）权重"), 400
-    if cfg.enable_vehicle and not cfg.det_vehicle_path:
-        return jsonify(code=400, message="车辆检测模型未就绪"), 400
-    if cfg.enable_vehicle and not os.path.isfile(cfg.det_vehicle_path):
-        return jsonify(
-            code=400,
-            message=f"车辆检测模型路径无效（非文件）: {cfg.det_vehicle_path}",
-        ), 400
+    cfg = _parse_session_params({**data, "cameraIds": camera_ids})
+    err = _validate_mtmc_config(cfg)
+    if err:
+        return jsonify(code=400, message=err), 400
 
     edges = [e.to_dict() for e in CameraTopology.query.filter_by(status="0").all()]
     session = mtmc_engine.start_session(
@@ -274,6 +290,77 @@ def start_session():
         topology_edges=edges,
     )
     return jsonify(code=0, message="跨镜会话已启动", data=session.to_dict())
+
+
+@mtmc_bp.post("/sessions/start-videos")
+@permission_required("ai:mtmc:edit")
+def start_session_videos():
+    """上传本地视频启动跨镜会话（无需预建摄像头）。"""
+    files = request.files.getlist("videos") or request.files.getlist("videos[]")
+    if not files:
+        for key in sorted(request.files.keys()):
+            if key.startswith("video"):
+                files.append(request.files[key])
+    files = [f for f in files if f and f.filename]
+    if len(files) < 2:
+        return jsonify(code=400, message="跨镜重识别请至少上传 2 个本地视频"), 400
+
+    names_raw = (request.form.get("videoNames") or "").strip()
+    names: list[str] = []
+    if names_raw:
+        try:
+            parsed = json.loads(names_raw)
+            if isinstance(parsed, list):
+                names = [str(x).strip() for x in parsed]
+        except json.JSONDecodeError:
+            names = [n.strip() for n in names_raw.split(",") if n.strip()]
+
+    upload_root = current_app.config["UPLOAD_FOLDER"]
+    batch_dir = os.path.join(upload_root, "mtmc_videos", uuid.uuid4().hex[:16])
+    os.makedirs(batch_dir, exist_ok=True)
+
+    video_sources: dict[int, VirtualVideoSource] = {}
+    cam_ids: list[int] = []
+    allowed = current_app.config.get("VIDEO_ALLOWED_EXT") or {".mp4", ".avi", ".mov", ".mkv"}
+
+    for idx, vf in enumerate(files):
+        ext = os.path.splitext(vf.filename)[1].lower()
+        if ext not in allowed:
+            return jsonify(code=400, message=f"不支持的视频格式：{vf.filename}"), 400
+        base = secure_filename(os.path.splitext(vf.filename)[0]) or f"cam{idx}"
+        fname = f"cam_{idx}_{base}{ext}"
+        abs_path = os.path.join(batch_dir, fname)
+        vf.save(abs_path)
+        if not os.path.isfile(abs_path):
+            return jsonify(code=400, message=f"视频保存失败：{vf.filename}"), 400
+        cid = next_virtual_cam_id()
+        cam_ids.append(cid)
+        label = names[idx] if idx < len(names) and names[idx] else os.path.splitext(vf.filename)[0]
+        video_sources[cid] = VirtualVideoSource(
+            id=cid,
+            name=label,
+            abs_path=abs_path,
+            original_filename=vf.filename,
+            resolution=int(request.form.get("width") or 640),
+            fps=int(request.form.get("fps") or 10),
+        )
+
+    form_data = {k: request.form.get(k) for k in request.form.keys()}
+    cfg = _parse_session_params({**form_data, "cameraIds": cam_ids})
+    err = _validate_mtmc_config(cfg)
+    if err:
+        return jsonify(code=400, message=err), 400
+
+    edges = mtmc_engine._auto_topology_edges(cam_ids)
+    session = mtmc_engine.start_session(
+        cfg,
+        video_sources=video_sources,
+        upload_folder=upload_root,
+        app=current_app._get_current_object(),
+        topology_edges=edges,
+        upload_dir=batch_dir,
+    )
+    return jsonify(code=0, message="本地视频跨镜会话已启动", data=session.to_dict())
 
 
 @mtmc_bp.post("/sessions/<sid>/stop")
@@ -597,25 +684,22 @@ def overlay_stream(sid, cid):
     if not has_perm(user, "ai:mtmc:query") and not has_perm(user, "camera:query"):
         return jsonify(code=403, message="没有访问权限"), 403
     s = mtmc_engine.get_session(sid)
-    cam = Camera.query.get_or_404(cid)
     upload_folder = current_app.config["UPLOAD_FOLDER"]
-    from services.camera_stream import _resolve_source, mjpeg_stream_mtmc_overlay, mjpeg_stream_shared
-    try:
-        source = _resolve_source(cam, upload_folder)
-    except Exception as e:  # noqa: BLE001
-        return jsonify(code=400, message=str(e)), 400
-    width = cam.resolution or 640
-    fps = cam.fps or 10
+    from services.camera_stream import mjpeg_stream_mtmc_overlay, mjpeg_stream_shared
+    cam_row, source, width, fps = mtmc_engine.resolve_overlay_source(s, cid, upload_folder)
+    if cam_row is None or not source:
+        return jsonify(code=404, message="视频源不存在或无法解析"), 404
     if not s or not s.running:
-        gen = mjpeg_stream_shared(cam.id, cam.source_type, source, width, fps)
+        gen = mjpeg_stream_shared(cid, getattr(cam_row, "source_type", "file"), source, width, fps)
         resp = Response(stream_with_context(gen), mimetype="multipart/x-mixed-replace; boundary=frame")
         resp.headers["X-Mtmc-Overlay"] = "inactive"
     else:
-        if cam.id not in s.cfg.camera_ids:
-            return jsonify(code=400, message="摄像头不在该会话中"), 400
+        if cid not in s.cfg.camera_ids:
+            return jsonify(code=400, message="该源不在当前会话中"), 400
         width = s.cfg.width or width
         fps = s.cfg.fps or fps
-        gen = mjpeg_stream_mtmc_overlay(sid, cam.id, cam.source_type, source, width, fps)
+        stype = getattr(cam_row, "source_type", "file")
+        gen = mjpeg_stream_mtmc_overlay(sid, cid, stype, source, width, fps)
         resp = Response(stream_with_context(gen), mimetype="multipart/x-mixed-replace; boundary=frame")
         resp.headers["X-Mtmc-Overlay"] = "active"
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
