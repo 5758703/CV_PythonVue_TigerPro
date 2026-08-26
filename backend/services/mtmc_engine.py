@@ -979,10 +979,26 @@ def _associate_tracklet(
     force: bool = False,
 ):
     prev_gid = builder.assigned_global_id
-    if prev_gid and not force:
-        g = session.associator.get_track(prev_gid)
-        if g is not None:
-            return g
+    ex = set(exclude_gids or ())
+    # 仅当粘性绑定仍指向本 local、且未被同帧其它目标占用时，才复用缓存 GID
+    if prev_gid and not force and prev_gid not in ex:
+        sticky = session.associator.peek_sticky(
+            object_type=builder.object_type,
+            camera_id=builder.camera_id,
+            local_track_id=int(builder.local_track_id),
+            now=now,
+        )
+        if sticky == prev_gid:
+            g = session.associator.get_track(prev_gid)
+            if g is not None:
+                return g
+        # 同镜 takeover 后 _local_bind 已清、但 TrackletBuilder 仍缓存旧 GID → 必须重关联
+        builder.assigned_global_id = None
+        prev_gid = None
+    elif prev_gid and (force or prev_gid in ex):
+        builder.assigned_global_id = None
+        prev_gid = None
+
     g = session.associator.associate(
         object_type=builder.object_type,
         camera_id=builder.camera_id,
@@ -995,13 +1011,48 @@ def _associate_tracklet(
         color_sig=color_sig,
         display_name=display_name,
         local_track_id=int(builder.local_track_id),
-        exclude_gids=exclude_gids,
+        exclude_gids=ex,
         now=now,
         force_long_term=force,
     )
     builder.assigned_global_id = g.global_id
     _record_association(session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False)
     return g
+
+
+def _resolve_overlay_global(
+    session: MtmcSession,
+    builder,
+    *,
+    sticky_gid: str | None,
+    claimed: set,
+    now: float,
+    associate_kwargs: dict,
+):
+    """同帧 Global 独占：仅信任未占用的 sticky；否则带 exclude_gids 重关联。
+
+    同镜 takeover 只会清 associator._local_bind，不会清 TrackletBuilder.assigned_global_id。
+    若仍走「缓存 GID」捷径，同一帧会出现多个框共用一个 V######。
+    """
+    if sticky_gid and sticky_gid not in claimed:
+        g = session.associator.get_track(sticky_gid)
+        if g is not None:
+            builder.assigned_global_id = g.global_id
+            return g
+    if not builder.ready_for_tentative(min_quality=0.08):
+        return None
+    # 粘性丢失或已被同帧占用 → 丢弃可能过期的 assigned，强制走 associate
+    if sticky_gid is None or sticky_gid in claimed:
+        builder.assigned_global_id = None
+    elif builder.assigned_global_id and builder.assigned_global_id in claimed:
+        builder.assigned_global_id = None
+    return _associate_tracklet(
+        session,
+        builder,
+        exclude_gids=claimed,
+        now=now,
+        **associate_kwargs,
+    )
 
 
 def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | None = None):
@@ -1292,25 +1343,22 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 meta={"reidBackend": meta.get("backend")},
                 now=now,
             )
-            g = None
-            if sticky_gid:
-                g = session.associator.get_track(sticky_gid)
-            elif builder.assigned_global_id:
-                g = session.associator.get_track(builder.assigned_global_id)
-            elif builder.ready_for_tentative(min_quality=0.08):
-                agg_emb = builder.aggregate_embedding()
-                if agg_emb is None:
-                    agg_emb = emb
-                g = _associate_tracklet(
-                    session,
-                    builder,
-                    embedding=agg_emb,
-                    reid_person_id=gallery.get("personId") if gallery.get("matched") else None,
-                    display_name=gallery.get("name") if gallery.get("matched") else None,
-                    color_sig=c_sig,
-                    exclude_gids=claimed_person,
-                    now=now,
-                )
+            agg_emb = builder.aggregate_embedding()
+            if agg_emb is None:
+                agg_emb = emb
+            g = _resolve_overlay_global(
+                session,
+                builder,
+                sticky_gid=sticky_gid,
+                claimed=claimed_person,
+                now=now,
+                associate_kwargs={
+                    "embedding": agg_emb,
+                    "reid_person_id": gallery.get("personId") if gallery.get("matched") else None,
+                    "display_name": gallery.get("name") if gallery.get("matched") else None,
+                    "color_sig": c_sig,
+                },
+            )
             if g is not None:
                 claimed_person.add(g.global_id)
                 if gallery.get("matched") and not g.display_name:
@@ -1472,31 +1520,28 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 meta={"vehicleReid": vmeta.get("backend")},
                 now=now,
             )
-            g = None
-            if sticky_gid:
-                g = session.associator.get_track(sticky_gid)
-            elif builder.assigned_global_id:
-                g = session.associator.get_track(builder.assigned_global_id)
-            elif builder.ready_for_tentative(min_quality=0.08):
-                agg_emb = builder.aggregate_embedding()
-                if agg_emb is None:
-                    agg_emb = emb
-                g = _associate_tracklet(
-                    session,
-                    builder,
-                    embedding=agg_emb,
-                    identity_key=fuse.get("identityKey"),
-                    plate=fuse.get("plate") or plate_text,
-                    visual_key=fuse.get("visualKey"),
-                    vehicle_class=infer_vehicle_class(
+            agg_emb = builder.aggregate_embedding()
+            if agg_emb is None:
+                agg_emb = emb
+            g = _resolve_overlay_global(
+                session,
+                builder,
+                sticky_gid=sticky_gid,
+                claimed=claimed_vehicle,
+                now=now,
+                associate_kwargs={
+                    "embedding": agg_emb,
+                    "identity_key": fuse.get("identityKey"),
+                    "plate": fuse.get("plate") or plate_text,
+                    "visual_key": fuse.get("visualKey"),
+                    "vehicle_class": infer_vehicle_class(
                         getattr(t, "class_name", None),
                         t.bbox,
                         frame_h=fh,
                         frame_w=fw,
                     ),
-                    exclude_gids=claimed_vehicle,
-                    now=now,
-                )
+                },
+            )
             if g is not None:
                 claimed_vehicle.add(g.global_id)
                 plate_show = g.plate or fuse.get("plate") or plate_text or "无牌"

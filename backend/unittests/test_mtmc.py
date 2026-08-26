@@ -426,6 +426,82 @@ def test_vehicle_cross_cam_takeover_same_cam_sibling():
     assert ("vehicle", 71, 3) not in assoc._local_bind
 
 
+def test_overlay_unique_gids_after_same_cam_takeover():
+    """takeover 后受害者 builder 仍缓存旧 GID 时，同帧绘制不得与接管者共用。"""
+    from types import SimpleNamespace
+
+    from services.mtmc_engine import _resolve_overlay_global
+    from services.mtmc_tracklet import TrackletBuilder
+
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48,
+        vehicle_sticky_warmup_sec=0.0,
+    )
+    emb_cam81 = _l2(np.random.randn(64).astype(np.float32))
+    emb_wrong71 = _l2(emb_cam81 + np.random.randn(64).astype(np.float32) * 0.05)
+    emb_right71 = _l2(emb_cam81 + np.random.randn(64).astype(np.float32) * 0.02)
+
+    g81 = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=emb_cam81,
+        local_track_id=4, exclude_gids=set(), now=200.0,
+    )
+    assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb_wrong71,
+        local_track_id=3, exclude_gids=set(), now=200.5,
+    )
+    assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=emb_right71,
+        local_track_id=5, exclude_gids=set(), now=201.0,
+    )
+    assert ("vehicle", 71, 3) not in assoc._local_bind
+
+    session = SimpleNamespace(
+        associator=assoc,
+        cfg=SimpleNamespace(persist_events=False),
+        session_id="s",
+        app=None,
+    )
+    victim = TrackletBuilder.create(
+        session_id="s", camera_id=71, object_type="vehicle", local_track_id=3, now=201.0,
+    )
+    victim.assigned_global_id = g81.global_id  # 过期缓存（真实 bug 路径）
+    victim.add_observation(
+        bbox=[10, 10, 120, 80], conf=0.9, frame_h=720, frame_w=1280,
+        embedding=emb_wrong71, now=201.0,
+    )
+    winner = TrackletBuilder.create(
+        session_id="s", camera_id=71, object_type="vehicle", local_track_id=5, now=201.0,
+    )
+    winner.assigned_global_id = g81.global_id
+    winner.add_observation(
+        bbox=[200, 10, 320, 90], conf=0.9, frame_h=720, frame_w=1280,
+        embedding=emb_right71, now=201.0,
+    )
+
+    claimed: set[str] = set()
+    sticky_w = assoc.peek_sticky(
+        object_type="vehicle", camera_id=71, local_track_id=5, now=201.0,
+    )
+    g_w = _resolve_overlay_global(
+        session, winner, sticky_gid=sticky_w, claimed=claimed, now=201.0,
+        associate_kwargs={"embedding": emb_right71},
+    )
+    assert g_w is not None
+    claimed.add(g_w.global_id)
+
+    sticky_v = assoc.peek_sticky(
+        object_type="vehicle", camera_id=71, local_track_id=3, now=201.0,
+    )
+    assert sticky_v is None
+    g_v = _resolve_overlay_global(
+        session, victim, sticky_gid=sticky_v, claimed=claimed, now=201.0,
+        associate_kwargs={"embedding": emb_wrong71},
+    )
+    assert g_v is not None
+    assert g_v.global_id != g_w.global_id
+    assert g_w.global_id == g81.global_id
+
+
 def test_supplement_orphan_vehicle_dets():
     from services.mtmc_engine import supplement_orphan_vehicle_dets
     from services.mtmc_local_track import Tracklet
