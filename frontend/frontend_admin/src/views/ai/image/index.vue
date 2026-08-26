@@ -21,6 +21,30 @@
         <el-form-item label="置信度">
           <el-slider v-model="conf" :min="0.05" :max="0.95" :step="0.05" style="width: 160px" />
         </el-form-item>
+        <el-form-item v-if="isOmdetModel" label="提示类别">
+          <el-input
+            v-model="promptClasses"
+            placeholder="person,car,hardhat（英文逗号分隔，留空用默认）"
+            clearable
+            style="width: 320px"
+          />
+        </el-form-item>
+        <el-form-item v-if="isVlmFo1Model" label="自然语言">
+          <el-input
+            v-model="vlmPrompt"
+            placeholder="例如：找出左侧的红色灭火器 / the cat on the sofa"
+            clearable
+            style="width: 360px"
+          />
+        </el-form-item>
+        <el-form-item v-if="isVlmFo1Model" label="快捷类别">
+          <el-input
+            v-model="promptClasses"
+            placeholder="可选：fire extinguisher,helmet（无自然语言时用）"
+            clearable
+            style="width: 280px"
+          />
+        </el-form-item>
         <el-form-item>
           <el-upload
             :show-file-list="false"
@@ -53,6 +77,22 @@
         <el-tag size="small" type="info" effect="plain">{{ imageInfo.width }}×{{ imageInfo.height }}</el-tag>
         <el-tag size="small" type="info" effect="plain">{{ fmtSize(imageInfo.size) }}</el-tag>
       </div>
+      <el-alert
+        v-if="isOmdetModel"
+        type="info"
+        :closable="false"
+        show-icon
+        class="alert-tip"
+        title="OmDet-Turbo 开放词汇检测：填写英文类别（逗号分隔）。留空则使用 person/car/truck 等默认类。首次需到「模型管理」拉取权重。"
+      />
+      <el-alert
+        v-if="isVlmFo1Model"
+        type="info"
+        :closable="false"
+        show-icon
+        class="alert-tip"
+        title="VLM-FO1：填写自然语言或快捷类别。需先 python scripts/setup_vlm_fo1.py 安装官方代码，并在模型管理拉取约 9GB 权重；建议 GPU。"
+      />
       <el-alert
         v-if="!allModels.length"
         type="warning"
@@ -293,6 +333,8 @@ const allModels = ref([])
 const modelId = ref(null)
 const category = ref('')
 const conf = ref(0.25)
+const promptClasses = ref('')
+const vlmPrompt = ref('')
 const alertEnabled = ref(false)
 const file = ref(null)
 const imageInfo = ref(null)
@@ -340,6 +382,19 @@ const filteredModels = computed(() =>
     category: category.value,
   }),
 )
+const selectedModel = computed(() => filteredModels.value.find((m) => m.id === modelId.value)
+  || allModels.value.find((m) => m.id === modelId.value)
+  || null)
+const isOmdetModel = computed(() => {
+  const key = (selectedModel.value?.modelKey || '').toLowerCase()
+  const name = (selectedModel.value?.modelName || '').toLowerCase()
+  return key.includes('omdet') || name.includes('omdet')
+})
+const isVlmFo1Model = computed(() => {
+  const lib = (selectedModel.value?.library || '').toLowerCase()
+  const key = (selectedModel.value?.modelKey || '').toLowerCase()
+  return lib === 'vlm-fo1' || key.includes('vlm-fo1')
+})
 const syncModelSelection = () => {
   modelId.value = ensureModelInList(modelId.value, filteredModels.value)
 }
@@ -531,6 +586,13 @@ const detect = async () => {
     const fd = new FormData()
     fd.append('file', file.value)
     fd.append('conf', conf.value)
+    if (isOmdetModel.value && promptClasses.value.trim()) {
+      fd.append('classes', promptClasses.value.trim())
+    }
+    if (isVlmFo1Model.value) {
+      if (vlmPrompt.value.trim()) fd.append('prompt', vlmPrompt.value.trim())
+      if (promptClasses.value.trim()) fd.append('classes', promptClasses.value.trim())
+    }
     const res = await modelApi.detect(modelId.value, fd)
     estByModel[modelId.value] = Date.now() - startTime // 记录本次耗时供下次估算
     result.value = res.data

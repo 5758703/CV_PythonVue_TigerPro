@@ -30,6 +30,9 @@ class Config:
     UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
     MODEL_FOLDER = os.path.join(UPLOAD_FOLDER, "models")
     THIRD_PARTY_VENDOR_FOLDER = os.path.join(MODEL_FOLDER, "third_party")  # vendored 推理代码（VibeVoice 等）
+    # VLM-FO1 官方仓库根目录（也可用环境变量 VLM_FO1_ROOT 覆盖）
+    VLM_FO1_ROOT = os.getenv("VLM_FO1_ROOT") or os.path.join(THIRD_PARTY_VENDOR_FOLDER, "VLM-FO1")
+    VLM_FO1_PROPOSAL_WEIGHT = os.getenv("VLM_FO1_PROPOSAL_WEIGHT")  # 候选框 YOLO .pt
     VIDEO_FOLDER = os.path.join(UPLOAD_FOLDER, "videos")     # 上传待检测视频
     OUTPUT_FOLDER = os.path.join(UPLOAD_FOLDER, "outputs")   # 带框输出视频
     AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, "audios")     # 上传待识别音频（语音识别）

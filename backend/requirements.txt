@@ -17,6 +17,10 @@ openvino>=2024.0.0
 huggingface_hub>=1.5.0,<2.0.0
 # transformers 5.x：RF-DETR(rfdetr) 需要 BackboneConfigMixin；NLP/TTS/Whisper 等经回归仍可用。
 transformers>=5.6.0,<6.0.0
+# VLM-FO1-3B（多模态定位/REC）：需单独克隆官方仓库并安装其 requirements
+#   python scripts/setup_vlm_fo1.py
+#   pip install -r uploads/models/third_party/VLM-FO1/requirements.txt
+#   可选：VLM_FO1_ROOT / VLM_FO1_PROPOSAL_WEIGHT
 # MOSS-Transcribe-Diarize 0.9B：推理走本地 services/moss_mtd.py，无需 GitHub 辅助包。
 # 若仍想装官方包（可选）：pip install git+https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git
 # RF-DETR 实时目标检测（Roboflow/rf-detr-medium 等，COCO 80 类）

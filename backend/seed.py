@@ -1030,6 +1030,35 @@ def seed_ai_models():
         source_url="https://huggingface.co/facebook/detr-resnet-50",
         description="Facebook DETR 通用目标检测(COCO 80类)，transformers 引擎，可用于图片/视频/摄像头检测页。", status="0",
     ))
+    # OmDet-Turbo：开放词汇零样本检测（文本类别列表）
+    created |= _ensure_ai_model("omdet-turbo-swin-tiny", dict(
+        model_name="OmDet-Turbo Swin Tiny（开放词汇检测）",
+        category="开放词汇检测",
+        task="object-detection",
+        library="transformers",
+        version="swin-tiny",
+        source_url="https://huggingface.co/omlab/omdet-turbo-swin-tiny-hf",
+        description=(
+            "Om AI Lab OmDet-Turbo Swin Tiny：开放词汇/零样本目标检测。"
+            "在图像检测页填写提示类别（如 person,hardhat,fire）；约 463MB。"
+        ),
+        status="0",
+    ))
+    # VLM-FO1：多模态自然语言定位 / REC（需官方仓库 + YOLO 候选框）
+    created |= _ensure_ai_model("vlm-fo1-3b", dict(
+        model_name="VLM-FO1 3B（多模态定位/REC）",
+        category="多模态感知",
+        task="object-detection",
+        library="vlm-fo1",
+        version="v01",
+        source_url="https://huggingface.co/omlab/VLM-FO1-3B-v01",
+        description=(
+            "Om AI Lab VLM-FO1-3B：自然语言指代定位与细粒度感知。"
+            "需先 python scripts/setup_vlm_fo1.py 并安装其 requirements；"
+            "推理用本项目 YOLO 生成候选框。建议 GPU；权重约 9GB。"
+        ),
+        status="0",
+    ))
     created |= _ensure_ai_model("rf-detr-medium", dict(
         model_name="RF-DETR Medium 目标检测", category="通用目标检测",
         task="object-detection", library="rfdetr", version="v1",

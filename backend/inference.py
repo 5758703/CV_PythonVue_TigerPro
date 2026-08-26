@@ -2735,6 +2735,154 @@ def detect_image_hf(model_dir, image_bytes, conf=0.25, draw=True, task="object-d
             "imageBase64": image_b64, "width": w, "height": h}
 
 
+# ------------------------------------------------------------ OmDet-Turbo（开放词汇零样本检测）
+_omdet_cache = {}  # model_dir -> (processor, model)
+_DEFAULT_OMDET_CLASSES = [
+    "person", "car", "truck", "bus", "bicycle", "motorcycle",
+    "dog", "cat", "backpack", "handbag", "suitcase", "fire extinguisher",
+]
+
+
+def _is_omdet_model(model_dir: str) -> bool:
+    base = os.path.basename(os.path.normpath(model_dir or "")).lower()
+    if "omdet" in base:
+        return True
+    cfg_path = os.path.join(model_dir, "config.json")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            mt = str(cfg.get("model_type") or "").lower()
+            arch = str(cfg.get("architectures") or "").lower()
+            if "omdet" in mt or "omdet" in arch:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _get_omdet(model_dir: str):
+    import torch
+    from transformers import AutoProcessor, OmDetTurboForObjectDetection
+
+    with _lock:
+        if model_dir in _omdet_cache:
+            return _omdet_cache[model_dir]
+        processor = AutoProcessor.from_pretrained(model_dir)
+        model = OmDetTurboForObjectDetection.from_pretrained(model_dir)
+        model.eval()
+        if torch.cuda.is_available():
+            model = model.to("cuda")
+        _omdet_cache[model_dir] = (processor, model)
+        return processor, model
+
+
+def detect_image_omdet(model_dir, image_bytes, conf=0.25, draw=True, classes=None):
+    """OmDet-Turbo 开放词汇检测：classes 为候选类别列表。"""
+    import torch
+    from PIL import Image
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+    prompt = _parse_prompt_classes(classes) or list(_DEFAULT_OMDET_CLASSES)
+    processor, model = _get_omdet(model_dir)
+    pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    inputs = processor(pil, text=prompt, return_tensors="pt")
+    device = next(model.parameters()).device
+    inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+    with torch.no_grad():
+        outputs = model(**inputs)
+    results = processor.post_process_grounded_object_detection(
+        outputs,
+        classes=prompt,
+        target_sizes=[pil.size[::-1]],
+        score_threshold=float(conf),
+        nms_threshold=0.3,
+    )[0]
+
+    detections = []
+    scores = results.get("scores") or []
+    names = results.get("classes") or []
+    boxes = results.get("boxes") or []
+    for i, (score, class_name, box) in enumerate(zip(scores, names, boxes)):
+        try:
+            xyxy = box.tolist() if hasattr(box, "tolist") else list(box)
+        except Exception:  # noqa: BLE001
+            continue
+        if len(xyxy) < 4:
+            continue
+        cname = str(class_name)
+        try:
+            cid = prompt.index(cname)
+        except ValueError:
+            cid = i
+        detections.append({
+            "className": cname,
+            "classId": int(cid),
+            "confidence": round(float(score), 4),
+            "bbox": [round(float(xyxy[0]), 1), round(float(xyxy[1]), 1),
+                     round(float(xyxy[2]), 1), round(float(xyxy[3]), 1)],
+        })
+
+    image_b64 = None
+    if draw:
+        _draw_dets(img, detections)
+        ok, buf = cv2.imencode(".jpg", img)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    h, w = img.shape[:2]
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+        "promptClasses": prompt,
+        "engine": "omdet-turbo",
+    }
+
+
+def detect_image_vlm_fo1(model_dir, image_bytes, conf=0.25, draw=True, prompt=None, classes=None):
+    """VLM-FO1 多模态定位：自然语言 prompt 或类别列表 → YOLO 候选框 → FO1 筛选。"""
+    from services.vlm_fo1 import ground_image
+
+    arr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("无法解析图片")
+
+    out = ground_image(
+        model_dir,
+        img,
+        prompt=prompt,
+        classes=classes,
+        score=max(0.15, float(conf)),
+    )
+    detections = out.get("detections") or []
+
+    image_b64 = None
+    if draw:
+        _draw_dets(img, detections)
+        ok, buf = cv2.imencode(".jpg", img)
+        image_b64 = base64.b64encode(buf.tobytes()).decode() if ok else None
+
+    h, w = img.shape[:2]
+    return {
+        "detections": detections,
+        "count": len(detections),
+        "imageBase64": image_b64,
+        "width": w,
+        "height": h,
+        "promptClasses": out.get("promptClasses") or ([out["prompt"]] if out.get("prompt") else []),
+        "engine": "vlm-fo1",
+        "proposalCount": out.get("proposalCount"),
+        "rawText": out.get("rawText"),
+        "prompt": out.get("prompt"),
+    }
+
+
 def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detection", progress_cb=None,
                     *, alert_rules=None, alert_source_key=None):
     """transformers 目标检测逐帧处理视频。progress_cb(processed, total) 上报进度。"""

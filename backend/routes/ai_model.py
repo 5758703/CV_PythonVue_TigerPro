@@ -543,7 +543,7 @@ def _looks_like_diffusers_lora_dir(path):
 
 _DIR_WEIGHT_LIBS = frozenset({
     "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano",
-    "vibevoice", "voxcpm",
+    "vibevoice", "voxcpm", "vlm-fo1",
 })
 
 
@@ -572,7 +572,7 @@ def _resolve_detect_runtime(m):
     base = _normalize_dir_model_path(upload_root, m.file_path) if _is_dir_weight_lib(lib) else os.path.join(upload_root, m.file_path)
 
     if os.path.isfile(base):
-        if lib in ("transformers", "modelscope"):
+        if lib in ("transformers", "modelscope", "vlm-fo1"):
             raise ValueError(f"{lib} 检测模型应为目录，当前为单文件权重")
         return lib, base
 
@@ -582,6 +582,13 @@ def _resolve_detect_runtime(m):
                 "该模型为 Diffusers/LoRA 文生图权重，不支持图片/视频目标检测。"
                 "请改用 YOLO 等检测模型（例如 DaniilMako-spacecraft-detection）。"
             )
+        if lib == "vlm-fo1":
+            # HF 分片目录：有 config.json 即可（无需标准 model_type）
+            if os.path.isfile(os.path.join(base, "config.json")) or any(
+                f.endswith(".safetensors") for f in os.listdir(base) if os.path.isfile(os.path.join(base, f))
+            ):
+                return lib, base
+            raise ValueError("VLM-FO1 权重目录无效：请先在模型管理拉取 omlab/VLM-FO1-3B-v01")
         if lib == "modelscope":
             from inference import is_modelscope_cv_dir
             if is_modelscope_cv_dir(base):
@@ -1438,11 +1445,23 @@ def detect(mid):
         conf = 0.25
 
     draw = request.form.get("draw", "1") != "0"  # 实时场景传 0，省服务端画框/编码
+    classes = request.form.get("classes")
+    prompt = (request.form.get("prompt") or "").strip()
     try:
-        if lib == "transformers":
-            from inference import detect_image_hf
-            result = detect_image_hf(abs_path, file.read(), conf=conf, draw=draw,
-                                     task=m.task or "object-detection")
+        if lib == "vlm-fo1":
+            from inference import detect_image_vlm_fo1
+            result = detect_image_vlm_fo1(
+                abs_path, file.read(), conf=conf, draw=draw,
+                prompt=prompt or None, classes=classes,
+            )
+        elif lib == "transformers":
+            from inference import detect_image_hf, detect_image_omdet, _is_omdet_model
+            raw = file.read()
+            if _is_omdet_model(abs_path) or "omdet" in (m.model_key or "").lower():
+                result = detect_image_omdet(abs_path, raw, conf=conf, draw=draw, classes=classes)
+            else:
+                result = detect_image_hf(abs_path, raw, conf=conf, draw=draw,
+                                         task=m.task or "object-detection")
         elif lib == "modelscope":
             from inference import detect_image_modelscope
             result = detect_image_modelscope(abs_path, file.read(), conf=conf, draw=draw)
