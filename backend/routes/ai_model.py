@@ -1159,7 +1159,7 @@ def ocr_paddle_route():
 @ai_model_bp.post("/<int:mid>/transcribe")
 @permission_required("ai:model:query")
 def transcribe_route(mid):
-    """语音识别在线测试（funasr SenseVoice）：上传音频 → 转写 + 情感/事件。"""
+    """语音识别：上传音频或视频 →（视频则 ffmpeg 抽音）→ 转写。"""
     m = AiModel.query.get_or_404(mid)
     path = _abs_model_path(m)
     if path is None:
@@ -1167,19 +1167,28 @@ def transcribe_route(mid):
 
     file = request.files.get("file")
     if file is None or not file.filename:
-        return jsonify(code=400, message="未接收到音频"), 400
+        return jsonify(code=400, message="未接收到媒体文件"), 400
     ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in current_app.config["AUDIO_ALLOWED_EXT"]:
-        return jsonify(code=400, message="不支持的音频格式"), 400
+    allowed = current_app.config.get("ASR_MEDIA_ALLOWED_EXT") or current_app.config["AUDIO_ALLOWED_EXT"]
+    if ext not in allowed:
+        return jsonify(code=400, message="不支持的媒体格式（音频或含音轨视频）"), 400
 
     audio_folder = current_app.config["AUDIO_FOLDER"]
     _ensure_dir(audio_folder)
     ts = int(time.time())
-    base = secure_filename(os.path.splitext(file.filename)[0]) or "audio"
-    audio_path = os.path.join(audio_folder, f"{base}_{ts}{ext}")
-    file.save(audio_path)
+    base = secure_filename(os.path.splitext(file.filename)[0]) or "media"
+    media_path = os.path.join(audio_folder, f"{base}_{ts}{ext}")
+    file.save(media_path)
 
+    audio_path = media_path
+    extracted_wav = None
     try:
+        if ext in current_app.config.get("VIDEO_ALLOWED_EXT", set()):
+            from services.moss_mtd import extract_audio_wav
+            extracted_wav = os.path.join(audio_folder, f"{base}_{ts}_asr.wav")
+            extract_audio_wav(media_path, extracted_wav)
+            audio_path = extracted_wav
+
         if (m.library or "") == "funasr-onnx":
             from inference import transcribe_audio_onnx
             result = transcribe_audio_onnx(path, audio_path)
@@ -1196,11 +1205,12 @@ def transcribe_route(mid):
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"识别失败：{e}"), 500
     finally:
-        if os.path.isfile(audio_path):
-            try:
-                os.remove(audio_path)  # 处理完删除上传源
-            except OSError:
-                pass
+        for p in (media_path, extracted_wav):
+            if p and os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
     return jsonify(code=0, message="识别完成", data=result)
 
 

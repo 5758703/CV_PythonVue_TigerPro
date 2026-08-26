@@ -1181,6 +1181,17 @@ def seed_ai_models():
         source_url="https://huggingface.co/UsefulSensors/moonshine-tiny",
         description="Useful Sensors Moonshine Tiny（27M，英文 ASR，transformers）。面向实时转写与低资源设备，CPU 友好。语音识别页使用。", status="0",
     ))
+    # 语音识别（MOSS-Transcribe-Diarize 0.9B，多方言/多人识别+时间戳）
+    created |= _ensure_ai_model("moss-transcribe-diarize-0p9b", dict(
+        model_name="MOSS-Transcribe-Diarize 0.9B（多人识别+时间戳）", category="语音识别",
+        task="automatic-speech-recognition", library="transformers", version="v1",
+        source_url="https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize",
+        description=(
+            "OpenMOSS MOSS-Transcribe-Diarize 0.9B：端到端长音频多说话人转写（含说话人标签/时间戳）。"
+            "本地推理需要安装 MOSS 运行依赖；本项目通过 Transformers remote code 集成。"
+        ),
+        status="0",
+    ))
     # 车牌检测（YOLO26n 社区微调 bbox，车辆追踪可用）
     created |= _ensure_ai_model("yolo26n-plate", dict(
         model_name="车牌检测 YOLO26n（CodexParas）", category="交通车辆",
@@ -1388,6 +1399,7 @@ def seed_ai_models():
     _bind_local_insightface()
     _bind_local_yoloe_seg_weight()
     _bind_local_yolo11s_ball_weight()
+    _bind_local_moss_mtd_weight()
     _bind_vehicle_track_models()
     created |= _ensure_yolo_master_models()
     created |= _patch_broken_model_source_urls()
@@ -1844,6 +1856,39 @@ def _bind_vehicle_track_models():
             m.status = "0"
             changed = True
 
+    if changed:
+        db.session.commit()
+    return changed
+
+
+def _bind_local_moss_mtd_weight():
+    """若本地已有 MOSS-Transcribe-Diarize 权重目录，绑定 file_path（幂等）。"""
+    m = AiModel.query.filter_by(model_key="moss-transcribe-diarize-0p9b").first()
+    if not m:
+        return False
+    rel = "models/moss-transcribe-diarize-0p9b"
+    base = os.path.dirname(os.path.abspath(__file__))
+    abs_dir = os.path.join(base, "uploads", rel.replace("/", os.sep))
+    weight = os.path.join(abs_dir, "model-00000-of-00001.safetensors")
+    ready = os.path.isfile(weight) and os.path.getsize(weight) > 1_000_000_000
+    if not ready:
+        return False
+    size = 0
+    for root, _dirs, files in os.walk(abs_dir):
+        for f in files:
+            fp = os.path.join(root, f)
+            if os.path.isfile(fp):
+                size += os.path.getsize(fp)
+    changed = False
+    if m.file_path != rel:
+        m.file_path = rel
+        changed = True
+    if size > 0 and m.file_size != size:
+        m.file_size = size
+        changed = True
+    if m.status != "0":
+        m.status = "0"
+        changed = True
     if changed:
         db.session.commit()
     return changed

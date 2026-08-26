@@ -16,7 +16,9 @@ openvino>=2024.0.0
 # transformers 5.x 要求 huggingface-hub>=1.5,<2.0（与旧版 0.36 不兼容）
 huggingface_hub>=1.5.0,<2.0.0
 # transformers 5.x：RF-DETR(rfdetr) 需要 BackboneConfigMixin；NLP/TTS/Whisper 等经回归仍可用。
-transformers>=5.1.0,<6.0.0
+transformers>=5.6.0,<6.0.0
+# MOSS-Transcribe-Diarize 0.9B：推理走本地 services/moss_mtd.py，无需 GitHub 辅助包。
+# 若仍想装官方包（可选）：pip install git+https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git
 # RF-DETR 实时目标检测（Roboflow/rf-detr-medium 等，COCO 80 类）
 rfdetr>=1.8.0
 # MobileSAM 交互式分割（CPU 可用，vit_t 约 40MB；import 名为 mobile_sam）

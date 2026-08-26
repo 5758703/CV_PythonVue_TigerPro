@@ -45,6 +45,8 @@ class Config:
     MODEL_ALLOWED_EXT = {".pt", ".pth", ".onnx", ".engine", ".weights"}
     VIDEO_ALLOWED_EXT = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
     AUDIO_ALLOWED_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}
+    # ASR 页允许音视频：视频经 ffmpeg 抽轨后再转写
+    ASR_MEDIA_ALLOWED_EXT = AUDIO_ALLOWED_EXT | VIDEO_ALLOWED_EXT
 
     # HuggingFace 访问令牌（拉取私有/受限 gated 模型权重时认证用）
     HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")

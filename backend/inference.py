@@ -4154,6 +4154,167 @@ def _decode_audio_for_sr(audio_path, sampling_rate):
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 
+# ------------------------------------------------------------ MOSS-Transcribe-Diarize 0.9B（多人转写+说话人+时间戳，Transformers Remote Code）
+_moss_mtd_cache = {}  # model_dir -> (device, dtype, model, processor)
+
+
+def _is_moss_mtd_model(model_dir: str) -> bool:
+    """轻量判断是否为 MOSS-Transcribe-Diarize 模型目录。"""
+    base = os.path.basename(os.path.normpath(model_dir)).lower()
+    if "moss" in base and ("mtd" in base or "transcribe" in base or "diarize" in base):
+        return True
+    # 权重下载后 remote code 通常会包含这个包目录
+    if os.path.isdir(os.path.join(model_dir, "moss_transcribe_diarize")):
+        return True
+    # config.json 中可能有提示
+    cfg_path = os.path.join(model_dir, "config.json")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            name = str(cfg.get("name") or cfg.get("_name_or_path") or "").lower()
+            if "moss" in name and ("mtd" in name or "diarize" in name):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+    return False
+
+
+def _get_moss_mtd(model_dir: str):
+    """加载/缓存 MOSS-Transcribe-Diarize 模型与 processor。"""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoProcessor
+
+    with _lock:
+        if model_dir in _moss_mtd_cache:
+            return _moss_mtd_cache[model_dir]
+
+        from services.moss_mtd import resolve_device
+
+        device = resolve_device("auto")
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+
+        model = AutoModelForCausalLM.from_pretrained(
+            model_dir,
+            trust_remote_code=True,
+            dtype="auto",
+        )
+        model = model.to(dtype=dtype).to(device).eval()
+
+        processor = AutoProcessor.from_pretrained(
+            model_dir,
+            trust_remote_code=True,
+            fix_mistral_regex=True,
+        )
+
+        _moss_mtd_cache[model_dir] = (device, dtype, model, processor)
+        return device, dtype, model, processor
+
+
+def _parse_moss_transcript_segments_fallback(raw_text: str) -> list[dict]:
+    """
+    当无法 import 官方 parse_transcript 时的兜底解析。
+
+    期望片段形如： [0.5][S01]Hello[2.3]
+    """
+    if not raw_text:
+        return []
+    import re
+    txt = str(raw_text).strip().replace("\r\n", "\n")
+    # [start][Sxx]text[end]
+    pat = re.compile(
+        r"\[(?P<start>\d+(?:\.\d+)?)\]\[(?P<speaker>S\d+)\](?P<text>.*?)\[(?P<end>\d+(?:\.\d+)?)\]",
+        re.DOTALL,
+    )
+    segs: list[dict] = []
+    for m in pat.finditer(txt):
+        try:
+            st = float(m.group("start"))
+            ed = float(m.group("end"))
+        except (TypeError, ValueError):
+            continue
+        speaker = (m.group("speaker") or "").strip()
+        t = (m.group("text") or "").strip()
+        segs.append({"start": st, "end": ed, "speaker": speaker, "text": t})
+    return segs
+
+
+def transcribe_audio_moss_diarize(model_dir: str, audio_path: str, *, max_new_tokens: int = 2048):
+    """
+    MOSS-Transcribe-Diarize：多人转写+说话人标记+时间戳（本地 Transformers 推理）。
+
+    返回结构与 SenseVoice 保持一致：{text, language, emotion, events}。
+    text 中包含说话人/时间戳，满足“多人识别”的主诉。
+    """
+    import torch
+
+    device, dtype, model, processor = _get_moss_mtd(model_dir)
+
+    from services.moss_mtd import build_transcription_messages, generate_transcription
+
+    messages = build_transcription_messages(audio_path)
+
+    # do_sample=False -> 贪心/确定性，减少抖动
+    result = generate_transcription(
+        model,
+        processor,
+        messages,
+        max_new_tokens=int(max_new_tokens),
+        do_sample=False,
+        device=device,
+        dtype=dtype,
+    )
+    raw = (result or {}).get("text") or ""
+
+    segs: list[dict] = []
+    try:
+        from moss_transcribe_diarize import parse_transcript
+
+        parsed = parse_transcript(raw)
+        # parsed 可能是 list[dataclass] 或 list[dict]
+        for s in parsed or []:
+            if isinstance(s, dict):
+                segs.append({
+                    "start": float(s.get("start") or 0),
+                    "end": float(s.get("end") or 0),
+                    "speaker": str(s.get("speaker") or ""),
+                    "text": str(s.get("text") or "").strip(),
+                })
+            else:
+                segs.append({
+                    "start": float(getattr(s, "start", 0) or 0),
+                    "end": float(getattr(s, "end", 0) or 0),
+                    "speaker": str(getattr(s, "speaker", "") or ""),
+                    "text": str(getattr(s, "text", "") or "").strip(),
+                })
+    except Exception:  # noqa: BLE001
+        segs = _parse_moss_transcript_segments_fallback(raw)
+
+    # 将分段结果转为统一文本，前端直接展示 text
+    if segs:
+        lines = []
+        for s in segs:
+            spk = s.get("speaker") or "S??"
+            st = s.get("start")
+            ed = s.get("end")
+            try:
+                st_f = float(st)
+                ed_f = float(ed)
+                span = f"{st_f:.2f}-{ed_f:.2f}"
+            except (TypeError, ValueError):
+                span = ""
+            t = (s.get("text") or "").strip()
+            if span:
+                lines.append(f"[{span}] {spk}: {t}")
+            else:
+                lines.append(f"{spk}: {t}")
+        text = "\n".join([l for l in lines if l]).strip()
+    else:
+        text = str(raw).strip()
+
+    return {"text": text, "language": None, "emotion": None, "events": [], "segments": segs}
+
+
 def transcribe_audio_moonshine(model_dir, audio_path):
     """Moonshine Tiny/Base 英文 ASR（transformers）。
 
@@ -4192,9 +4353,12 @@ def transcribe_audio_moonshine(model_dir, audio_path):
 
 
 def transcribe_audio_transformers(model_dir, audio_path):
-    """transformers ASR 统一入口：Moonshine / Whisper 按架构分流。"""
+    """transformers ASR 统一入口：Moonshine / Whisper / MOSS 按模型分流。"""
     if _is_moonshine_model(model_dir):
         return transcribe_audio_moonshine(model_dir, audio_path)
+    if _is_moss_mtd_model(model_dir):
+        return transcribe_audio_moss_diarize(model_dir, audio_path)
+    # 兜底：Whisper
     return transcribe_audio_whisper(model_dir, audio_path)
 
 
