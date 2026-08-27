@@ -201,6 +201,7 @@ class MtmcSession:
             "enableVehicle": self.cfg.enable_vehicle,
             "localTrackBackend": self.cfg.local_track_backend,
             "enableCmc": self.cfg.enable_cmc,
+            "persistEvents": self.cfg.persist_events,
             "mcbyteDecouple": self.cfg.mcbyte_decouple,
             "confirmThresh": self.cfg.confirm_thresh or self.cfg.appear_thresh,
             "candidateThresh": self.cfg.candidate_thresh or max(0.2, self.cfg.appear_thresh * 0.82),

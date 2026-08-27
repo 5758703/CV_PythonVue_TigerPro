@@ -211,6 +211,9 @@
           <el-form-item label="CMC">
             <el-switch v-model="form.enableCmc" />
           </el-form-item>
+          <el-form-item label="证据落库">
+            <el-switch v-model="form.persistEvents" />
+          </el-form-item>
           <el-form-item>
             <el-button type="primary" :loading="busy" v-permission="'ai:mtmc:edit'" @click="onStart">启动跨镜</el-button>
             <el-button type="danger" :disabled="!sessionId" v-permission="'ai:mtmc:edit'" @click="onStop">停止</el-button>
@@ -218,7 +221,10 @@
             <el-button type="success" :disabled="!sessionId" @click="goWall">打开监控墙</el-button>
           </el-form-item>
         </el-form>
-        <p class="hint mb">本页仅用于跨镜关联；本地视频/图片/RTSP/本机摄像头请在「实时检测测试」页使用。</p>
+        <p class="hint mb">
+          本页仅用于跨镜关联；本地视频/图片/RTSP/本机摄像头请在「实时检测测试」页使用。
+          开启「证据落库」后 Tracklet、候选关联、证据边会写入数据库，便于停会话后审计与候选晋升/驳回落库；略增 DB 写入。
+        </p>
 
         <el-descriptions v-if="session && !isDetectKind(session)" :column="3" border size="small" class="mb">
           <el-descriptions-item label="会话">{{ session.sessionId }}</el-descriptions-item>
@@ -235,6 +241,7 @@
           <el-descriptions-item label="车辆命中">{{ session.stats?.vehicles }}</el-descriptions-item>
           <el-descriptions-item label="局部跟踪">{{ session.localTrackBackend || '-' }}</el-descriptions-item>
           <el-descriptions-item label="CMC">{{ session.enableCmc ? '开' : '关' }}</el-descriptions-item>
+          <el-descriptions-item label="证据落库">{{ session.persistEvents ? '开' : '关' }}</el-descriptions-item>
           <el-descriptions-item label="跨镜策略">{{ session.mcbyteDecouple === false ? '标准' : '增强' }}</el-descriptions-item>
         </el-descriptions>
 
@@ -757,6 +764,7 @@ const form = reactive({
   timeWindowSec: 90,
   localTrackBackend: 'bytetrack',
   enableCmc: false,
+  persistEvents: false,
   mcbyteDecouple: true,
 })
 
@@ -797,7 +805,7 @@ const sessionPayload = () => ({
   localTrackBackend: form.localTrackBackend,
   enableCmc: form.enableCmc,
   mcbyteDecouple: form.mcbyteDecouple,
-  persistEvents: false,
+  persistEvents: form.persistEvents,
   detectOnly: false,
 })
 
@@ -910,6 +918,7 @@ const paramGuide = [
   { name: '时间窗(s)', desc: '全局身份在线缓存秒数，影响跨镜关联范围', suggest: '60～120' },
   { name: '局部跟踪', desc: 'ByteTrack 推荐；大目标漏跟时车辆侧会补 orphan 框', suggest: 'bytetrack' },
   { name: 'CMC', desc: '镜头运动补偿，移动/云台摄像头可开', suggest: '静止机关' },
+  { name: '证据落库', desc: 'Tracklet 片段、候选关联、关联证据边写入数据库；人工核对候选时建议开启', suggest: '核对时开' },
   { name: '拓扑最短秒', desc: '重叠视野必须为 0；非重叠按通行时间', suggest: '重叠=0' },
 ]
 
