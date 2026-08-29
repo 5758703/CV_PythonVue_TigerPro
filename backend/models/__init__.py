@@ -251,6 +251,7 @@ from .mtmc import (  # noqa: E402  跨镜 MTMC
     MtmcGlobalPerson, MtmcGlobalVehicle, MtmcSearchJob,
     MtmcTrackEvent, MtmcTracklet, MtmcVehiclePass,
 )
+from .pipeline import AiPipeline, AiPipelineRun, AiPipelineVersion  # noqa: E402  视频分析流水线
 
 __all__ = [
     "db",
@@ -263,5 +264,6 @@ __all__ = [
     "CameraTopology", "MtmcAssociationEdge", "MtmcCandidatePair", "MtmcCrossCameraEvent",
     "MtmcGlobalPerson", "MtmcGlobalVehicle", "MtmcSearchJob",
     "MtmcTrackEvent", "MtmcTracklet", "MtmcVehiclePass",
+    "AiPipeline", "AiPipelineVersion", "AiPipelineRun",
     "user_role", "user_dept", "user_post", "role_menu", "user_menu",
 ]

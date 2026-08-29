@@ -22,13 +22,14 @@ from .open_app_admin import open_app_bp
 from .portal import portal_bp
 from .mtmc import mtmc_bp
 from .defect import defect_bp
+from .pipeline import pipeline_bp
 
 all_blueprints = [auth_bp, user_bp, role_bp, dept_bp, job_bp, menu_bp, ai_model_bp,
                   camera_bp, water_level_bp, training_bp, badminton_bp, face_bp, reid_bp, alert_bp,
                   table_recog_bp, vehicle_bp, absence_bp, handpose_bp, fall_bp, openapi_v1_bp, open_app_bp,
-                  portal_bp, mtmc_bp, defect_bp]
+                  portal_bp, mtmc_bp, defect_bp, pipeline_bp]
 
 __all__ = ["all_blueprints", "auth_bp", "user_bp", "role_bp", "dept_bp", "job_bp", "menu_bp",
            "ai_model_bp", "camera_bp", "water_level_bp", "training_bp", "badminton_bp", "face_bp",
            "reid_bp", "alert_bp", "table_recog_bp", "vehicle_bp", "absence_bp", "handpose_bp",
-           "fall_bp", "openapi_v1_bp", "open_app_bp", "portal_bp", "mtmc_bp", "defect_bp"]
+           "fall_bp", "openapi_v1_bp", "open_app_bp", "portal_bp", "mtmc_bp", "defect_bp", "pipeline_bp"]

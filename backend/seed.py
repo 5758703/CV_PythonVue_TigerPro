@@ -198,19 +198,107 @@ def _regroup_model_menus():
         m260.order_num = 2
         changed = True
 
-    # 根级排序：模型管理(0) → AI智能识别(1) → 视频监控(2) → 系统管理(3)
+    # 根级排序：模型管理(0) → AI智能识别(1) → EVA流水编排(2) → 视频监控(3) → 系统管理(4)
     m200 = Menu.query.get(200)
     if m200 and m200.order_num != 1:
         m200.order_num = 1
         changed = True
+    m297 = Menu.query.get(297)
+    if m297 and (m297.parent_id != 0 or m297.order_num != 2):
+        m297.parent_id = 0
+        m297.order_num = 2
+        changed = True
     m245 = Menu.query.get(245)
-    if m245 and m245.order_num != 2:
-        m245.order_num = 2
+    if m245 and m245.order_num != 3:
+        m245.order_num = 3
         changed = True
     m1 = Menu.query.get(1)
-    if m1 and m1.order_num != 3:
-        m1.order_num = 3
+    if m1 and m1.order_num != 4:
+        m1.order_num = 4
         changed = True
+
+    if changed:
+        db.session.commit()
+
+
+def _regroup_eva_pipeline_menus():
+    """将流水线 / 指标提升为根级「EVA流水编排」目录（幂等）。
+
+    顺序：模型管理 → AI智能识别 → EVA流水编排 → 视频监控 → 系统管理。
+    """
+    changed = False
+    if not Menu.query.get(297):
+        m297 = _menu(
+            297, 0, "EVA流水编排", "M",
+            path="/eva", icon="Share", order=2,
+        )
+        db.session.add(m297)
+        db.session.flush()
+        for role in Role.query.filter(Role.role_key.in_(("admin", "common"))).all():
+            role.menus = list(role.menus) + [m297]
+        changed = True
+    else:
+        m297 = Menu.query.get(297)
+        if (
+            m297.parent_id != 0
+            or m297.menu_type != "M"
+            or m297.menu_name != "EVA流水编排"
+            or m297.path != "/eva"
+            or m297.order_num != 2
+        ):
+            m297.parent_id = 0
+            m297.menu_type = "M"
+            m297.menu_name = "EVA流水编排"
+            m297.path = "/eva"
+            m297.component = None
+            m297.perms = None
+            m297.icon = m297.icon or "Share"
+            m297.order_num = 2
+            changed = True
+
+    m298 = Menu.query.get(298)
+    if m298 and (
+        m298.parent_id != 297
+        or m298.path != "/ai/pipeline"
+        or m298.menu_name != "视频分析流水线"
+        or m298.order_num != 1
+    ):
+        m298.parent_id = 297
+        m298.path = "/ai/pipeline"
+        m298.component = m298.component or "ai/pipeline/index"
+        m298.menu_name = "视频分析流水线"
+        m298.icon = m298.icon or "Connection"
+        m298.order_num = 1
+        changed = True
+
+    m299 = Menu.query.get(299)
+    if m299 and (
+        m299.parent_id != 297
+        or m299.path != "/ai/pipeline/metrics"
+        or m299.menu_name != "流水线指标"
+        or m299.order_num != 2
+    ):
+        m299.parent_id = 297
+        m299.path = "/ai/pipeline/metrics"
+        m299.component = m299.component or "ai/pipeline/metrics"
+        m299.menu_name = "流水线指标"
+        m299.icon = m299.icon or "DataLine"
+        m299.order_num = 2
+        # 指标页复用 query 权限
+        m299.perms = m299.perms or "ai:pipeline:query"
+        changed = True
+
+    # 角色补挂根目录
+    m297 = Menu.query.get(297)
+    if m297:
+        for role in Role.query.all():
+            ids = {m.id for m in role.menus}
+            need = False
+            if 298 in ids or 299 in ids:
+                need = True
+            if need and 297 not in ids:
+                role.menus = list(role.menus) + [m297]
+                changed = True
 
     if changed:
         db.session.commit()
@@ -224,17 +312,17 @@ def _patch_video_surveillance_menu():
         if m245.menu_name != "视频监控":
             m245.menu_name = "视频监控"
             changed = True
-        # 根级顺序由 _regroup_model_menus 统一：模型管理(0) / AI(1) / 视频监控(2) / 系统(3)
-        if m245.order_num != 2:
-            m245.order_num = 2
+        # 根级顺序：模型管理(0) / AI(1) / EVA(2) / 视频监控(3) / 系统(4)
+        if m245.order_num != 3:
+            m245.order_num = 3
             changed = True
     m241 = Menu.query.get(241)
     if m241 and m241.menu_name != "监控墙":
         m241.menu_name = "监控墙"
         changed = True
     m1 = Menu.query.get(1)
-    if m1 and m1.order_num != 3:
-        m1.order_num = 3
+    if m1 and m1.order_num != 4:
+        m1.order_num = 4
         changed = True
     if changed:
         db.session.commit()
@@ -484,6 +572,18 @@ def seed_ai_menus():
                     path="/ai/defect", component="ai/defect/index", icon="DocumentChecked",
                     order=17, grant_common=True)
     _ensure_ai_menu(2961, 296, "缺陷诊断查询", "F", "ai:defect:query", grant_common=True)
+    # EVA 流水编排根目录 + 子菜单（先建目录，再挂叶子；老库由 _regroup_eva_pipeline_menus 迁移）
+    _ensure_ai_menu(297, 0, "EVA流水编排", "M", None,
+                    path="/eva", icon="Share", order=2, grant_common=True)
+    _ensure_ai_menu(298, 297, "视频分析流水线", "C", "ai:pipeline:list",
+                    path="/ai/pipeline", component="ai/pipeline/index", icon="Connection",
+                    order=1, grant_common=True)
+    _ensure_ai_menu(2981, 298, "流水线查询", "F", "ai:pipeline:query", grant_common=True)
+    _ensure_ai_menu(2982, 298, "流水线控制", "F", "ai:pipeline:edit")
+    _ensure_ai_menu(299, 297, "流水线指标", "C", "ai:pipeline:query",
+                    path="/ai/pipeline/metrics", component="ai/pipeline/metrics", icon="DataLine",
+                    order=2, grant_common=True)
+    _regroup_eva_pipeline_menus()
     # 检测告警（视觉识别 230 下）
     _ensure_ai_menu(276, 230, "检测告警", "C", "ai:alert:list",
                     path="/ai/alert", component="ai/alert/index", icon="Bell",
@@ -506,6 +606,7 @@ def seed_ai_menus():
     _ensure_ai_menu(2603, 260, "训练修改", "F", "ai:training:edit")
     _ensure_ai_menu(2604, 260, "训练删除", "F", "ai:training:remove")
     _regroup_model_menus()
+    _regroup_eva_pipeline_menus()
     return True
 
 

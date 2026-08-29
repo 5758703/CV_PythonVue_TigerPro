@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity, ArrowRight, Boxes, BrainCircuit, CheckCircle2, ChevronRight, CircleDot,
-  Database, ExternalLink, FolderKanban, GitBranch, Hand, BookOpen, Play, ScanFace,
+  Database, ExternalLink, FolderKanban, GitBranch, Hand, BookOpen, Mic, Play, ScanFace,
   ScanLine, ShieldCheck, Sparkles, Target, TrendingUp, Users, Workflow,
 } from 'lucide-vue-next'
 
@@ -134,7 +134,10 @@ const steps = [
 ]
 
 const scenarios = [
-  { title: '跨镜重识别', description: '多路 MTMC 全局 ID，车辆车牌融合，监控墙 AI 叠加。', tag: '跨镜追踪', tagTone: 'blue', icon: Workflow, path: '/ai/mtmc' },
+  { title: '开放词汇检测', description: 'OmDet-Turbo：输入类别列表做零样本检测，与固定类 YOLO 并存。', tag: '开放词汇', tagTone: 'blue', icon: Sparkles, path: '/ai/image' },
+  { title: '多模态定位', description: 'VLM-FO1：自然语言 / REC 细粒度定位，YOLO 候选 + FO1 筛选。', tag: '多模态', tagTone: 'pink', icon: BrainCircuit, path: '/ai/image' },
+  { title: '语音转写 ASR', description: 'MOSS 多人说话人转写与时间戳，支持音视频与字幕导出。', tag: '语音识别', tagTone: 'red', icon: Mic, path: '/ai/asr' },
+  { title: '跨镜重识别', description: '三档门控 + 证据落库 + 候选晋升，多路全局 ID 与监控墙叠加。', tag: '跨镜追踪', tagTone: 'blue', icon: Workflow, path: '/ai/mtmc' },
   { title: '跌倒检测', description: '姿态四指标判定，支持图片、视频与实时摄像头。', tag: '安全监测', tagTone: 'red', icon: ShieldCheck, path: '/ai/fall' },
   { title: '手势识别', description: '数字手势与中国手语识别，支持多视角输入。', tag: '姿态识别', tagTone: 'pink', icon: Hand, path: '/ai/handpose' },
   { title: '人员离岗检测', description: '多工位在岗判定，支持移动镜头运动补偿。', tag: '行为分析', tagTone: 'orange', icon: Users, path: '/ai/track', query: { scenario: 'absence' } },
@@ -144,10 +147,10 @@ const scenarios = [
 ]
 
 const heroTags = [
-  ['目标检测', 'blue'],
-  ['模型训练', 'blue'],
-  ['智能问答', 'orange'],
-  ['语音识别', 'red'],
+  ['开放词汇', 'blue'],
+  ['多模态定位', 'pink'],
+  ['语音 ASR', 'red'],
+  ['跨镜 MTMC', 'blue'],
 ]
 
 const runItems = computed(() => {
@@ -305,6 +308,7 @@ onUnmounted(() => {
               <h1>让每一个 AI 模型，都能更快走向可用</h1>
               <p class="hero-description">
                 统一管理视觉、文本与语音模型。从数据构建、训练评估到在线测试，在一个清晰的工作流中完成。
+                近期已接入 OmDet 开放词汇检测、VLM-FO1 自然语言定位、MOSS 多人 ASR，以及跨镜 MTMC 证据落库与候选人工核对。
               </p>
             </div>
             <div class="actions">

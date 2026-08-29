@@ -1,0 +1,31 @@
+{
+  "id": "tpl_rtsp_yolo_overlay",
+  "version": 1,
+  "name": "RTSP→YOLO→Overlay",
+  "nodes": [
+    {
+      "id": "n_src",
+      "type": "source.rtsp",
+      "config": { "cameraId": 1 }
+    },
+    {
+      "id": "n_det",
+      "type": "detect.yolo",
+      "config": {
+        "modelKey": "yolo26n",
+        "modelId": null,
+        "conf": 0.35,
+        "sampleFps": 4
+      }
+    },
+    {
+      "id": "n_ov",
+      "type": "sink.overlay",
+      "config": {}
+    }
+  ],
+  "edges": [
+    ["n_src", "n_det"],
+    ["n_det", "n_ov"]
+  ]
+}

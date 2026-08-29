@@ -1,0 +1,6 @@
+# EMQX Cloud CA（Serverless / TLS）。到期日以控制台为准（当前约 2031-11-10）。
+# 下载自 EMQX Cloud 部署「连接信息」；勿放入私钥。
+*
+!.gitignore
+!emqxsl-ca.crt
+!README.md

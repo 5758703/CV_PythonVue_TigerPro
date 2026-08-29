@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import threading
+import time
 from datetime import datetime
 
 import requests
@@ -73,3 +74,72 @@ def deliver_webhook_async(app_pk: int, event: str, payload: dict):
                 db.session.rollback()
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def deliver_url_webhook(
+    url: str,
+    event: str,
+    payload: dict,
+    *,
+    secret: str | None = None,
+    timeout: float = 8.0,
+    retries: int = 2,
+) -> bool:
+    """向任意 URL 投递事件（流水线 sink.webhook），HMAC 可选；失败短暂重试。"""
+    url = (url or "").strip()
+    if not url:
+        return False
+    body_obj = {
+        "event": event,
+        "deliveredAt": datetime.utcnow().isoformat() + "Z",
+        "data": payload,
+    }
+    raw = json.dumps(body_obj, ensure_ascii=False, default=str).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "X-TigerPro-Event": event,
+        "User-Agent": "TigerPro-Pipeline-Webhook/1.0",
+    }
+    if secret:
+        headers["X-TigerPro-Signature"] = "sha256=" + _sign(secret, raw)
+    attempts = max(1, int(retries) + 1)
+    last_exc = None
+    for i in range(attempts):
+        try:
+            resp = requests.post(url, data=raw, headers=headers, timeout=timeout)
+            ok = 200 <= resp.status_code < 300
+            if ok:
+                return True
+            log.warning("pipeline webhook %s -> %s status=%s attempt=%s", event, url, resp.status_code, i + 1)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            log.warning("pipeline webhook %s failed attempt=%s: %s", event, i + 1, exc)
+        if i + 1 < attempts:
+            time.sleep(0.2 * (i + 1))
+    if last_exc:
+        log.warning("pipeline webhook %s exhausted retries: %s", event, last_exc)
+    return False
+
+
+def deliver_url_webhook_async(
+    url: str,
+    event: str,
+    payload: dict,
+    *,
+    secret: str | None = None,
+    on_done=None,
+) -> bool:
+    """异步投递；立即返回 True 表示已调度。on_done(success: bool)。"""
+    if not (url or "").strip():
+        return False
+
+    def _run():
+        ok = deliver_url_webhook(url, event, payload, secret=secret)
+        if callable(on_done):
+            try:
+                on_done(ok)
+            except Exception:  # noqa: BLE001
+                pass
+
+    threading.Thread(target=_run, daemon=True).start()
+    return True

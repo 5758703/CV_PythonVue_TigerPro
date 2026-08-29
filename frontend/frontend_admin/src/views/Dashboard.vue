@@ -33,9 +33,10 @@
           <span class="hero-sub">多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 多模态 全栈纳管</span>
           <span class="hero-desc">
             一站式管理与在线测试多种 AI 模型：从 <b>HuggingFace / ModelScope / Roboflow</b> 拉取权重、统一纳管、按任务即点即测。
-            平台现支持 <b>14+ 类 AI 任务</b>，推理引擎涵盖 <b>YOLO · ByteTrack · InsightFace · MediaPipe · transformers · funasr · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行。
-            近期重点：<b>跨镜 MTMC 重识别</b>（多路全局 ID + 车牌融合 + 监控墙 AI 叠加）、<b>跌倒检测</b>、<b>手势识别（含中国手语）</b>、
-            <b>项目门户</b>与 <b>Windows 屏幕 RTSP 推流</b>；目标追踪覆盖车辆 / 离岗；图片检测可调 <b>DeepSeek AI</b> 生成分析报告。
+            平台现支持 <b>14+ 类 AI 任务</b>，推理引擎涵盖 <b>YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · transformers · funasr / MOSS · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行（大模型建议 GPU）。
+            近期重点：<b>开放词汇检测 OmDet-Turbo</b>、<b>多模态定位 VLM-FO1</b>、<b>ASR（MOSS 多人转写）</b>、
+            <b>跨镜 MTMC</b>（三档门控 · 证据落库 · 候选晋升）、<b>跌倒检测</b>、<b>手势识别</b>、<b>项目门户</b>与 <b>屏幕 RTSP</b>；
+            目标追踪覆盖车辆 / 离岗；图片检测可调 <b>DeepSeek AI</b> 生成分析报告。
           </span>
         </div>
         <div class="hero-tags" :title="heroTags.map((t) => t.label).join(' · ')">
@@ -131,12 +132,15 @@ import { modelApi, trainingApi } from "../api/ai";
 const heroIntroFull =
   "多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 多模态 全栈纳管。" +
   "一站式管理与在线测试多种 AI 模型：从 HuggingFace / ModelScope / Roboflow 拉取权重、统一纳管、按任务即点即测。" +
-  "平台现支持 14+ 类 AI 任务，推理引擎涵盖 YOLO · ByteTrack · InsightFace · MediaPipe · transformers · funasr · RF-DETR 等，纯 CPU 即可运行。" +
-  "近期重点：跨镜 MTMC 重识别（多路全局 ID + 车牌融合 + 监控墙 AI 叠加）、跌倒检测、手势识别（含中国手语）、项目门户与 Windows 屏幕 RTSP 推流；" +
+  "平台现支持 14+ 类 AI 任务，推理引擎涵盖 YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · transformers · funasr / MOSS · RF-DETR 等，纯 CPU 即可运行（大模型建议 GPU）。" +
+  "近期重点：开放词汇检测 OmDet-Turbo、多模态定位 VLM-FO1、ASR（MOSS 多人转写）、跨镜 MTMC（三档门控 + 证据落库 + 候选晋升）、跌倒检测、手势识别、项目门户与 Windows 屏幕 RTSP；" +
   "目标追踪覆盖车辆 / 离岗；图片检测可调 DeepSeek AI 生成分析报告。";
 
 const heroTags = [
-  { label: "跨镜 MTMC · 全局 ID", color: "#531dab" },
+  { label: "OmDet · 开放词汇检测", color: "#0958d9" },
+  { label: "VLM-FO1 · 自然语言定位", color: "#531dab" },
+  { label: "ASR · MOSS 多人转写", color: "#c41d7f" },
+  { label: "跨镜 MTMC · 证据落库", color: "#391085" },
   { label: "跌倒检测 · 告警音", color: "#cf1322" },
   { label: "手势识别 · 中国手语", color: "#eb2f96" },
   { label: "项目门户 · 双前端", color: "#08979c" },
@@ -162,9 +166,27 @@ const heroTags = [
 /** 首页「热门场景」快捷入口（含近期新增能力，精简展示） */
 const sceneCards = [
   {
+    title: "开放词汇检测",
+    badge: "NEW",
+    desc: "OmDet-Turbo · 文本类别零样本检测 · 图像页提示类别",
+    to: { path: "/ai/image" },
+  },
+  {
+    title: "多模态定位",
+    badge: "NEW",
+    desc: "VLM-FO1 · 自然语言 / REC 定位 · YOLO 候选 + FO1 筛选",
+    to: { path: "/ai/image" },
+  },
+  {
+    title: "语音转写 ASR",
+    badge: "NEW",
+    desc: "MOSS 多人识别 · 时间戳 · 音/视频 · 字幕导出 SRT/ASS",
+    to: { path: "/ai/asr" },
+  },
+  {
     title: "跨镜重识别",
     badge: "NEW",
-    desc: "多路 MTMC · McByte++ 关联 · 全局 ID · 车牌融合 · 监控墙 AI 叠加",
+    desc: "三档门控 · 证据落库 · 候选晋升 · 全局 ID · 监控墙叠加",
     to: { path: "/ai/mtmc" },
   },
   {
@@ -181,19 +203,16 @@ const sceneCards = [
   },
   {
     title: "吸烟行为检测",
-    badge: "NEW",
     desc: "YOLO26s 禁烟区监控 · 吸烟告警规则 · 图片/视频/摄像头",
     to: { path: "/ai/image" },
   },
   {
     title: "项目门户",
-    badge: "NEW",
     desc: "frontend_home 宣传入口 · Cookie 登录态互通 · 控制台深链",
     to: { path: "/index" },
   },
   {
     title: "屏幕 RTSP 推流",
-    badge: "NEW",
     desc: "Windows 桌面推流进摄像头/监控墙 · 无实体摄像头联调",
     to: { path: "/camera" },
   },

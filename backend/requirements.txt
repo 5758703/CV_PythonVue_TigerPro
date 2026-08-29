@@ -64,6 +64,9 @@ sherpa-onnx==1.13.3
 roboflow==1.3.13
 # DeepSeek AI 报告：HTTP 调用 + 纯逻辑单测
 requests==2.32.3
+# EMQX / MQTT 旁路推送（流水线 sink.mqtt；默认 MQTT_ENABLED=0）
+# 钉 1.6.x：与部分已装包（如 inference 要求 paho-mqtt~=1.6.1）兼容；mqtt_bus 同时兼容 2.x API
+paho-mqtt>=1.6.1,<2.0.0
 pytest==8.3.3
 # VoxCPM2 文本转语音 / 音色克隆 / 音色设计（openbmb/VoxCPM2，HF voxcpm 库，48kHz 输出）
 # 注意：安装 voxcpm 会把 modelscope 升到 ~1.37、datasets 升到 ~3.6（torch 2.11.0 不受影响，已验证 import app/funasr/modelscope 正常）。

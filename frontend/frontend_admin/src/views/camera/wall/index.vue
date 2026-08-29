@@ -4,8 +4,9 @@
       <div class="bar-title">
         <span class="title">监控墙</span>
         <el-tag size="small" type="success" effect="dark">RTSP 7×24</el-tag>
-        <el-tag v-if="aiOverlay" size="small" type="warning" effect="dark">MTMC AI</el-tag>
-        <span class="sub">多路共享拉流 · 断线自动重连{{ aiOverlay ? ' · 跨镜重识别叠加' : '' }}</span>
+        <el-tag v-if="aiOverlay && aiMode === 'mtmc'" size="small" type="warning" effect="dark">MTMC AI</el-tag>
+        <el-tag v-else-if="aiOverlay && aiMode === 'pipeline'" size="small" type="danger" effect="dark">流水线 AI</el-tag>
+        <span class="sub">多路共享拉流 · 断线自动重连{{ aiOverlayHint }}</span>
       </div>
       <el-radio-group v-model="layout" size="small" @change="onLayoutChange">
         <el-radio-button :value="1">1 屏</el-radio-button>
@@ -16,12 +17,30 @@
       </el-radio-group>
       <div class="bar-right">
         <el-switch v-model="aiOverlay" active-text="AI 叠加" @change="onAiToggle" />
-        <el-input
+        <el-select
           v-if="aiOverlay"
+          v-model="aiMode"
+          size="small"
+          style="width: 120px"
+          @change="onAiModeChange"
+        >
+          <el-option label="MTMC" value="mtmc" />
+          <el-option label="流水线" value="pipeline" />
+        </el-select>
+        <el-input
+          v-if="aiOverlay && aiMode === 'mtmc'"
           v-model="mtmcSessionId"
           size="small"
           placeholder="MTMC 会话 ID"
           style="width: 160px"
+          @change="reloadAll"
+        />
+        <el-input
+          v-if="aiOverlay && aiMode === 'pipeline'"
+          v-model="pipelineRunKey"
+          size="small"
+          placeholder="可选 runKey（空则按摄像头）"
+          style="width: 180px"
           @change="reloadAll"
         />
         <el-switch v-model="autoReconnect" active-text="自动重连" inactive-text="" />
@@ -99,6 +118,7 @@ import { Refresh, FullScreen, VideoCamera } from '@element-plus/icons-vue'
 
 import { cameraApi } from '../../../api/camera'
 import { mtmcApi } from '../../../api/mtmc'
+import { pipelineApi } from '../../../api/pipeline'
 
 const MAX = 16
 const COLS = { 1: 1, 4: 2, 6: 3, 9: 3, 16: 4 }
@@ -112,7 +132,9 @@ const isFull = ref(false)
 const singleIdx = ref(null)
 const autoReconnect = ref(true)
 const aiOverlay = ref(false)
+const aiMode = ref('mtmc') // mtmc | pipeline
 const mtmcSessionId = ref('')
+const pipelineRunKey = ref('')
 /** null=未校验, true/false=会话是否可用 */
 const overlaySessionActive = ref(null)
 let overlayFallbackOnce = false
@@ -127,6 +149,10 @@ const cells = reactive(Array.from({ length: MAX }, () => ({
 })))
 
 const gridStyle = computed(() => ({ gridTemplateColumns: `repeat(${COLS[layout.value]}, 1fr)` }))
+const aiOverlayHint = computed(() => {
+  if (!aiOverlay.value) return ''
+  return aiMode.value === 'pipeline' ? ' · 视频分析流水线叠加' : ' · 跨镜重识别叠加'
+})
 
 const cameraName = (id) => cameras.value.find((c) => c.id === id)?.name || '未绑定'
 const statusLabel = (cell) => ({
@@ -150,10 +176,18 @@ const clearTimer = (i) => {
 }
 
 const useOverlayStream = () => (
-  aiOverlay.value && mtmcSessionId.value && overlaySessionActive.value === true
+  aiOverlay.value && overlaySessionActive.value === true && (
+    (aiMode.value === 'mtmc' && !!mtmcSessionId.value)
+    || aiMode.value === 'pipeline'
+  )
 )
 
 const refreshOverlaySession = async () => {
+  if (aiMode.value === 'pipeline') {
+    // 按摄像头探测：只要有任一 cell 绑定摄像头即可；真正是否有流在 setSrc 时按 cam 取
+    overlaySessionActive.value = true
+    return true
+  }
   if (!mtmcSessionId.value) {
     overlaySessionActive.value = false
     return false
@@ -165,6 +199,13 @@ const refreshOverlaySession = async () => {
     overlaySessionActive.value = false
   }
   return overlaySessionActive.value
+}
+
+const onAiModeChange = async () => {
+  overlayFallbackOnce = false
+  await refreshOverlaySession()
+  reloadAll()
+  persist()
 }
 
 const disableOverlayFallback = (msg) => {
@@ -194,7 +235,15 @@ const setSrc = (i, { force = false } = {}) => {
   }
   const bust = force || cell.retries > 0 ? String(Date.now()) : ''
   if (useOverlayStream()) {
-    cell.src = mtmcApi.overlayUrl(mtmcSessionId.value, cell.cameraId, bust)
+    if (aiMode.value === 'pipeline') {
+      if (pipelineRunKey.value) {
+        cell.src = pipelineApi.overlayUrl(pipelineRunKey.value, bust)
+      } else {
+        cell.src = pipelineApi.overlayByCameraUrl(cell.cameraId, bust)
+      }
+    } else {
+      cell.src = mtmcApi.overlayUrl(mtmcSessionId.value, cell.cameraId, bust)
+    }
   } else {
     cell.src = cameraApi.streamUrl(cell.cameraId, bust)
   }
@@ -242,21 +291,29 @@ const onBind = (i) => {
 const onAiToggle = async () => {
   if (aiOverlay.value) {
     overlayFallbackOnce = false
-    if (!mtmcSessionId.value) {
-      mtmcSessionId.value = localStorage.getItem('mtmc-session-id') || ''
-    }
-    if (!mtmcSessionId.value) {
-      ElMessage.warning('请先在「跨镜重识别」页启动会话，或填写会话 ID')
-      aiOverlay.value = false
-      persist()
-      return
-    }
-    await refreshOverlaySession()
-    if (!overlaySessionActive.value) {
-      ElMessage.warning('跨镜会话未运行，请先在「跨镜重识别」页启动会话')
-      aiOverlay.value = false
-      persist()
-      return
+    if (aiMode.value === 'pipeline') {
+      if (!pipelineRunKey.value) {
+        pipelineRunKey.value = localStorage.getItem('pipeline-run-key') || ''
+      }
+      await refreshOverlaySession()
+      // 按摄像头叠加：允许无 runKey
+    } else {
+      if (!mtmcSessionId.value) {
+        mtmcSessionId.value = localStorage.getItem('mtmc-session-id') || ''
+      }
+      if (!mtmcSessionId.value) {
+        ElMessage.warning('请先在「跨镜重识别」页启动会话，或填写会话 ID')
+        aiOverlay.value = false
+        persist()
+        return
+      }
+      await refreshOverlaySession()
+      if (!overlaySessionActive.value) {
+        ElMessage.warning('跨镜会话未运行，请先在「跨镜重识别」页启动会话')
+        aiOverlay.value = false
+        persist()
+        return
+      }
     }
   } else {
     overlaySessionActive.value = null
@@ -303,7 +360,9 @@ const persist = () => {
     binds: cells.map((c) => c.cameraId),
     autoReconnect: autoReconnect.value,
     aiOverlay: aiOverlay.value,
+    aiMode: aiMode.value,
     mtmcSessionId: mtmcSessionId.value,
+    pipelineRunKey: pipelineRunKey.value,
   }))
 }
 const restore = () => {
@@ -312,7 +371,9 @@ const restore = () => {
     if (data.layout && COLS[data.layout]) layout.value = data.layout
     if (typeof data.autoReconnect === 'boolean') autoReconnect.value = data.autoReconnect
     if (typeof data.aiOverlay === 'boolean') aiOverlay.value = data.aiOverlay
+    if (data.aiMode === 'pipeline' || data.aiMode === 'mtmc') aiMode.value = data.aiMode
     if (data.mtmcSessionId) mtmcSessionId.value = data.mtmcSessionId
+    if (data.pipelineRunKey) pipelineRunKey.value = data.pipelineRunKey
     if (Array.isArray(data.binds)) {
       data.binds.forEach((id, i) => { if (i < MAX) cells[i].cameraId = id || null })
     }
@@ -326,10 +387,10 @@ const loadCameras = async () => {
 
 const reloadAll = async () => {
   await loadCameras()
-  if (aiOverlay.value && mtmcSessionId.value) {
+  if (aiOverlay.value) {
     overlayFallbackOnce = false
     await refreshOverlaySession()
-    if (!overlaySessionActive.value) {
+    if (aiMode.value === 'mtmc' && !overlaySessionActive.value) {
       disableOverlayFallback('跨镜会话未运行，已切换为普通监控流')
       return
     }
@@ -354,16 +415,25 @@ onMounted(async () => {
   pageAlive.value = true
   overlayFallbackOnce = false
   restore()
-  if (route.query.mtmc) {
+  if (route.query.ai === 'pipeline') {
+    aiMode.value = 'pipeline'
+    aiOverlay.value = true
+    if (route.query.runKey) pipelineRunKey.value = String(route.query.runKey)
+    else if (!pipelineRunKey.value) pipelineRunKey.value = localStorage.getItem('pipeline-run-key') || ''
+    if (route.query.cameraId && !cells[0].cameraId) {
+      cells[0].cameraId = Number(route.query.cameraId) || null
+    }
+  } else if (route.query.mtmc) {
     mtmcSessionId.value = String(route.query.mtmc)
+    aiMode.value = 'mtmc'
     aiOverlay.value = true
   } else if (route.query.ai === '1') {
     aiOverlay.value = true
     if (!mtmcSessionId.value) mtmcSessionId.value = localStorage.getItem('mtmc-session-id') || ''
   }
-  if (aiOverlay.value && mtmcSessionId.value) {
+  if (aiOverlay.value) {
     await refreshOverlaySession()
-    if (!overlaySessionActive.value) {
+    if (aiMode.value === 'mtmc' && !overlaySessionActive.value) {
       disableOverlayFallback('跨镜会话未运行（可能后端已重启），已切换为普通监控流')
     }
   }

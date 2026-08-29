@@ -99,6 +99,20 @@ class Config:
     except ValueError:
         DEFECT_SUSPICIOUS_CONF = 0.45
 
+    # MQTT / EMQX（默认关闭；见 docs/emqx-mqtt-usage-scenarios.md）
+    MQTT_ENABLED = (os.getenv("MQTT_ENABLED") or "0").strip() in ("1", "true", "True", "yes")
+    MQTT_BROKER = os.getenv("MQTT_BROKER", "127.0.0.1")
+    MQTT_PORT = int(os.getenv("MQTT_PORT", "1883") or 1883)
+    MQTT_USERNAME = os.getenv("MQTT_USERNAME", "")
+    MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "")
+    MQTT_TLS = (os.getenv("MQTT_TLS") or "0").strip() in ("1", "true", "True", "yes")
+    MQTT_CA_CERTS = os.getenv("MQTT_CA_CERTS", "")
+    MQTT_CLIENT_ID_PREFIX = os.getenv("MQTT_CLIENT_ID_PREFIX", "tigerpro-backend")
+    MQTT_TOPIC_PREFIX = (os.getenv("MQTT_TOPIC_PREFIX") or "tigerpro/dev").rstrip("/")
+    MQTT_SITE = os.getenv("MQTT_SITE", "default")
+    # EMQX Cloud Serverless WebSocket over TLS（前端/MQTT.js；后端 Publish 用 8883）
+    MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "8084") or 8084)
+
     # 开放平台 / 对象存储（P1–P3）
     OBJECT_STORE_BACKEND = (os.getenv("OBJECT_STORE_BACKEND") or "local").strip().lower()
     S3_BUCKET = os.getenv("S3_BUCKET", "")

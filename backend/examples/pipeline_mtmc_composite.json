@@ -1,0 +1,33 @@
+{
+  "id": "tpl_mtmc_composite",
+  "version": 1,
+  "name": "MTMC跨镜复合",
+  "nodes": [
+    {
+      "id": "n_mtmc",
+      "type": "composite.mtmc",
+      "config": {
+        "cameraIds": [1, 2],
+        "enablePerson": true,
+        "enableVehicle": true,
+        "persistEvents": true,
+        "ownSession": true,
+        "sampleFps": 4,
+        "appearThresh": 0.48
+      },
+      "position": { "x": 80, "y": 180 }
+    },
+    { "id": "n_db", "type": "sink.db", "config": {}, "position": { "x": 420, "y": 100 } },
+    {
+      "id": "n_mqtt",
+      "type": "sink.mqtt",
+      "config": {
+        "topic": "mtmc/{site}/cross",
+        "qos": 1,
+        "event": "mtmc.cross_camera"
+      },
+      "position": { "x": 420, "y": 260 }
+    }
+  ],
+  "edges": [["n_mtmc", "n_db"], ["n_mtmc", "n_mqtt"]]
+}

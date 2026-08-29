@@ -20,6 +20,8 @@
 | [Supervision 使用汇总](../supervision-usage.md) | RF-DETR 与 supervision.Detections / Annotator |
 | [前端总览](../../frontend/README.md) | 门户 `frontend_home` + 控制台 `frontend_admin` |
 | [行人重识别](../person-reid.md) | Youtu ReID、独立底库与混合人脸 |
+| [EMQX / MQTT 场景分析](../emqx-mqtt-usage-scenarios.md) | Paho Python ↔ 告警/MTMC/离岗等接入场景（分析文档） |
+| [边缘 AI 视频分析引擎可行性](../edge-ai-video-pipeline-engine.md) | 拖拽流水线 · ONNX · RTSP · 告警推送 生产方案 |
 | [人脸识别](../face-recognition.md) | InsightFace + YuNet+SFace |
 | [OpenCV Zoo 轻量视觉](../opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet 等 |
 | 更多见根目录 [README 文档表](../../README.md#文档) | |
