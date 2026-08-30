@@ -909,3 +909,23 @@ def test_rider_proxy_does_not_duplicate_real_person():
                   "bbox": [100, 180, 180, 240]}
     out = supplement_rider_person_dets([person], [motorcycle], frame_w=640, frame_h=360)
     assert out == [person]
+
+
+def test_one_sided_rider_proxy_uses_stronger_color_fusion():
+    assoc = MtmcAssociator(
+        appear_thresh=0.48, confirm_thresh=0.48, candidate_thresh=0.30,
+        topology={(71, 81): (0.0, 30.0), (81, 71): (0.0, 30.0)},
+    )
+    emb71 = np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+    emb81 = np.asarray([0.0, 1.0, 0.0], dtype=np.float32)
+    color71 = np.asarray([1.0, 0.0], dtype=np.float32)
+    color81 = np.asarray([0.65, np.sqrt(1.0 - 0.65**2)], dtype=np.float32)
+    first = assoc.associate(
+        object_type="person", camera_id=71, embedding=emb71, color_sig=color71,
+        visual_key="rider", local_track_id=1, now=10.0,
+    )
+    second = assoc.associate(
+        object_type="person", camera_id=81, embedding=emb81, color_sig=color81,
+        local_track_id=2, now=11.0,
+    )
+    assert second.global_id == first.global_id

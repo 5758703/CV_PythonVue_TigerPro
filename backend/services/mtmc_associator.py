@@ -722,7 +722,9 @@ class MtmcAssociator:
                     reid_raw = centroid_cos
                 # 颜色签名：跨视角外观弱时抬分（红帽/米色衫/白盔等）
                 csim = color_sig_cosine(color_sig, g.color_sig)
-                rider_pair = visual_key == "rider" and g.visual_key == "rider"
+                # One view may detect the full person while the opposite view
+                # only sees the motorcycle-derived rider proxy.
+                rider_pair = visual_key == "rider" or g.visual_key == "rider"
                 if not same_cam and csim >= 0.55 and reid_raw is not None and reid_raw >= 0:
                     # Rider pose changes sharply between cameras; clothing color
                     # is more stable than a person model distorted by the bike.
