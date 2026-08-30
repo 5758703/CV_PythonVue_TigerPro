@@ -34,8 +34,15 @@
     </el-tabs>
 
     <div v-show="mainTab === 'flow'" class="eva-body">
-      <div ref="canvasRef" class="eva-canvas" @drop="onCanvasDrop" @dragover.prevent>
+      <div
+        ref="canvasRef"
+        class="eva-canvas"
+        @drop="onCanvasDrop"
+        @dragover.prevent
+        @contextmenu.capture.prevent="onCanvasContextMenu"
+      >
         <VueFlow
+          id="eva-pipeline"
           v-model:nodes="nodes"
           v-model:edges="edges"
           :node-types="nodeTypes"
@@ -237,6 +244,48 @@
         <el-button type="danger" plain @click="removeSelected">删除节点</el-button>
       </el-form>
     </el-drawer>
+
+    <!-- 画布右键菜单 -->
+    <Teleport to="body">
+      <div
+        v-if="ctxMenu.visible"
+        class="eva-ctx-overlay"
+        @click="closeCtxMenu"
+        @contextmenu.prevent="closeCtxMenu"
+      >
+        <div
+          class="eva-ctx-menu"
+          :class="ctxMenu.target === 'pane' ? 'ctx-menu-add' : 'ctx-menu-node'"
+          :style="ctxMenuStyle"
+          @click.stop
+          @contextmenu.prevent
+        >
+          <!-- 空白画布：仅添加节点 -->
+          <template v-if="ctxMenu.target === 'pane'">
+            <div class="ctx-section-hd">添加节点</div>
+            <div class="ctx-picker">
+              <button
+                v-for="nt in paletteTypes"
+                :key="nt.type"
+                type="button"
+                class="ctx-picker-item"
+                @click="ctxAddComponent(nt.type)"
+              >
+                <span class="ctx-dot" :style="{ background: nt.color || '#409eff' }" />
+                {{ nt.label }}
+              </button>
+              <div v-if="!paletteTypes.length" class="ctx-empty">加载中…</div>
+            </div>
+          </template>
+
+          <!-- 节点上：仅编辑 / 删除 -->
+          <template v-else>
+            <button type="button" class="ctx-item" @click="ctxEditNode">编辑节点</button>
+            <button type="button" class="ctx-item ctx-danger" @click="ctxDeleteNode">删除节点</button>
+          </template>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -245,7 +294,7 @@ import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch } f
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
-import { VueFlow, MarkerType } from '@vue-flow/core'
+import { VueFlow, MarkerType, useVueFlow } from '@vue-flow/core'
 import { Background, BackgroundVariant } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
@@ -255,6 +304,7 @@ import { pipelineApi } from '../../../api/pipeline'
 import PipelineNode from './PipelineNode.vue'
 
 const router = useRouter()
+const { screenToFlowCoordinate } = useVueFlow({ id: 'eva-pipeline' })
 const nodeTypes = { eva: markRaw(PipelineNode) }
 const bgVariant = BackgroundVariant.Dots
 const defaultEdgeOptions = {
@@ -284,6 +334,14 @@ const canvasRef = ref(null)
 const mainTab = ref('flow')
 const compDialog = ref(false)
 const drawerOpen = ref(false)
+const ctxMenu = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  target: 'pane',
+  nodeId: '',
+  flowPos: { x: 80, y: 160 },
+})
 let pollTimer = null
 let nodeSeq = 1
 
@@ -330,6 +388,20 @@ const dagJson = computed(() => JSON.stringify(graphToDag(), null, 2))
 const overlaySrc = computed(() => {
   if (!runKey.value) return ''
   return pipelineApi.overlayUrl(runKey.value, bust.value)
+})
+
+const ctxMenuStyle = computed(() => {
+  const pad = 8
+  const isPane = ctxMenu.target === 'pane'
+  const menuW = isPane ? 176 : 132
+  const menuH = isPane ? 168 : 76
+  let x = ctxMenu.x
+  let y = ctxMenu.y
+  if (typeof window !== 'undefined') {
+    x = Math.min(x, window.innerWidth - menuW - pad)
+    y = Math.min(y, window.innerHeight - menuH - pad)
+  }
+  return { left: `${x}px`, top: `${y}px` }
 })
 
 const metaOf = (type) => (nodeTypeMeta.value || []).find((t) => t.type === type) || { label: type, color: '#409eff' }
@@ -492,27 +564,97 @@ function onConnect(params) {
   edges.value = [...edges.value, { ...params, id, ...defaultEdgeOptions }]
 }
 
-function onNodeClick({ node }) {
+function selectNode(node) {
   selectedId.value = node.id
   Object.keys(editConfig).forEach((k) => delete editConfig[k])
   Object.assign(editConfig, { ...(node.data?.config || {}) })
   ruleIdsText.value = (editConfig.ruleIds || []).join(',')
   mtmcCamsText.value = (editConfig.cameraIds || []).join(',')
+}
+
+function onNodeClick({ node }) {
+  selectNode(node)
   drawerOpen.value = true
 }
 
 function onPaneClick() {
+  closeCtxMenu()
   selectedId.value = ''
   drawerOpen.value = false
 }
 
-function removeSelected() {
-  if (!selectedId.value) return
-  const id = selectedId.value
+function flowPosFromEvent(event) {
+  try {
+    return screenToFlowCoordinate({ x: event.clientX, y: event.clientY })
+  } catch (_) {
+    if (!canvasRef.value) return { x: 80, y: 160 }
+    const bounds = canvasRef.value.getBoundingClientRect()
+    return { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+  }
+}
+
+function openCtxMenu(event, target, nodeId = '') {
+  ctxMenu.visible = true
+  ctxMenu.target = target
+  ctxMenu.nodeId = nodeId
+  ctxMenu.x = event.clientX
+  ctxMenu.y = event.clientY
+  ctxMenu.flowPos = flowPosFromEvent(event)
+}
+
+function closeCtxMenu() {
+  ctxMenu.visible = false
+}
+
+function onCanvasContextMenu(event) {
+  const nodeWrap = event.target?.closest?.('.vue-flow__node')
+  if (nodeWrap) {
+    const nodeId = nodeWrap.getAttribute('data-id')
+    const node = nodes.value.find((n) => n.id === nodeId)
+    if (node) {
+      selectNode(node)
+      openCtxMenu(event, 'node', node.id)
+      return
+    }
+  }
+  if (selectedId.value) {
+    openCtxMenu(event, 'node', selectedId.value)
+    return
+  }
+  openCtxMenu(event, 'pane')
+}
+
+function ctxAddComponent(type) {
+  addNodeAt(type, { ...ctxMenu.flowPos })
+  closeCtxMenu()
+}
+
+function ctxEditNode() {
+  if (!ctxMenu.nodeId) return
+  const node = nodes.value.find((n) => n.id === ctxMenu.nodeId)
+  if (node) selectNode(node)
+  drawerOpen.value = true
+  closeCtxMenu()
+}
+
+function ctxDeleteNode() {
+  if (!ctxMenu.nodeId) return
+  removeNode(ctxMenu.nodeId)
+  closeCtxMenu()
+}
+
+function removeNode(id) {
   nodes.value = nodes.value.filter((n) => n.id !== id)
   edges.value = edges.value.filter((e) => e.source !== id && e.target !== id)
-  selectedId.value = ''
-  drawerOpen.value = false
+  if (selectedId.value === id) {
+    selectedId.value = ''
+    drawerOpen.value = false
+  }
+}
+
+function removeSelected() {
+  if (!selectedId.value) return
+  removeNode(selectedId.value)
 }
 
 async function applyTemplate() {
@@ -621,6 +763,10 @@ async function refreshLive() {
 
 watch(() => form.cameraId, () => syncCameraIntoGraph())
 
+function onCtxKeydown(ev) {
+  if (ev.key === 'Escape') closeCtxMenu()
+}
+
 onMounted(async () => {
   const nt = await pipelineApi.nodeTypes()
   nodeTypeMeta.value = nt.data.rows || []
@@ -629,10 +775,12 @@ onMounted(async () => {
   await applyTemplate()
   await loadList()
   pollTimer = setInterval(refreshLive, 2000)
+  window.addEventListener('keydown', onCtxKeydown)
 })
 
 onBeforeUnmount(() => {
   if (pollTimer) clearInterval(pollTimer)
+  window.removeEventListener('keydown', onCtxKeydown)
 })
 </script>
 
@@ -707,8 +855,14 @@ onBeforeUnmount(() => {
   background:
     radial-gradient(circle at 12% 18%, rgba(64, 158, 255, 0.08), transparent 42%),
     #eef3fa;
+  user-select: none;
 }
 .eva-canvas :deep(.vue-flow) { width: 100%; height: 100%; }
+.eva-canvas :deep(.vue-flow__pane),
+.eva-canvas :deep(.vue-flow__viewport),
+.eva-canvas :deep(.vue-flow__background) {
+  cursor: default;
+}
 .eva-fab {
   position: absolute;
   right: 18px;
@@ -825,6 +979,88 @@ onBeforeUnmount(() => {
   .eva-body { grid-template-columns: 1fr; }
   .eva-rail { border-left: none; border-top: 1px solid var(--eva-line); max-height: 240px; }
   .eva-canvas { min-height: 420px; }
+}
+
+.eva-ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+}
+.eva-ctx-menu {
+  position: fixed;
+  background: #fff;
+  border: 1px solid var(--eva-line);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
+  padding: 2px 0;
+  font-size: 12px;
+}
+.eva-ctx-menu.ctx-menu-add {
+  min-width: 176px;
+}
+.eva-ctx-menu.ctx-menu-node {
+  min-width: 132px;
+}
+.ctx-section-hd {
+  padding: 5px 10px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--eva-muted);
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--eva-ink);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ctx-item:hover {
+  background: #f0f7ff;
+  color: var(--eva-blue);
+}
+.ctx-danger { color: #f56c6c; }
+.ctx-danger:hover { background: #fef0f0; color: #f56c6c; }
+.ctx-picker {
+  max-height: min(140px, 25vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 2px 4px;
+}
+.ctx-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 4px 8px;
+  text-align: left;
+  font-size: 11px;
+  color: var(--eva-ink);
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1.25;
+}
+.ctx-picker-item:hover {
+  background: #f0f7ff;
+  color: var(--eva-blue);
+}
+.ctx-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ctx-empty {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--eva-muted);
+  text-align: center;
 }
 </style>
 
