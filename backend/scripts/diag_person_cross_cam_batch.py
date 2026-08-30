@@ -1,6 +1,7 @@
 """批量诊断用户截图 9 组行人/骑行人跨镜重识别（交错 flow + 孤立关联）。"""
 from __future__ import annotations
 
+import argparse
 import glob
 import os
 import sys
@@ -14,7 +15,7 @@ import numpy as np
 from scripts.diag_vehicle_cross_cam_batch import P71, P81, SAMPLE_FPS, load_models
 from scripts.eval_mtmc_cross_cam import build_session, open_captures, resize_frame
 from services.mtmc_associator import MtmcAssociator
-from services.mtmc_engine import _crop, _detect
+from services.mtmc_engine import _crop, _detect, supplement_rider_person_dets
 from services.mtmc_local_track import create_local_tracker
 from services.reid_gallery import l2_normalize
 from services.strong_reid import extract_person_embedding, color_signature
@@ -253,7 +254,12 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
                 continue
             now = base_ts + t
             small = resize_frame(frame)
-            raw_p = _detect(det, small, 0.15, [0])
+            raw_all = _detect(det, small, 0.10, [0, 1, 3])
+            raw_p = supplement_rider_person_dets(
+                [d for d in raw_all if int(d.get("classId", -1)) == 0],
+                [d for d in raw_all if int(d.get("classId", -1)) in (1, 3)],
+                frame_w=small.shape[1], frame_h=small.shape[0],
+            )
             tracks = trackers[cid].update(raw_p, frame=small)
             claimed: set[str] = set()
             tt = t71 if cid == 71 else t81
@@ -278,6 +284,7 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
                 g = session.associator.associate(
                     object_type="person", camera_id=cid, embedding=emb,
                     color_sig=c_sig,
+                    visual_key="rider" if str(getattr(tr, "class_name", "")).lower() == "rider" else None,
                     local_track_id=int(tr.track_id), exclude_gids=claimed, now=now,
                 )
                 claimed.add(g.global_id)
@@ -324,12 +331,23 @@ def flow_test(t71: float, t81: float, refs: dict, dur: float, t_start: float = 0
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Evaluate labeled cross-camera person/rider cases")
+    parser.add_argument("--cases", default="", help="1-based comma-separated case numbers")
+    args = parser.parse_args()
+    selected = (
+        {int(x.strip()) - 1 for x in args.cases.split(",") if x.strip()}
+        if args.cases else set()
+    )
     models = load_models()
     print("=" * 60)
     print("跨镜行人/骑行人 ReID — 用户截图 9 组")
     print("=" * 60)
     passed = 0
+    evaluated = 0
     for idx, (name, t71, t81) in enumerate(PERSON_CASES):
+        if selected and idx not in selected:
+            continue
+        evaluated += 1
         print(f"\n--- {name}  cam71={t71:.0f}s  cam81={t81:.0f}s ---")
         refs = ref_from_screenshot(idx, models)
         if not refs.get(71) or not refs.get(81):
@@ -344,8 +362,8 @@ def main():
         print(f"  flow:     {'PASS' if flow.get('ok') else 'FAIL'}  {flow}")
         print(f"  >>> {'PASS' if ok else 'FAIL'}")
         passed += int(ok)
-    print(f"\n总计: {passed}/{len(PERSON_CASES)} 通过")
-    return 0 if passed == len(PERSON_CASES) else 1
+    print(f"\n总计: {passed}/{evaluated} 通过")
+    return 0 if passed == evaluated else 1
 
 
 if __name__ == "__main__":

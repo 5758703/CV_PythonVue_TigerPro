@@ -883,3 +883,29 @@ def test_active_gallery_keeps_distinct_camera_prototypes():
     gallery.upsert("vehicle", "V1", cam2, camera_id=2)
     assert gallery.max_similarity("vehicle", "V1", cam1, exclude_camera_id=2) > 0.99
     assert gallery.max_similarity("vehicle", "V1", cam1, exclude_camera_id=1) < 0.1
+
+
+def test_rider_proxy_supplements_missing_person_only_for_two_wheelers():
+    from services.mtmc_engine import supplement_rider_person_dets
+
+    vehicles = [
+        {"classId": 3, "className": "motorcycle", "confidence": 0.8,
+         "bbox": [100, 180, 180, 240]},
+        {"classId": 2, "className": "car", "confidence": 0.9,
+         "bbox": [250, 160, 420, 280]},
+    ]
+    out = supplement_rider_person_dets([], vehicles, frame_w=640, frame_h=360)
+    assert len(out) == 1
+    assert out[0]["className"] == "rider"
+    assert out[0]["bbox"][1] < vehicles[0]["bbox"][1]
+
+
+def test_rider_proxy_does_not_duplicate_real_person():
+    from services.mtmc_engine import supplement_rider_person_dets
+
+    person = {"classId": 0, "className": "person", "confidence": 0.7,
+              "bbox": [105, 120, 175, 220]}
+    motorcycle = {"classId": 3, "className": "motorcycle", "confidence": 0.8,
+                  "bbox": [100, 180, 180, 240]}
+    out = supplement_rider_person_dets([person], [motorcycle], frame_w=640, frame_h=360)
+    assert out == [person]

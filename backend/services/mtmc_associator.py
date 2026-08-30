@@ -610,6 +610,7 @@ class MtmcAssociator:
         local_track_id: int | None = None,
         vehicle_class: str | None = None,
         color_sig: np.ndarray | None = None,
+        visual_key: str | None = None,
         now: float,
     ) -> tuple[float | None, dict]:
         """仅用于新生 local track 的长时/跨镜外观匹配。返回 (final_score, breakdown)。"""
@@ -721,8 +722,13 @@ class MtmcAssociator:
                     reid_raw = centroid_cos
                 # 颜色签名：跨视角外观弱时抬分（红帽/米色衫/白盔等）
                 csim = color_sig_cosine(color_sig, g.color_sig)
+                rider_pair = visual_key == "rider" and g.visual_key == "rider"
                 if not same_cam and csim >= 0.55 and reid_raw is not None and reid_raw >= 0:
-                    reid_raw = float(0.62 * reid_raw + 0.38 * max(reid_raw, csim))
+                    # Rider pose changes sharply between cameras; clothing color
+                    # is more stable than a person model distorted by the bike.
+                    reid_weight = 0.45 if rider_pair else 0.62
+                    color_weight = 1.0 - reid_weight
+                    reid_raw = float(reid_weight * reid_raw + color_weight * max(reid_raw, csim))
                     if csim >= 0.72 and reid_raw < appear_need:
                         reid_raw = max(reid_raw, min(appear_need + 0.02, 0.55 * reid_raw + 0.45 * csim))
                 score = reid_raw
@@ -920,6 +926,7 @@ class MtmcAssociator:
                         local_track_id=int(local_track_id) if local_track_id is not None else None,
                         vehicle_class=vc,
                         color_sig=color_sig,
+                        visual_key=visual_key,
                         now=now,
                     )
                     if score is None:

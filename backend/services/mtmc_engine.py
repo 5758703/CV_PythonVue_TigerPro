@@ -30,6 +30,62 @@ _PERSON_DET_CLASSES = [0]
 _VEHICLE_DET_CLASSES = [1, 2, 3, 5, 7]
 
 
+def _intersection_over_smaller(a, b) -> float:
+    ax1, ay1, ax2, ay2 = [float(v) for v in a]
+    bx1, by1, bx2, by2 = [float(v) for v in b]
+    iw = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+    ih = max(0.0, min(ay2, by2) - max(ay1, by1))
+    inter = iw * ih
+    aa = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    ba = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    return inter / max(1.0, min(aa, ba))
+
+
+def supplement_rider_person_dets(
+    persons: list[dict],
+    vehicles: list[dict],
+    *,
+    frame_w: int,
+    frame_h: int,
+) -> list[dict]:
+    """Recover riders that YOLO labels only as bicycle/motorcycle.
+
+    The proxy covers the body above the two-wheeler and is emitted only when no
+    real person detection already occupies that region.  Cars and trucks never
+    create a person proxy.
+    """
+    out = list(persons or [])
+    for vehicle in vehicles or []:
+        cls_id = int(vehicle.get("classId", -1))
+        cls_name = str(vehicle.get("className") or "").strip().lower()
+        if cls_id not in (1, 3) and cls_name not in {"bicycle", "motorcycle", "bike", "motorbike"}:
+            continue
+        bbox = vehicle.get("bbox") or []
+        if len(bbox) < 4:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+        bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)
+        proxy = [
+            max(0.0, x1 + 0.06 * bw),
+            max(0.0, y1 - 0.95 * bh),
+            min(float(frame_w), x2 - 0.06 * bw),
+            min(float(frame_h), y1 + 0.62 * bh),
+        ]
+        if proxy[2] <= proxy[0] or proxy[3] <= proxy[1]:
+            continue
+        if any(_intersection_over_smaller(proxy, p.get("bbox") or [0, 0, 0, 0]) >= 0.38 for p in out):
+            continue
+        out.append({
+            "bbox": [round(v, 1) for v in proxy],
+            "confidence": round(max(0.12, float(vehicle.get("confidence") or 0) * 0.72), 4),
+            "classId": 0,
+            "className": "rider",
+            "riderProxy": True,
+            "sourceVehicleClass": cls_name,
+        })
+    return out
+
+
 def _color_for(gid: str, palette) -> tuple:
     h = sum(ord(c) for c in (gid or ""))
     return palette[h % len(palette)]
@@ -535,6 +591,9 @@ def _detect_person_vehicle(cfg: MtmcConfig, frame):
         raw = _detect(cfg.det_person_path, frame, min(person_conf, vehicle_conf), _PV_CLASSES)
         persons = [d for d in raw if int(d.get("classId", -1)) == 0]
         vehicles = [d for d in raw if int(d.get("classId", -1)) in (1, 2, 3, 5, 7)]
+        persons = supplement_rider_person_dets(
+            persons, vehicles, frame_w=frame.shape[1], frame_h=frame.shape[0],
+        )
         return persons, vehicles
     persons = []
     vehicles = []
@@ -542,6 +601,10 @@ def _detect_person_vehicle(cfg: MtmcConfig, frame):
         persons = _detect(cfg.det_person_path, frame, person_conf, _PERSON_DET_CLASSES)
     if cfg.enable_vehicle and cfg.det_vehicle_path:
         vehicles = _detect(cfg.det_vehicle_path, frame, vehicle_conf, _VEHICLE_DET_CLASSES)
+    if cfg.enable_person and vehicles:
+        persons = supplement_rider_person_dets(
+            persons, vehicles, frame_w=frame.shape[1], frame_h=frame.shape[0],
+        )
     return persons, vehicles
 
 
@@ -1311,6 +1374,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         active_person_local = {int(t.track_id) for t in tracks}
         for t in tracks:
             crop = _crop(frame, t.bbox)
+            is_rider = str(getattr(t, "class_name", "")).lower() == "rider"
             builder = _get_tracklet_builder(
                 cam_state,
                 session_id=session.session_id,
@@ -1371,6 +1435,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 frame_h=fh,
                 frame_w=fw,
                 embedding=emb,
+                visual_key="rider" if is_rider else None,
                 trail=list(t.trail),
                 meta={"reidBackend": meta.get("backend")},
                 now=now,
@@ -1389,6 +1454,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     "reid_person_id": gallery.get("personId") if gallery.get("matched") else None,
                     "display_name": gallery.get("name") if gallery.get("matched") else None,
                     "color_sig": c_sig,
+                    "visual_key": "rider" if is_rider else None,
                 },
             )
             if g is not None:
