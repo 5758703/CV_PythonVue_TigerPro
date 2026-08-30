@@ -833,3 +833,53 @@ def test_engine_jpegs_yields_only_new_seq():
                 rest = list(gen)
     assert b"--frame" in first
     assert rest == []
+
+
+def test_tracklet_embedding_rejects_single_foreign_crop():
+    from services.mtmc_tracklet import TrackletBuilder
+
+    rng = np.random.default_rng(20260830)
+    identity = _l2(rng.normal(size=64).astype(np.float32))
+    foreign = _l2(rng.normal(size=64).astype(np.float32))
+    builder = TrackletBuilder.create(
+        session_id="s", camera_id=1, object_type="vehicle", local_track_id=7, now=1.0,
+    )
+    for i in range(4):
+        emb = foreign if i == 2 else _l2(identity + rng.normal(0, 0.015, 64))
+        builder.add_observation(
+            bbox=[10, 10, 210, 130], conf=0.9, frame_h=720, frame_w=1280,
+            embedding=emb, now=1.0 + i,
+        )
+    aggregate = builder.aggregate_embedding()
+    assert cosine(aggregate, identity) > 0.97
+    assert cosine(aggregate, foreign) < 0.5
+
+
+def test_camera_overlay_never_exposes_duplicate_global_id():
+    from services.mtmc_engine import _enforce_unique_camera_global_ids
+
+    items = [
+        {"objectType": "vehicle", "globalId": "V1", "localTrackId": 1,
+         "score": 0.42, "label": "V1"},
+        {"objectType": "vehicle", "globalId": "V1", "localTrackId": 2,
+         "score": 0.91, "label": "V1"},
+        {"objectType": "person", "globalId": "P1", "localTrackId": 3,
+         "score": 0.8, "label": "P1"},
+    ]
+    _enforce_unique_camera_global_ids(items)
+    vehicle_gids = [x["globalId"] for x in items if x["objectType"] == "vehicle" and x["globalId"]]
+    assert vehicle_gids == ["V1"]
+    assert items[0]["globalId"] is None
+    assert items[0]["attrs"]["duplicateGlobalIdSuppressed"] == "V1"
+
+
+def test_active_gallery_keeps_distinct_camera_prototypes():
+    from services.mtmc_active_gallery import MtmcActiveGallery
+
+    gallery = MtmcActiveGallery()
+    cam1 = np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+    cam2 = np.asarray([0.0, 1.0, 0.0], dtype=np.float32)
+    gallery.upsert("vehicle", "V1", cam1, camera_id=1)
+    gallery.upsert("vehicle", "V1", cam2, camera_id=2)
+    assert gallery.max_similarity("vehicle", "V1", cam1, exclude_camera_id=2) > 0.99
+    assert gallery.max_similarity("vehicle", "V1", cam1, exclude_camera_id=1) < 0.1

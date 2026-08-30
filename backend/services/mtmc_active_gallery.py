@@ -60,7 +60,18 @@ class MtmcActiveGallery:
         with _lock:
             bucket = self._vecs.setdefault(object_type, {})
             cam_map = bucket.setdefault(str(global_id), {})
-            cam_map[cam_key] = v
+            previous = cam_map.get(cam_key)
+            if previous is None:
+                cam_map[cam_key] = v
+            else:
+                # Keep a camera-specific prototype stable across weak or
+                # partially occluded observations.
+                dim = max(previous.size, v.size)
+                old = np.zeros(dim, dtype=np.float32)
+                new = np.zeros(dim, dtype=np.float32)
+                old[: previous.size] = previous
+                new[: v.size] = v
+                cam_map[cam_key] = l2_normalize(0.8 * old + 0.2 * new)
             self._dirty.add(object_type)
 
     def remove(self, object_type: str, global_id: str) -> None:

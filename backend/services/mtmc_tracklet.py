@@ -158,6 +158,20 @@ class TrackletBuilder:
         keyed.sort(key=lambda x: -x[0])
         top_k = _TOPK_BY_TYPE.get(self.object_type, 8)
         top = keyed[:top_k]
+        # Reject a stray crop from another nearby target before averaging.  The
+        # medoid represents the most coherent appearance within this tracklet.
+        if len(top) >= 3:
+            vecs = [_l2(np.asarray(emb, dtype=np.float32).reshape(-1)) for _, emb in top]
+            dim_all = max(v.size for v in vecs)
+            mat = np.zeros((len(vecs), dim_all), dtype=np.float32)
+            for i, vec in enumerate(vecs):
+                mat[i, : vec.size] = vec
+            sims = mat @ mat.T
+            medoid = int(np.argmax(np.median(sims, axis=1)))
+            keep_at = 0.30 if self.object_type == "vehicle" else 0.38
+            keep = [i for i, sim in enumerate(sims[medoid]) if float(sim) >= keep_at]
+            if len(keep) >= 2:
+                top = [top[i] for i in keep]
         weights = np.asarray([max(q, 1e-6) for q, _ in top], dtype=np.float32)
         weights = weights / weights.sum()
         dim = int(top[0][1].size)

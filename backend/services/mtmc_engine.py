@@ -1202,6 +1202,37 @@ def _sort_vehicle_tracks_for_assoc(tracks, associator, camera_id: int, now: floa
     return sorted(tracks, key=_key)
 
 
+def _enforce_unique_camera_global_ids(items: list[dict]) -> list[dict]:
+    """Guarantee one visible owner for each Global ID in a camera frame."""
+    owners: dict[tuple[str, str], tuple[int, float]] = {}
+    for idx, item in enumerate(items):
+        gid = item.get("globalId")
+        if not gid:
+            continue
+        key = (str(item.get("objectType") or ""), str(gid))
+        confidence = max(
+            float(item.get("fuseScore") or 0),
+            float(item.get("score") or 0),
+            float(item.get("plateScore") or 0),
+        )
+        previous = owners.get(key)
+        if previous is None:
+            owners[key] = (idx, confidence)
+            continue
+        loser_idx = idx
+        if confidence > previous[1]:
+            loser_idx = previous[0]
+            owners[key] = (idx, confidence)
+        loser = items[loser_idx]
+        loser["globalId"] = None
+        loser["reidPersonId"] = None
+        loser.setdefault("attrs", {})["duplicateGlobalIdSuppressed"] = str(gid)
+        local_id = loser.get("localTrackId")
+        kind = "person" if loser.get("objectType") == "person" else "vehicle"
+        loser["label"] = f"{kind} L{local_id}"
+    return items
+
+
 def _make_local_tracker(cfg: MtmcConfig):
     """按配置创建单路局部跟踪器；ByteTrack/BoT-SORT 不可用时回退 IoU。"""
     from services.mtmc_local_track import bytetrack_available, botsort_available, create_local_tracker
@@ -1627,6 +1658,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         except Exception:  # noqa: BLE001
             pass
 
+    _enforce_unique_camera_global_ids(items)
     _publish_overlay(cam_state, frame, items, cam_state.congestion)
     session.stats["frames"] += 1
 

@@ -189,12 +189,15 @@ class MtmcAssociator:
         self._gallery = MtmcActiveGallery()
         self._candidates: list[dict] = []
 
-    def _gallery_upsert(self, g: GlobalTrack) -> None:
-        if g.embedding is not None:
+    def _gallery_upsert(self, g: GlobalTrack, observation: np.ndarray | None = None) -> None:
+        # Do not copy the blended global centroid into every camera slot: that
+        # makes different camera prototypes converge and lose discrimination.
+        prototype = observation if observation is not None else g.embedding
+        if prototype is not None:
             self._gallery.upsert(
                 g.object_type,
                 g.global_id,
-                g.embedding,
+                prototype,
                 camera_id=g.camera_id,
             )
 
@@ -867,7 +870,7 @@ class MtmcAssociator:
                                 mode=AssocMode.STICKY,
                                 update_embedding=embedding is not None,
                             )
-                            self._gallery_upsert(g)
+                            self._gallery_upsert(g, embedding)
                             return g
                         self._local_bind.pop(bkey, None)
                         self._mark_lost_if_unbound(sticky_gid, now)
@@ -997,7 +1000,7 @@ class MtmcAssociator:
                     time_score=best_breakdown.get("time"),
                     final_score=best_breakdown.get("final"),
                 )
-                self._gallery_upsert(g)
+                self._gallery_upsert(g, embedding)
             elif tier == "candidate" and candidate_gid is not None:
                 self.last_mode = AssocMode.CANDIDATE
                 gid = self._new_gid(object_type)
@@ -1020,7 +1023,7 @@ class MtmcAssociator:
                     last_assoc_mode=AssocMode.CANDIDATE.value,
                 )
                 self.tracks[gid] = g
-                self._gallery_upsert(g)
+                self._gallery_upsert(g, embedding)
                 self._candidates.append({
                     "globalId": gid,
                     "candidateGlobalId": candidate_gid,
@@ -1066,7 +1069,7 @@ class MtmcAssociator:
                     last_assoc_mode=AssocMode.NEW.value,
                 )
                 self.tracks[gid] = g
-                self._gallery_upsert(g)
+                self._gallery_upsert(g, embedding)
                 self.last_evidence = AssocEvidence(
                     decision=AssocMode.NEW.value,
                     target_global_id=g.global_id,
