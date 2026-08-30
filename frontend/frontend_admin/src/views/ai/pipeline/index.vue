@@ -46,12 +46,17 @@
           v-model:nodes="nodes"
           v-model:edges="edges"
           :node-types="nodeTypes"
+          :edge-types="edgeTypes"
           fit-view-on-init
           :default-viewport="{ zoom: 0.9 }"
           :default-edge-options="defaultEdgeOptions"
+          :connection-radius="20"
+          :elevate-edges-on-select="true"
           @node-click="onNodeClick"
           @pane-click="onPaneClick"
+          @edge-click="onEdgeClick"
           @connect="onConnect"
+          @node-drag-stop="onNodeDragStop"
         >
           <Background :variant="bgVariant" pattern-color="#c5d4ea" :gap="22" />
           <Controls position="bottom-left" />
@@ -290,7 +295,7 @@
 </template>
 
 <script setup>
-import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -302,15 +307,20 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 import { pipelineApi } from '../../../api/pipeline'
 import PipelineNode from './PipelineNode.vue'
+import PipelineEdge from './PipelineEdge.vue'
+import { defaultHandlesForMeta, applyAutoRouteHandles } from './handleGeometry'
 
 const router = useRouter()
-const { screenToFlowCoordinate } = useVueFlow({ id: 'eva-pipeline' })
+const { screenToFlowCoordinate, updateNodeInternals } = useVueFlow({ id: 'eva-pipeline' })
 const nodeTypes = { eva: markRaw(PipelineNode) }
+const edgeTypes = { eva: markRaw(PipelineEdge) }
 const bgVariant = BackgroundVariant.Dots
 const defaultEdgeOptions = {
-  type: 'smoothstep',
+  type: 'eva',
   animated: true,
-  style: { stroke: '#409eff', strokeWidth: 2 },
+  selectable: true,
+  interactionWidth: 24,
+  style: { stroke: '#409eff', strokeWidth: 2.5 },
   markerEnd: { type: MarkerType.ArrowClosed, color: '#409eff' },
 }
 
@@ -449,7 +459,7 @@ function defaultConfig(type) {
   return {}
 }
 
-function makeFlowNode(id, type, config = {}, position = { x: 80, y: 160 }) {
+function makeFlowNode(id, type, config = {}, position = { x: 80, y: 160 }, extra = {}) {
   const meta = metaOf(type)
   const cfg = { ...defaultConfig(type), ...config }
   return {
@@ -461,6 +471,9 @@ function makeFlowNode(id, type, config = {}, position = { x: 80, y: 160 }) {
       config: cfg,
       color: meta.color || '#409eff',
       label: meta.label || type,
+      portsIn: meta.portsIn || [],
+      portsOut: meta.portsOut || [],
+      handles: extra.handles || defaultHandlesForMeta(meta),
     },
   }
 }
@@ -475,8 +488,19 @@ function graphToDag() {
       type: n.data.nodeType,
       config: { ...(n.data.config || {}) },
       position: { x: n.position.x, y: n.position.y },
+      handles: n.data.handles,
     })),
-    edges: edges.value.map((e) => [e.source, e.target]),
+    edges: edges.value.map((e) => {
+      const bend = e.data?.bend
+      if (!bend) return [e.source, e.target]
+      return {
+        source: e.source,
+        target: e.target,
+        sourceHandle: e.sourceHandle || 'source',
+        targetHandle: e.targetHandle || 'target',
+        bend,
+      }
+    }),
   }
 }
 
@@ -487,14 +511,21 @@ function dagToGraph(dag) {
       n.type,
       n.config || {},
       n.position || { x: 48 + i * 200, y: 180 },
+      { handles: n.handles },
     ),
   )
   edges.value = (dag.edges || []).map((e, i) => {
-    const [s, t] = Array.isArray(e) ? e : [e.from || e.source, e.to || e.target]
+    const pair = Array.isArray(e) ? e : [e.from || e.source, e.to || e.target]
+    const [s, t] = pair
+    const edgeData = !Array.isArray(e) && e.bend ? { bend: e.bend } : {}
     return {
       id: `e_${s}_${t}_${i}`,
+      type: 'eva',
       source: s,
       target: t,
+      sourceHandle: Array.isArray(e) ? 'source' : (e.sourceHandle || 'source'),
+      targetHandle: Array.isArray(e) ? 'target' : (e.targetHandle || 'target'),
+      data: edgeData,
       ...defaultEdgeOptions,
     }
   })
@@ -503,6 +534,27 @@ function dagToGraph(dag) {
   const src = nodes.value.find((n) => n.data.nodeType === 'source.rtsp')
   if (src?.data?.config?.cameraId) form.cameraId = src.data.config.cameraId
   if (dag.name) form.name = dag.name
+  // 按相对位置自动排布连接点（阶梯布局：下→左 / 右→上）
+  nextTick(() => autoRouteAllEdges())
+}
+
+function autoRouteAllEdges() {
+  if (!nodes.value.length || !edges.value.length) return
+  // 仅自动更新仍为 auto 的连接点；手动拖过的端点保留
+  const routed = applyAutoRouteHandles(nodes.value, edges.value)
+  nodes.value = nodes.value.map((n, i) => {
+    const r = routed[i]
+    if (!r) return n
+    const prev = n.data?.handles || {}
+    const next = { ...r.data.handles }
+    if (prev.source?.auto === false) next.source = prev.source
+    if (prev.target?.auto === false) next.target = prev.target
+    return { ...n, data: { ...n.data, handles: next } }
+  })
+}
+
+function onNodeDragStop() {
+  autoRouteAllEdges()
 }
 
 function syncCameraIntoGraph() {
@@ -559,9 +611,69 @@ function addNodeAt(type, position) {
   nodes.value = [...nodes.value, makeFlowNode(id, type, defaultConfig(type), position)]
 }
 
+function patchNodeHandle(nodeId, role, handle) {
+  nodes.value = nodes.value.map((n) => {
+    if (n.id !== nodeId) return n
+    return {
+      ...n,
+      data: {
+        ...n.data,
+        handles: {
+          ...(n.data.handles || {}),
+          [role]: { ...handle, auto: false },
+        },
+      },
+    }
+  })
+  // Handle 的 CSS 位置改变后，显式刷新 Vue Flow 缓存的端口坐标，
+  // 否则连线端点可能要等到下一次节点移动才会跟上。
+  nextTick(() => updateNodeInternals([nodeId]))
+}
+
+provide('patchNodeHandle', patchNodeHandle)
+
+function patchEdgeBend(edgeId, bend) {
+  edges.value = edges.value.map((e) => {
+    if (e.id !== edgeId) return e
+    const prev = { ...(e.data?.bend || {}) }
+    const next = { ...prev }
+    if ('centerX' in bend) {
+      if (Number.isFinite(bend.centerX)) next.centerX = bend.centerX
+      else delete next.centerX
+    }
+    if ('centerY' in bend) {
+      if (Number.isFinite(bend.centerY)) next.centerY = bend.centerY
+      else delete next.centerY
+    }
+    const hasBend = Number.isFinite(next.centerX) || Number.isFinite(next.centerY)
+    return {
+      ...e,
+      data: {
+        ...(e.data || {}),
+        bend: hasBend ? next : undefined,
+      },
+    }
+  })
+}
+
+provide('patchEdgeBend', patchEdgeBend)
+provide('getFlowNode', (id) => nodes.value.find((n) => n.id === id))
+
+function onEdgeClick() {
+  // 保持连线可交互，避免 vue-flow 将 edge 标记为 inactive
+}
+
 function onConnect(params) {
   const id = `e_${params.source}_${params.target}_${Date.now()}`
-  edges.value = [...edges.value, { ...params, id, ...defaultEdgeOptions }]
+  edges.value = [...edges.value, {
+    ...params,
+    id,
+    type: 'eva',
+    sourceHandle: params.sourceHandle || 'source',
+    targetHandle: params.targetHandle || 'target',
+    ...defaultEdgeOptions,
+  }]
+  nextTick(() => autoRouteAllEdges())
 }
 
 function selectNode(node) {
@@ -574,7 +686,7 @@ function selectNode(node) {
 
 function onNodeClick({ node }) {
   selectNode(node)
-  drawerOpen.value = true
+  drawerOpen.value = false
 }
 
 function onPaneClick() {
@@ -862,6 +974,45 @@ onBeforeUnmount(() => {
 .eva-canvas :deep(.vue-flow__viewport),
 .eva-canvas :deep(.vue-flow__background) {
   cursor: default;
+}
+.eva-canvas :deep(.vue-flow__node) {
+  cursor: default;
+}
+.eva-canvas :deep(.vue-flow__node.selected),
+.eva-canvas :deep(.vue-flow__node.selected.draggable),
+.eva-canvas :deep(.vue-flow__node.selected .eva-node),
+.eva-canvas :deep(.vue-flow__node.selected .eva-node *) {
+  cursor: move !important;
+}
+.eva-canvas :deep(.vue-flow__node.selected.dragging),
+.eva-canvas :deep(.vue-flow__node.selected.draggable.dragging) {
+  cursor: move !important;
+}
+.eva-canvas :deep(.vue-flow__node.selected .eva-handle-ghost) {
+  cursor: crosshair !important;
+}
+.eva-canvas :deep(.vue-flow__edge.eva) {
+  pointer-events: all !important;
+}
+.eva-canvas :deep(.vue-flow__edge.eva.inactive) {
+  pointer-events: all !important;
+}
+.eva-canvas :deep(.vue-flow__edge-interaction),
+.eva-canvas :deep(.eva-edge-hit) {
+  pointer-events: stroke !important;
+  cursor: move !important;
+}
+.eva-canvas :deep(.eva-edge-joint),
+.eva-canvas :deep(.eva-edge-joint-hit) {
+  pointer-events: all !important;
+  cursor: move !important;
+}
+.eva-canvas :deep(.vue-flow__edge.animated .vue-flow__edge-path) {
+  stroke-dasharray: 8 6;
+  animation: eva-edge-flow 0.55s linear infinite;
+}
+@keyframes eva-edge-flow {
+  to { stroke-dashoffset: -14; }
 }
 .eva-fab {
   position: absolute;
