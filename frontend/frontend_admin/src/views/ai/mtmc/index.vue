@@ -1,15 +1,24 @@
 <template>
   <div class="mtmc-page">
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      title="跨镜 MTMC（P0 Tracklet + P1 三档 + P2 跨镜事件/检索）：检测 → Tracklet → 关联 → 证据落库 → 候选晋升；策略 mtmc_v2"
-      class="mb"
-    />
+    <header class="page-hero">
+      <div>
+        <div class="hero-title">跨镜重识别</div>
+        <div class="hero-subtitle">多路检测、Tracklet 关联、全局身份与证据复核的一体化工作台</div>
+      </div>
+      <div class="hero-flow" aria-label="处理流程">
+        <span>检测</span><i>→</i><span>跟踪</span><i>→</i><span>跨镜关联</span><i>→</i><span>证据复核</span>
+      </div>
+      <div :class="['hero-status', session?.running ? 'running' : 'idle']">
+        <span class="status-dot"></span>{{ session?.running ? '跨镜会话运行中' : '当前无跨镜会话' }}
+      </div>
+    </header>
 
-    <el-tabs v-model="tab" type="border-card">
+    <el-tabs v-model="tab" type="border-card" class="mtmc-tabs">
       <el-tab-pane label="实时检测测试" name="detect">
+        <div class="tab-intro">
+          <div><strong>单路检测验证</strong><span>先确认视频源和人车模型可用，再启动跨镜会话。</span></div>
+          <el-tag type="success" effect="plain">不产生全局 ID</el-tag>
+        </div>
         <el-alert
           type="success"
           :closable="false"
@@ -17,7 +26,8 @@
           class="mb"
           title="单路实时检测：仅 YOLO 人/车画框叠加，不做 Tracklet / ReID / 跨镜关联；与「会话控制」互不影响。"
         />
-        <el-form :inline="true" label-width="100px" class="cfg">
+        <el-form :inline="true" label-width="100px" class="cfg config-panel">
+          <div class="config-title"><span>① 视频源</span><small>选择一种输入方式并填写来源</small></div>
           <el-form-item label="视频源">
             <el-radio-group v-model="detectForm.sourceMode">
               <el-radio value="upload">本地视频</el-radio>
@@ -97,6 +107,7 @@
               </div>
             </div>
           </template>
+          <div class="config-title"><span>② 检测目标</span><small>设置识别类型与处理频率</small></div>
           <el-form-item label="人员">
             <el-switch v-model="detectForm.enablePerson" />
           </el-form-item>
@@ -107,14 +118,14 @@
             <el-input-number v-model="detectForm.sampleFps" :min="0.5" :max="15" :step="0.5" />
             <span class="form-hint">仅控制检测频率；播放跟原视频帧率，处理落后时会丢帧保流畅</span>
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="action-bar">
             <el-button type="primary" :loading="detectBusy" v-permission="'ai:mtmc:edit'" @click="onDetectStart">启动检测</el-button>
             <el-button type="danger" :disabled="!detectSessionId" v-permission="'ai:mtmc:edit'" @click="onDetectStop">停止</el-button>
             <el-button @click="refreshSession">刷新状态</el-button>
           </el-form-item>
         </el-form>
 
-        <el-descriptions v-if="detectSession" :column="4" border size="small" class="mb">
+        <el-descriptions v-if="detectSession" :column="4" border size="small" class="mb status-panel">
           <el-descriptions-item label="检测会话">{{ detectSession.sessionId }}</el-descriptions-item>
           <el-descriptions-item label="运行">{{ detectSession.running ? '是' : '否' }}</el-descriptions-item>
           <el-descriptions-item label="源">{{ sourceModeLabel(detectSession.sourceMode) }}</el-descriptions-item>
@@ -166,7 +177,12 @@
       </el-tab-pane>
 
       <el-tab-pane label="会话控制" name="session">
-        <el-form :inline="true" label-width="100px" class="cfg">
+        <div class="tab-intro">
+          <div><strong>跨镜会话控制台</strong><span>选择摄像头、设置关联策略，并实时观察各镜头与全局身份。</span></div>
+          <el-tag :type="session?.running ? 'success' : 'info'" effect="plain">{{ session?.running ? '运行中' : '未启动' }}</el-tag>
+        </div>
+        <el-form :inline="true" label-width="100px" class="cfg config-panel">
+          <div class="config-title"><span>① 基础配置</span><small>选择至少两路摄像头并设置检测目标</small></div>
           <el-form-item label="跨镜源">
             <el-radio-group v-model="form.sourceMode">
               <el-radio value="camera">摄像头（仅跨镜）</el-radio>
@@ -186,6 +202,7 @@
           <el-form-item label="采样 FPS">
             <el-input-number v-model="form.sampleFps" :min="0.5" :max="8" :step="0.5" />
           </el-form-item>
+          <div class="config-title advanced"><span>② 关联策略</span><small>一般保持默认；误合并时提高阈值，漏匹配时适当降低</small></div>
           <el-form-item label="确认阈值">
             <el-input-number v-model="form.confirmThresh" :min="0" :max="0.95" :step="0.01" />
           </el-form-item>
@@ -214,7 +231,8 @@
           <el-form-item label="证据落库">
             <el-switch v-model="form.persistEvents" />
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="action-bar">
+            <el-button :disabled="session?.running" @click="resetSessionDefaults">恢复推荐配置</el-button>
             <el-button type="primary" :loading="busy" v-permission="'ai:mtmc:edit'" @click="onStart">启动跨镜</el-button>
             <el-button type="danger" :disabled="!sessionId" v-permission="'ai:mtmc:edit'" @click="onStop">停止</el-button>
             <el-button @click="refreshSession">刷新状态</el-button>
@@ -226,7 +244,7 @@
           开启「证据落库」后 Tracklet、候选关联、证据边会写入数据库，便于停会话后审计与候选晋升/驳回落库；略增 DB 写入。
         </p>
 
-        <el-descriptions v-if="session && !isDetectKind(session)" :column="3" border size="small" class="mb">
+        <el-descriptions v-if="session && !isDetectKind(session)" :column="3" border size="small" class="mb status-panel">
           <el-descriptions-item label="会话">{{ session.sessionId }}</el-descriptions-item>
           <el-descriptions-item label="运行">{{ session.running ? '是' : '否' }}</el-descriptions-item>
           <el-descriptions-item label="模式">{{ sourceModeLabel(session.sourceMode) }}</el-descriptions-item>
@@ -310,6 +328,9 @@
       </el-tab-pane>
 
       <el-tab-pane label="事件 / 过车" name="events">
+        <div class="tab-intro">
+          <div><strong>识别事件与过车记录</strong><span>按 Global ID、目标类型或车牌快速定位历史命中。</span></div>
+        </div>
         <div class="tab-toolbar">
           <el-input v-model="eventQ.globalId" clearable placeholder="globalId" style="width: 160px" />
           <el-select v-model="eventQ.objectType" clearable placeholder="类型" style="width: 110px">
@@ -320,6 +341,7 @@
           <el-input v-model="passQ.plate" clearable placeholder="车牌" style="width: 140px; margin-left: 12px" />
           <el-button @click="loadPasses">刷新过车</el-button>
         </div>
+        <h4 class="section-title"><span>识别事件</span><small>人员和车辆的逐次命中记录</small></h4>
         <el-table :data="events" size="small" border stripe class="mb" max-height="300">
           <el-table-column prop="eventTime" label="时间" width="170" />
           <el-table-column prop="cameraId" label="相机" width="70" />
@@ -330,6 +352,7 @@
           <el-table-column prop="speedKmh" label="速度" width="70" />
           <el-table-column prop="score" label="分" width="70" />
         </el-table>
+        <h4 class="section-title"><span>过车记录</span><small>车辆身份、融合分数与通行状态</small></h4>
         <el-table :data="passes" size="small" border stripe max-height="260">
           <el-table-column prop="passTime" label="过车时间" width="170" />
           <el-table-column prop="cameraId" label="相机" width="70" />
@@ -343,6 +366,10 @@
       </el-tab-pane>
 
       <el-tab-pane label="Tracklet / 证据" name="evidence">
+        <div class="tab-intro">
+          <div><strong>关联证据复核</strong><span>检查候选关系、局部轨迹与打分依据，完成晋升或驳回。</span></div>
+          <el-tag type="warning" effect="plain">候选 {{ candidateRows.length }}</el-tag>
+        </div>
         <div class="tab-toolbar">
           <el-input v-model="evidenceQ.globalId" clearable placeholder="globalId" style="width: 160px" />
           <el-select v-model="evidenceQ.objectType" clearable placeholder="类型" style="width: 110px">
@@ -351,7 +378,7 @@
           </el-select>
           <el-button @click="loadEvidence">刷新</el-button>
         </div>
-        <h4>候选关联（三档中间态，可晋升/驳回）</h4>
+        <h4 class="section-title"><span>候选关联</span><small>三档策略的中间态，可人工晋升或驳回</small></h4>
         <el-table :data="candidateRows" size="small" border stripe class="mb" max-height="220">
           <el-table-column prop="globalId" label="新建 Global" min-width="130" />
           <el-table-column prop="candidateGlobalId" label="候选 Global" min-width="130" />
@@ -377,7 +404,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <h4>Tracklet 片段</h4>
+        <h4 class="section-title"><span>Tracklet 片段</span><small>每个镜头中的局部连续轨迹</small></h4>
         <el-table :data="tracklets" size="small" border stripe class="mb" max-height="260">
           <el-table-column prop="trackletId" label="Tracklet" min-width="120" show-overflow-tooltip />
           <el-table-column prop="globalId" label="Global ID" min-width="120" />
@@ -389,7 +416,7 @@
           <el-table-column prop="startTs" label="开始" width="170" />
           <el-table-column prop="endTs" label="结束" width="170" />
         </el-table>
-        <h4>关联证据边</h4>
+        <h4 class="section-title"><span>关联证据边</span><small>查看最终决策及 ReID、拓扑等分数组成</small></h4>
         <el-table :data="associations" size="small" border stripe max-height="260">
           <el-table-column prop="decision" label="决策" width="90" />
           <el-table-column prop="targetGlobalId" label="目标 Global" min-width="120" />
@@ -407,11 +434,14 @@
       </el-tab-pane>
 
       <el-tab-pane label="跨镜事件 / 检索" name="p2">
+        <div class="tab-intro">
+          <div><strong>跨镜事件与轨迹检索</strong><span>查看镜头间通行事件，并按身份或查询图发起异步检索。</span></div>
+        </div>
         <div class="tab-toolbar">
           <el-input v-model="crossQ.globalId" clearable placeholder="globalId" style="width: 160px" />
           <el-button @click="loadCrossEvents">刷新跨镜事件</el-button>
         </div>
-        <h4>跨镜通行事件（轻量模式 P2）</h4>
+        <h4 class="section-title"><span>跨镜通行事件</span><small>Global ID 从一个镜头转移到另一个镜头的记录</small></h4>
         <el-table :data="crossEvents" size="small" border stripe class="mb" max-height="240">
           <el-table-column prop="eventTime" label="时间" width="170" />
           <el-table-column prop="globalId" label="Global ID" min-width="120" />
@@ -423,7 +453,7 @@
           <el-table-column prop="decision" label="决策" width="90" />
         </el-table>
 
-        <h4>全局轨迹检索（异步任务）</h4>
+        <h4 class="section-title"><span>全局轨迹检索</span><small>按 Global ID 汇总跨镜轨迹</small></h4>
         <el-form :inline="true" class="mb">
           <el-form-item label="Global ID">
             <el-input v-model="searchForm.globalId" clearable style="width: 160px" />
@@ -433,7 +463,7 @@
           </el-button>
         </el-form>
 
-        <h4>多视频 ReID 检索队列</h4>
+        <h4 class="section-title"><span>多视频 ReID 检索</span><small>上传查询图，在本地视频源中查找相似目标</small></h4>
         <el-form :inline="true" class="mb">
           <el-form-item label="摄像头">
             <el-select v-model="searchForm.cameraIds" multiple collapse-tags style="width: 280px" placeholder="本地视频源">
@@ -475,6 +505,10 @@
       </el-tab-pane>
 
       <el-tab-pane label="相机拓扑" name="topo">
+        <div class="tab-intro">
+          <div><strong>相机通行拓扑</strong><span>配置镜头间合理通行时间，排除不可能的跨镜匹配。</span></div>
+          <el-tag effect="plain">拓扑边 {{ topology.length }}</el-tag>
+        </div>
         <el-form :inline="true" class="mb">
           <el-form-item label="From">
             <el-select v-model="topoForm.fromCameraId" style="width: 180px">
@@ -494,6 +528,7 @@
           </el-form-item>
           <el-button type="primary" v-permission="'ai:mtmc:edit'" @click="addTopo">添加边</el-button>
         </el-form>
+        <h4 class="section-title"><span>已配置拓扑</span><small>有向边需要按两个方向分别配置</small></h4>
         <el-table :data="topology" size="small" border stripe>
           <el-table-column prop="id" label="ID" width="60" />
           <el-table-column prop="fromCameraId" label="From" width="90" />
@@ -510,6 +545,9 @@
       </el-tab-pane>
 
       <el-tab-pane label="操作说明" name="guide">
+        <div class="tab-intro guide-intro">
+          <div><strong>快速上手与排障指南</strong><span>按推荐流程完成配置；遇到问题时从本页末尾的排障顺序开始检查。</span></div>
+        </div>
         <div class="guide-wrap">
           <el-alert
             type="info"
@@ -547,7 +585,7 @@
           </ol>
           <el-descriptions :column="1" border size="small" class="mb">
             <el-descriptions-item label="画面标签">未分配 Global 时显示 <code>L{localId}</code>；分配后显示 <code>GlobalId|姓名/车牌</code></el-descriptions-item>
-            <el-descriptions-item label="实时检出列表">会话运行中，每路预览下方展示当前帧结构化结果（类型、Local、Global、身份、分数、关联决策），约 1.5s 随会话状态刷新</el-descriptions-item>
+            <el-descriptions-item label="实时检出列表">每路预览下方展示该镜头的会话实时结果（类型、Local、Global、身份、分数、关联决策）；标题同时区分当前帧数量与会话累计数量，约 1.5s 刷新</el-descriptions-item>
             <el-descriptions-item label="决策类型">sticky / long_term / candidate / new / promoted（人工晋升）</el-descriptions-item>
             <el-descriptions-item label="硬冲突">车辆：仅「可靠车牌」不一致，或 truck/bus ↔ car 类别互斥时拒绝合并；OCR 噪声短牌（如 UNEC）不参与硬冲突</el-descriptions-item>
             <el-descriptions-item label="行人软线索">跨视角外观偏弱时，用 HSV 颜色签名抬分（红帽/浅色上衣/白盔等）；行人检测阈值略低于车辆</el-descriptions-item>
@@ -758,6 +796,23 @@ const detectForm = reactive({
   enableVehicle: true,
   sampleFps: 4,
 })
+
+const resetSessionDefaults = () => {
+  Object.assign(form, {
+    enablePerson: true,
+    enableVehicle: true,
+    sampleFps: 4,
+    appearThresh: 0.48,
+    confirmThresh: 0,
+    candidateThresh: 0,
+    useFaissGallery: true,
+    timeWindowSec: 90,
+    localTrackBackend: 'bytetrack',
+    enableCmc: false,
+    persistEvents: false,
+    mcbyteDecouple: true,
+  })
+}
 
 const uploadMode = ref('path')
 
@@ -1428,10 +1483,76 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.mtmc-page { padding: 4px; }
+.mtmc-page { padding: 4px; color: #24344d; }
+.page-hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 22px;
+  margin-bottom: 14px;
+  border: 1px solid #dce7f6;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #f7faff 0%, #eef5ff 58%, #f7fbff 100%);
+}
+.hero-title { color: #172a46; font-size: 21px; font-weight: 750; letter-spacing: .5px; }
+.hero-subtitle { margin-top: 5px; color: #6f819a; font-size: 13px; }
+.hero-flow { display: flex; align-items: center; gap: 8px; color: #416a9f; font-size: 12px; white-space: nowrap; }
+.hero-flow span { padding: 5px 9px; border: 1px solid #d5e3f6; border-radius: 12px; background: rgba(255,255,255,.8); }
+.hero-flow i { color: #9aacc3; font-style: normal; }
+.hero-status { display: flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: 15px; font-size: 12px; white-space: nowrap; }
+.hero-status.idle { color: #68788e; background: #e9eef5; }
+.hero-status.running { color: #147550; background: #dff5ea; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 3px rgba(80,120,160,.1); }
+.mtmc-tabs { border-radius: 10px; overflow: hidden; box-shadow: 0 5px 18px rgba(33, 58, 92, .07); }
+.mtmc-tabs :deep(.el-tabs__header) { position: sticky; top: 0; z-index: 20; background: #f7f9fc; }
+.mtmc-tabs :deep(.el-tabs__item) { height: 44px; padding: 0 20px; color: #60718a; font-weight: 500; }
+.mtmc-tabs :deep(.el-tabs__item.is-active) { color: #2670d9; background: #fff; font-weight: 650; }
+.mtmc-tabs :deep(.el-tabs__content) { padding: 16px; background: #fff; }
+.tab-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 11px 14px;
+  margin-bottom: 14px;
+  border-left: 3px solid #409eff;
+  border-radius: 4px 8px 8px 4px;
+  background: #f4f8fe;
+}
+.tab-intro > div { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.tab-intro strong { color: #253a57; font-size: 14px; white-space: nowrap; }
+.tab-intro span { color: #72839a; font-size: 12px; }
 .mb { margin-bottom: 12px; }
 .cfg { margin-bottom: 8px; }
-.tab-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.config-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 8px;
+  padding: 14px 16px 6px;
+  margin-bottom: 12px;
+  border: 1px solid #e1e8f2;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.config-title { flex: 0 0 100%; display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; padding-bottom: 8px; border-bottom: 1px solid #e9eef5; }
+.config-title.advanced { margin-top: 3px; }
+.config-title span { color: #304866; font-size: 13px; font-weight: 700; }
+.config-title small { color: #91a0b3; font-size: 11px; }
+.config-panel :deep(.el-form-item) { margin-right: 12px; margin-bottom: 12px; }
+.config-panel :deep(.el-form-item__label) { color: #61748d; font-size: 12px; }
+.action-bar { flex: 0 0 100%; display: flex; justify-content: flex-end; margin: 2px 0 0 !important; padding: 11px 0 5px; border-top: 1px solid #e6ecf4; }
+.action-bar :deep(.el-form-item__content) { width: 100%; justify-content: flex-end; }
+.status-panel { overflow: hidden; border-radius: 9px; }
+.status-panel :deep(.el-descriptions__label) { color: #718198; background: #f5f8fc !important; }
+.status-panel :deep(.el-descriptions__content) { color: #263a56; font-weight: 500; }
+.tab-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; padding: 11px 12px; flex-wrap: wrap; border: 1px solid #e2e9f2; border-radius: 9px; background: #f8fafc; }
+.section-title { display: flex; align-items: baseline; gap: 10px; margin: 17px 0 9px; color: #2b405d; }
+.section-title span { font-size: 14px; font-weight: 700; }
+.section-title small { color: #8a99ac; font-size: 11px; font-weight: 400; }
+.mtmc-tabs :deep(.el-table) { overflow: hidden; border-radius: 8px; --el-table-header-bg-color: #f4f7fb; --el-table-header-text-color: #526780; }
+.mtmc-tabs :deep(.el-table th.el-table__cell) { font-weight: 650; }
 .grid-preview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
@@ -1445,6 +1566,8 @@ onBeforeUnmount(() => {
   margin: 12px 0;
 }
 @media (max-width: 1100px) {
+  .page-hero { grid-template-columns: 1fr auto; }
+  .hero-flow { display: none; }
   .detect-views { grid-template-columns: 1fr; }
 }
 .cell {
@@ -1520,14 +1643,35 @@ onBeforeUnmount(() => {
 }
 .upload-hint { margin: -4px 0 12px 100px; }
 .hint { color: #8899aa; font-size: 12px; }
-.guide-wrap { padding: 4px 8px 16px; max-width: 960px; }
-.guide-h3 { margin: 18px 0 10px; font-size: 15px; font-weight: 700; color: #1f2d3d; }
+.guide-wrap { padding: 4px 6px 16px; max-width: 1280px; margin: 0 auto; }
+.guide-h3 { margin: 24px 0 11px; padding-left: 10px; border-left: 3px solid #76a9ee; font-size: 15px; font-weight: 700; color: #1f2d3d; }
 .guide-h3:first-of-type { margin-top: 4px; }
 .guide-p, .guide-ol { font-size: 13px; line-height: 1.7; color: #5a6b87; margin: 0 0 12px; }
 .guide-ol { padding-left: 20px; }
 .guide-ol li { margin-bottom: 6px; }
-.guide-steps { margin: 12px 0 20px; }
-.guide-alerts { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.guide-steps { margin: 16px 0 24px; padding: 18px 8px 10px; border: 1px solid #e5ebf3; border-radius: 10px; background: #fbfcfe; }
+.guide-alerts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+.guide-alerts :deep(.el-alert) { align-items: flex-start; min-height: 82px; }
+.guide-wrap :deep(.el-descriptions) { overflow: hidden; border-radius: 9px; }
 .guide-foot { font-size: 12px; color: #8a9bb5; margin-top: 8px; }
 .guide-wrap code { font-size: 12px; background: #f0f4f8; padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 760px) {
+  .mtmc-page { padding: 0; }
+  .page-hero { grid-template-columns: 1fr; gap: 10px; padding: 14px; }
+  .hero-status { width: fit-content; }
+  .mtmc-tabs :deep(.el-tabs__item) { padding: 0 12px; font-size: 12px; }
+  .mtmc-tabs :deep(.el-tabs__content) { padding: 11px; }
+  .tab-intro { align-items: flex-start; }
+  .tab-intro > div { display: block; }
+  .tab-intro span { display: block; margin-top: 4px; line-height: 1.5; }
+  .config-panel { padding: 12px 10px 4px; }
+  .config-title { display: block; }
+  .config-title small { display: block; margin-top: 3px; line-height: 1.5; }
+  .config-panel :deep(.el-form-item) { width: 100%; margin-right: 0; }
+  .config-panel :deep(.el-form-item__content) { flex-wrap: wrap; }
+  .action-bar :deep(.el-form-item__content) { justify-content: flex-start; gap: 6px; }
+  .cell-h { align-items: flex-start; flex-direction: column; }
+  .cell-h-meta { white-space: normal; line-height: 1.5; }
+  .guide-alerts { grid-template-columns: 1fr; }
+}
 </style>
