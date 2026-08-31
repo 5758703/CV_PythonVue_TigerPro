@@ -81,7 +81,7 @@ class Config:
     DEEPSEEK_BASE_URL = os.getenv(
         "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
     )
-    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
     # Qwen-VL（缺陷诊断云端多模态）：OpenAI 兼容接口（默认阿里云百炼 Token Plan 国内）
     QWEN_VL_API_KEY = (
