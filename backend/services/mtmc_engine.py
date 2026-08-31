@@ -412,7 +412,9 @@ def _read_image_bgr(path: str):
 def _hub_stream_params(session: MtmcSession, camera_row) -> tuple[int, int]:
     """与 overlay 流一致的 hub 宽高/FPS，避免 cam_worker 与预览各用一套 hub。"""
     width = int(session.cfg.width or getattr(camera_row, "resolution", None) or 960)
-    fps = int(session.cfg.fps or getattr(camera_row, "fps", None) or 10)
+    # MJPEG 在浏览器端解码开销明显高于 H.264。跨镜页面同时展示多路时，
+    # 12 FPS 已足够保持监控预览流畅，也能避免原始 25/30 FPS 把 CPU 和带宽占满。
+    fps = min(12, int(session.cfg.fps or getattr(camera_row, "fps", None) or 10))
     return width, fps
 
 
@@ -1751,6 +1753,8 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
 
     width, fps = _hub_stream_params(session, camera_row)
     hub = ensure_shared_hub(cam_id, source_type, source, width, fps)
+    sample_interval = 1.0 / max(0.2, float(session.cfg.sample_fps))
+    next_sample_at = 0.0
     # hub epoch 变化（ffmpeg 重启）后重新订阅，避免 worker 永久退出
     while not session._stop.is_set():
         last_seq = -1
@@ -1761,6 +1765,13 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
                 if seq == last_seq:
                     continue
                 last_seq = seq
+                # RTSP/device 分支之前会对源流的每一帧执行完整推理，sampleFps
+                # 没有生效。两路 25 FPS 视频因此可能触发每秒 50 次推理并造成积压。
+                # 在 JPEG 解码之前节流，只处理最新采样帧，预览仍由共享 hub 流畅输出。
+                now = time.monotonic()
+                if now < next_sample_at:
+                    continue
+                next_sample_at = now + sample_interval
                 frame = _decode_jpeg(jpeg)
                 if frame is None:
                     continue

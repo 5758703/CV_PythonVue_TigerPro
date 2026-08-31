@@ -929,3 +929,21 @@ def test_one_sided_rider_proxy_uses_stronger_color_fusion():
         local_track_id=2, now=11.0,
     )
     assert second.global_id == first.global_id
+
+
+def test_mtmc_preview_hub_caps_mjpeg_fps():
+    from types import SimpleNamespace
+    from services.mtmc_engine import _hub_stream_params
+
+    session = SimpleNamespace(cfg=SimpleNamespace(width=960, fps=30))
+    camera = SimpleNamespace(resolution=1280, fps=25)
+    assert _hub_stream_params(session, camera) == (960, 12)
+
+
+def test_mtmc_preview_hub_keeps_low_source_fps():
+    from types import SimpleNamespace
+    from services.mtmc_engine import _hub_stream_params
+
+    session = SimpleNamespace(cfg=SimpleNamespace(width=640, fps=8))
+    camera = SimpleNamespace(resolution=1280, fps=25)
+    assert _hub_stream_params(session, camera) == (640, 8)

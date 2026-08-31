@@ -258,52 +258,35 @@
             </div>
             <img :src="overlaySrc(cid)" class="cell-v" @error="bustOverlay(cid)" />
             <div class="cell-dets">
-              <el-table
-                :data="camDetections(cid)"
-                size="small"
-                border
-                stripe
-                max-height="180"
-                empty-text="本帧暂无检出"
-              >
-                <el-table-column label="类型" width="56">
-                  <template #default="{ row }">
-                    <el-tag size="small" :type="row.objectType === 'vehicle' ? 'warning' : 'success'" effect="plain">
-                      {{ row.objectType === 'vehicle' ? '车' : '人' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="label" label="标签" min-width="110" show-overflow-tooltip />
-                <el-table-column label="Local" width="58">
-                  <template #default="{ row }">L{{ row.localTrackId }}</template>
-                </el-table-column>
-                <el-table-column prop="globalId" label="Global" min-width="100" show-overflow-tooltip>
-                  <template #default="{ row }">
-                    <el-button
-                      v-if="row.globalId"
-                      link
-                      type="primary"
-                      @click="showTraj(row.globalId)"
-                    >{{ row.globalId }}</el-button>
-                    <span v-else class="muted">—</span>
-                  </template>
-                </el-table-column>
-                <el-table-column label="身份" min-width="80" show-overflow-tooltip>
-                  <template #default="{ row }">
-                    {{ row.objectType === 'vehicle' ? (row.plate || '无牌') : (row.displayName || '匿名') }}
-                  </template>
-                </el-table-column>
-                <el-table-column label="分" width="52">
-                  <template #default="{ row }">
-                    {{ formatScore(row.fuseScore ?? row.score) }}
-                  </template>
-                </el-table-column>
-                <el-table-column prop="assocMode" label="决策" width="78" show-overflow-tooltip>
-                  <template #default="{ row }">
-                    <span :class="assocModeClass(row.assocMode)">{{ row.assocMode || '—' }}</span>
-                  </template>
-                </el-table-column>
-              </el-table>
+              <div class="result-summary">
+                <span>识别结果</span>
+                <span class="summary-chip person">人 {{ camTypeCount(cid, 'person') }}</span>
+                <span class="summary-chip vehicle">车 {{ camTypeCount(cid, 'vehicle') }}</span>
+                <span class="summary-total">共 {{ camDetCount(cid) }} 个</span>
+              </div>
+              <div v-if="camDetections(cid).length" class="result-list">
+                <div v-for="row in camDetections(cid)" :key="`${row.objectType}-${row.localTrackId}`" class="result-item">
+                  <span :class="['result-type', row.objectType]">{{ row.objectType === 'vehicle' ? '车' : '人' }}</span>
+                  <div class="result-main">
+                    <div class="result-primary">
+                      <span class="result-identity">{{ detectionIdentity(row) }}</span>
+                      <span v-if="row.label" class="result-label">{{ row.label }}</span>
+                    </div>
+                    <div class="result-secondary">
+                      <span>Local L{{ row.localTrackId }}</span>
+                      <button v-if="row.globalId" class="global-link" @click="showTraj(row.globalId)">
+                        Global {{ compactGlobalId(row.globalId) }}
+                      </button>
+                      <span v-else class="muted">Global 待关联</span>
+                    </div>
+                  </div>
+                  <div class="result-status">
+                    <span class="result-score">{{ formatScore(row.fuseScore ?? row.score) }}</span>
+                    <span :class="['mode-pill', assocModeClass(row.assocMode)]">{{ assocModeLabel(row.assocMode) }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="result-empty">当前画面暂无人员或车辆</div>
             </div>
           </div>
         </div>
@@ -955,6 +938,16 @@ const camDetCount = (cid, sess = session.value) => {
   if (typeof m.detCount === 'number') return m.detCount
   return (m.detections || []).length
 }
+const camTypeCount = (cid, type) => camDetections(cid).filter((row) => row.objectType === type).length
+const detectionIdentity = (row) => {
+  if (row.objectType === 'vehicle') return row.plate || '未识别车牌'
+  return row.displayName || '匿名人员'
+}
+const compactGlobalId = (value) => {
+  const text = String(value || '')
+  if (text.length <= 15) return text
+  return `${text.slice(0, 8)}…${text.slice(-5)}`
+}
 const camCongestionLabel = (cid) => {
   const c = camMeta(cid).congestion
   if (!c) return ''
@@ -1007,6 +1000,16 @@ const assocModeClass = (mode) => {
   if (mode === 'sticky') return 'mode-sticky'
   if (mode === 'candidate') return 'mode-cand'
   return 'muted'
+}
+const assocModeLabel = (mode) => {
+  const map = {
+    long_term: '长期库',
+    promoted: '已确认',
+    sticky: '持续跟踪',
+    candidate: '候选',
+    new: '新目标',
+  }
+  return map[mode] || mode || '待关联'
 }
 
 const clearSavedSession = () => {
@@ -1418,7 +1421,7 @@ onBeforeUnmount(() => {
 .tab-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .grid-preview {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 12px;
   margin: 12px 0;
 }
@@ -1432,10 +1435,11 @@ onBeforeUnmount(() => {
   .detect-views { grid-template-columns: 1fr; }
 }
 .cell {
-  background: #0b1220;
-  border-radius: 6px;
+  background: #fff;
+  border-radius: 10px;
   overflow: hidden;
-  border: 1px solid #1e2a44;
+  border: 1px solid #dfe7f3;
+  box-shadow: 0 4px 16px rgba(30, 55, 90, 0.08);
   display: flex;
   flex-direction: column;
 }
@@ -1453,19 +1457,35 @@ onBeforeUnmount(() => {
 .cell-v { width: 100%; display: block; min-height: 160px; object-fit: contain; background: #060c18; }
 .form-hint { margin-left: 10px; color: #8aa0c2; font-size: 12px; }
 .cell-dets {
-  background: #0f1728;
-  padding: 6px;
-  border-top: 1px solid #1e2a44;
+  background: #f7f9fc;
+  padding: 10px;
+  border-top: 1px solid #e4eaf3;
 }
-.cell-dets :deep(.el-table) {
-  --el-table-bg-color: #0f1728;
-  --el-table-tr-bg-color: #0f1728;
-  --el-table-header-bg-color: #152238;
-  --el-table-row-hover-bg-color: #1a2740;
-  --el-table-text-color: #d7e3f7;
-  --el-table-header-text-color: #a8bddc;
-  --el-table-border-color: #243352;
-  font-size: 12px;
+.result-summary { display: flex; align-items: center; gap: 7px; color: #263750; font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.summary-chip { padding: 2px 7px; border-radius: 10px; font-weight: 500; }
+.summary-chip.person { color: #18875d; background: #e7f7f0; }
+.summary-chip.vehicle { color: #b76a0b; background: #fff3df; }
+.summary-total { margin-left: auto; color: #8492a6; font-weight: 400; }
+.result-list { display: flex; flex-direction: column; gap: 6px; max-height: 190px; overflow: auto; padding-right: 2px; }
+.result-item { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 8px 9px; background: #fff; border: 1px solid #e7ecf4; border-radius: 7px; }
+.result-type { flex: 0 0 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; font-size: 12px; font-weight: 700; }
+.result-type.person { color: #16835b; background: #e5f7ef; }
+.result-type.vehicle { color: #bd6d08; background: #fff0d8; }
+.result-main { flex: 1; min-width: 0; }
+.result-primary, .result-secondary { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.result-primary { margin-bottom: 3px; }
+.result-identity { color: #263750; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.result-label { color: #8492a6; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-secondary { color: #8a97aa; font-size: 11px; }
+.global-link { max-width: 180px; padding: 0; border: 0; background: transparent; color: #3578e5; font: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.global-link:hover { color: #1d5fc8; text-decoration: underline; }
+.result-status { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.result-score { color: #52647c; font-size: 11px; font-variant-numeric: tabular-nums; }
+.mode-pill { padding: 2px 6px; border-radius: 9px; background: #edf1f7; font-size: 10px; white-space: nowrap; }
+.result-empty { padding: 18px 8px; color: #98a4b5; font-size: 12px; text-align: center; background: #fff; border: 1px dashed #dce3ed; border-radius: 7px; }
+@media (max-width: 720px) {
+  .grid-preview { grid-template-columns: 1fr; }
+  .result-label { display: none; }
 }
 .muted { color: #7a8ba8; }
 .mode-ok { color: #67c23a; }

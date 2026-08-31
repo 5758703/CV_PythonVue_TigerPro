@@ -881,8 +881,9 @@ def overlay_stream(sid, cid):
     else:
         if cid not in s.cfg.camera_ids:
             return jsonify(code=400, message="该源不在当前会话中"), 400
-        width = s.cfg.width or width
-        fps = s.cfg.fps or fps
+        # 与识别 worker 使用完全相同的 hub 参数，防止同一摄像头因 FPS/宽度
+        # key 不同而额外启动一套 FFmpeg 拉流进程。
+        width, fps = mtmc_engine._hub_stream_params(s, cam_row)
         stype = getattr(cam_row, "source_type", "file")
         gen = mjpeg_stream_mtmc_overlay(sid, cid, stype, source, width, fps)
         resp = Response(stream_with_context(gen), mimetype="multipart/x-mixed-replace; boundary=frame")
