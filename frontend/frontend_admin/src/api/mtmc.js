@@ -4,6 +4,7 @@ import { useUserStore } from '../store/user'
 function streamOrigin() {
   const fromEnv = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '')
   if (fromEnv) return fromEnv
+  // MJPEG 长连接开发态直连后端，避免经 Vite 代理断流
   if (import.meta.env.DEV) return 'http://127.0.0.1:5001'
   return ''
 }

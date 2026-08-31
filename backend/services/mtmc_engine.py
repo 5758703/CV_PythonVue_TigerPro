@@ -187,6 +187,25 @@ class CamState:
     plate_cache: dict = field(default_factory=dict)
     raw_jpeg: bytes | None = None
     fast_preview: bool = False
+    stream_fps: float = 0.0
+    detect_fps: float = 0.0
+    _publish_times: list = field(default_factory=list, repr=False)
+    _detect_times: list = field(default_factory=list, repr=False)
+
+
+def _rolling_fps(times: list, now: float | None = None, window: float = 2.0) -> float:
+    """根据时间戳滑动窗口估算实时 FPS。"""
+    ts = float(now if now is not None else time.time())
+    times.append(ts)
+    cutoff = ts - window
+    while times and times[0] < cutoff:
+        times.pop(0)
+    if len(times) < 2:
+        return 0.0
+    span = times[-1] - times[0]
+    if span <= 1e-6:
+        return 0.0
+    return round((len(times) - 1) / span, 1)
 
 
 def _mark_playback(cam_state: CamState, now: float | None = None):
@@ -348,6 +367,8 @@ class MtmcSession:
             "cams": {
                 str(cid): {
                     "frameSeq": st.frame_seq,
+                    "streamFps": float(getattr(st, "stream_fps", 0) or 0),
+                    "detectFps": float(getattr(st, "detect_fps", 0) or 0),
                     "detCount": _session_det_count(st),
                     "currentDetCount": len(st.last_dets),
                     "congestion": st.congestion,
@@ -935,7 +956,12 @@ def _publish_overlay(cam_state: CamState, frame, items, congestion=None):
     jpeg = _draw_overlay(preview, items or [], congestion, jpeg_quality=quality)
     if jpeg:
         cam_state.overlay_jpeg = jpeg
+    elif ok_raw:
+        # 画框失败时至少推原帧，避免预览长期空白
+        cam_state.overlay_jpeg = cam_state.raw_jpeg
+    if ok_raw or jpeg:
         cam_state.frame_seq += 1
+        cam_state.stream_fps = _rolling_fps(cam_state._publish_times)
     cam_state.last_dets = list(items or [])
 
 
@@ -1442,6 +1468,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         _record_session_dets(cam_state, items, now)
         _publish_overlay(cam_state, frame, items, None)
         session.stats["frames"] += 1
+        cam_state.detect_fps = _rolling_fps(cam_state._detect_times, now)
         return
 
     from services.strong_reid import extract_person_embedding, color_signature
@@ -1465,6 +1492,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     session.stats["persons"] += len(raw_p) if cfg.enable_person else 0
     session.stats["vehicles"] += len(raw_v) if cfg.enable_vehicle else 0
     session.stats["frames"] += 1
+    cam_state.detect_fps = _rolling_fps(cam_state._detect_times, now)
     preliminary = _detect_items_from_raw(
         raw_p if cfg.enable_person else [],
         raw_v if cfg.enable_vehicle else [],
@@ -1868,6 +1896,14 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
                 # 在 JPEG 解码之前节流，只处理最新采样帧，预览仍由共享 hub 流畅输出。
                 now = time.monotonic()
                 if now < next_sample_at:
+                    # 首帧尚未产出时先推无框预览，避免画面空白；之后由流层重推最近 overlay
+                    if cam_state.overlay_jpeg is None:
+                        try:
+                            frame_keep = _decode_jpeg(jpeg)
+                            if frame_keep is not None:
+                                _publish_overlay(cam_state, frame_keep, [], None)
+                        except Exception:  # noqa: BLE001
+                            pass
                     continue
                 next_sample_at = now + sample_interval
                 frame = _decode_jpeg(jpeg)

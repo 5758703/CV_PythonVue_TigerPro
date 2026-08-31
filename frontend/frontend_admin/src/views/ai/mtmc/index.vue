@@ -138,14 +138,21 @@
 
         <div v-if="detectSession?.running && detectCamId" class="detect-views">
           <div class="cell">
-            <div class="cell-h"><span>原视频</span></div>
+            <div class="cell-h">
+              <span>原视频</span>
+              <span class="cell-h-meta">
+                <span class="fps-chip">FPS {{ formatFps(camMeta(detectCamId, detectSession).streamFps) }}</span>
+              </span>
+            </div>
             <img :src="detectRawSrc" class="cell-v" @error="bustDetectStream" />
           </div>
           <div class="cell">
             <div class="cell-h">
               <span>结果视频（AI 叠加）</span>
               <span class="cell-h-meta">
-                检出 {{ camDetCount(detectCamId, detectSession) }}
+                <span class="fps-chip detect">检测 {{ formatFps(camMeta(detectCamId, detectSession).detectFps) }}</span>
+                <span class="fps-chip">推流 {{ formatFps(camMeta(detectCamId, detectSession).streamFps) }}</span>
+                · 检出 {{ camDetCount(detectCamId, detectSession) }}
                 <template v-if="camMeta(detectCamId, detectSession).lastError"> · {{ camMeta(detectCamId, detectSession).lastError }}</template>
               </span>
             </div>
@@ -1051,6 +1058,11 @@ const formatScore = (v) => {
   if (Number.isNaN(n)) return '—'
   return n.toFixed(2)
 }
+const formatFps = (v) => {
+  const n = Number(v)
+  if (!Number.isFinite(n) || n <= 0) return '—'
+  return n >= 10 ? n.toFixed(0) : n.toFixed(1)
+}
 const sourceModeLabel = (mode) => {
   const map = {
     camera: '摄像头',
@@ -1187,6 +1199,14 @@ const onStart = async () => {
     session.value = res.data
     localStorage.setItem('mtmc-session-id', sessionId.value)
     ElMessage.success('跨镜会话已启动')
+    const ids = res.data.cameraIds || []
+    const t = String(Date.now())
+    ids.forEach((cid) => { overlayBust[cid] = t })
+    setTimeout(() => {
+      if (!session.value?.running) return
+      const t2 = String(Date.now())
+      ;(session.value.cameraIds || []).forEach((cid) => { overlayBust[cid] = t2 })
+    }, 800)
   } finally {
     busy.value = false
   }
@@ -1270,6 +1290,10 @@ const onDetectStart = async () => {
     detectBust.value = String(Date.now())
     localStorage.setItem('mtmc-detect-session-id', detectSessionId.value)
     ElMessage.success('实时检测已启动')
+    // 稍后再刷新一次流地址，等待 worker 产出首帧
+    setTimeout(() => {
+      if (detectSession.value?.running) detectBust.value = String(Date.now())
+    }, 800)
   } finally {
     detectBusy.value = false
   }
@@ -1591,6 +1615,20 @@ onBeforeUnmount(() => {
 }
 .cell-h-meta { color: #8aa0c2; font-size: 11px; white-space: nowrap; }
 .playback-time { color: #d7e7ff; font-variant-numeric: tabular-nums; }
+.fps-chip {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(64, 158, 255, 0.18);
+  color: #9fd0ff;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.fps-chip.detect {
+  background: rgba(103, 194, 58, 0.2);
+  color: #b7eb8f;
+}
 .cell-v { width: 100%; display: block; min-height: 160px; object-fit: contain; background: #060c18; }
 .form-hint { margin-left: 10px; color: #8aa0c2; font-size: 12px; }
 .cell-dets {

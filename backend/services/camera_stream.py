@@ -583,6 +583,7 @@ def mjpeg_stream_mtmc_engine_jpegs(session_id: str, camera_id: int, which: str =
     last_seq = -1
     idle_n = 0
     which = "raw" if which == "raw" else "overlay"
+    last_emit = 0.0
     while True:
         if _request_disconnected():
             break
@@ -598,9 +599,17 @@ def mjpeg_stream_mtmc_engine_jpegs(session_id: str, camera_id: int, which: str =
         seq = last_seq
         if cam_st:
             jpeg = cam_st.raw_jpeg if which == "raw" else cam_st.overlay_jpeg
-            seq = cam_st.frame_seq
-        if jpeg and seq != last_seq:
+            # raw 流：overlay 尚未画好时也先推原帧，避免双画面长期空白
+            if which == "raw" and not jpeg:
+                jpeg = cam_st.overlay_jpeg
+            if which == "overlay" and not jpeg:
+                jpeg = cam_st.raw_jpeg
+            seq = int(getattr(cam_st, "frame_seq", 0) or 0)
+        now = time.monotonic()
+        if jpeg and (seq != last_seq or (now - last_emit) >= 0.35):
+            # 新帧立即推；无新帧时低频重推，防止浏览器一直空白
             last_seq = seq
+            last_emit = now
             idle_n = 0
             yield _pack_frame(jpeg)
             continue
@@ -611,17 +620,22 @@ def mjpeg_stream_mtmc_engine_jpegs(session_id: str, camera_id: int, which: str =
 
 
 def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, source, width=640, fps=15):
-    """MTMC AI 叠加流：复用共享拉流，优先输出引擎标注帧，否则回退原帧。"""
+    """MTMC AI 叠加流：优先输出引擎标注帧；file/image 不走 ffmpeg hub。"""
     from services import mtmc_engine
 
     sess = mtmc_engine.get_session(session_id)
-    if sess and getattr(sess.cfg, "detect_only", False):
+    stype = (source_type or "file").strip().lower()
+    # 本地文件/图片与 detectOnly：worker 已用 OpenCV 产出 JPEG，勿再起 ffmpeg（易无帧且无框）
+    if sess and (
+        getattr(sess.cfg, "detect_only", False)
+        or stype in ("file", "image")
+    ):
         yield from mjpeg_stream_mtmc_engine_jpegs(session_id, camera_id, "overlay")
         return
 
     hub = ensure_shared_hub(camera_id, source_type, source, width, fps)
     last_overlay_seq = -1
-    last_raw_seq = -1
+    last_emit = 0.0
     idle_n = 0
     with hub._cond:
         hub.clients += 1
@@ -639,25 +653,27 @@ def mjpeg_stream_mtmc_overlay(session_id: str, camera_id: int, source_type, sour
             sess = mtmc_engine.get_session(session_id)
             if sess:
                 cam_st = sess.cams.get(int(camera_id))
-            if overlay and cam_st and cam_st.frame_seq != last_overlay_seq:
-                last_overlay_seq = cam_st.frame_seq
-                idle_n = 0
-                yield _pack_frame(overlay)
+            frame_seq = int(getattr(cam_st, "frame_seq", 0) or 0) if cam_st else -1
+            now = time.monotonic()
+            # 有标注帧则只推标注帧（新帧或低频重推），绝不回退无框的 hub 原帧
+            if overlay:
+                if frame_seq != last_overlay_seq or (now - last_emit) >= 0.25:
+                    last_overlay_seq = frame_seq
+                    last_emit = now
+                    idle_n = 0
+                    yield _pack_frame(overlay)
+                else:
+                    time.sleep(0.02)
                 continue
             with hub._cond:
                 if hub._epoch != start_epoch:
                     break
-                hub._cond.wait(timeout=0.15)
+                hub._cond.wait(timeout=0.12)
                 if hub._epoch != start_epoch:
                     break
                 raw = hub.latest
-                seq = hub.frame_seq
-            if overlay and cam_st and cam_st.frame_seq != last_overlay_seq:
-                last_overlay_seq = cam_st.frame_seq
-                idle_n = 0
-                yield _pack_frame(overlay)
-            elif raw is not None and seq != last_raw_seq:
-                last_raw_seq = seq
+            # 仅在引擎尚未产出任何 overlay 时临时用原帧保活
+            if raw is not None:
                 idle_n = 0
                 yield _pack_frame(raw)
             else:
