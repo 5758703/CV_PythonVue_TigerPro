@@ -958,3 +958,74 @@ def test_ultralytics_config_uses_project_writable_dir():
     expected_root = os.path.join(backend_dir, "uploads")
     assert os.path.commonpath([configured, expected_root]) == expected_root
     assert os.path.isdir(configured)
+
+
+def test_camera_session_results_survive_empty_current_frame():
+    from services.mtmc_engine import CamState, _record_session_dets, _session_det_snapshot
+
+    state = CamState(camera_id=17)
+    _record_session_dets(state, [{
+        "objectType": "person", "localTrackId": 9, "globalId": "P9",
+        "label": "P9|匿名", "attrs": {},
+    }], now=10.0)
+    _record_session_dets(state, [], now=11.0)
+    rows = _session_det_snapshot(state)
+    assert len(rows) == 1
+    assert rows[0]["globalId"] == "P9"
+
+
+def test_confirmed_result_replaces_provisional_detection():
+    from services.mtmc_engine import CamState, _record_session_dets, _session_det_snapshot
+
+    state = CamState(camera_id=16)
+    _record_session_dets(state, [{
+        "objectType": "vehicle", "localTrackId": 1, "globalId": None,
+        "attrs": {"detectOnly": True},
+    }], now=10.0)
+    _record_session_dets(state, [{
+        "objectType": "vehicle", "localTrackId": 900001, "globalId": "V1",
+        "attrs": {},
+    }], now=10.2)
+    rows = _session_det_snapshot(state)
+    assert len(rows) == 1
+    assert rows[0]["globalId"] == "V1"
+
+
+def test_shared_yolo_model_predict_is_serialized(monkeypatch, tmp_path):
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    import inference
+    from services.mtmc_engine import _detect
+
+    model_path = tmp_path / "model.pt"
+    model_path.write_bytes(b"test")
+    active = 0
+    max_active = 0
+
+    class FakeModel:
+        def predict(self, _frame, **_kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            time.sleep(0.03)
+            active -= 1
+            return [SimpleNamespace(boxes=None)]
+
+    model = FakeModel()
+    monkeypatch.setattr(inference, "_get_model", lambda _path: model)
+    monkeypatch.setattr(inference, "_yolo_predict_kwargs", lambda **_kwargs: {})
+    frame = np.zeros((16, 16, 3), dtype=np.uint8)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: _detect(str(model_path), frame, 0.2, [0]), range(2)))
+    assert max_active == 1
+
+
+def test_camera_playback_time_starts_from_first_received_frame():
+    from services.mtmc_engine import CamState, _mark_playback, _playback_seconds
+
+    state = CamState(camera_id=16)
+    assert _playback_seconds(state) == 0
+    _mark_playback(state, 100.0)
+    _mark_playback(state, 165.4)
+    assert _playback_seconds(state) == 65.4

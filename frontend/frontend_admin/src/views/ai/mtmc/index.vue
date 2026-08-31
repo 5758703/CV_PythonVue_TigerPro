@@ -250,7 +250,8 @@
             <div class="cell-h">
               <span>{{ cameraTitle(cid) }}</span>
               <span class="cell-h-meta">
-                检出 {{ camDetCount(cid) }}
+                <span class="playback-time">播放 {{ formatPlaybackTime(camMeta(cid).playbackSeconds) }}</span>
+                · 当前 {{ camCurrentDetCount(cid) }} · 会话 {{ camDetCount(cid) }}
                 <template v-if="camMeta(cid).frameSeq"> · 帧 #{{ camMeta(cid).frameSeq }}</template>
                 <template v-if="camCongestionLabel(cid)"> · {{ camCongestionLabel(cid) }}</template>
                 <template v-if="camMeta(cid).lastError"> · {{ camMeta(cid).lastError }}</template>
@@ -259,7 +260,7 @@
             <img :src="overlaySrc(cid)" class="cell-v" @error="bustOverlay(cid)" />
             <div class="cell-dets">
               <div class="result-summary">
-                <span>识别结果</span>
+                <span>会话实时结果</span>
                 <span class="summary-chip person">人 {{ camTypeCount(cid, 'person') }}</span>
                 <span class="summary-chip vehicle">车 {{ camTypeCount(cid, 'vehicle') }}</span>
                 <span class="summary-total">共 {{ camDetCount(cid) }} 个</span>
@@ -286,7 +287,7 @@
                   </div>
                 </div>
               </div>
-              <div v-else class="result-empty">当前画面暂无人员或车辆</div>
+              <div v-else class="result-empty">本会话尚未识别到人员或车辆</div>
             </div>
           </div>
         </div>
@@ -938,7 +939,19 @@ const camDetCount = (cid, sess = session.value) => {
   if (typeof m.detCount === 'number') return m.detCount
   return (m.detections || []).length
 }
+const camCurrentDetCount = (cid, sess = session.value) => {
+  const m = camMeta(cid, sess)
+  if (typeof m.currentDetCount === 'number') return m.currentDetCount
+  return (m.detections || []).length
+}
 const camTypeCount = (cid, type) => camDetections(cid).filter((row) => row.objectType === type).length
+const formatPlaybackTime = (value) => {
+  const total = Math.max(0, Math.floor(Number(value) || 0))
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':')
+}
 const detectionIdentity = (row) => {
   if (row.objectType === 'vehicle') return row.plate || '未识别车牌'
   return row.displayName || '匿名人员'
@@ -1454,6 +1467,7 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 .cell-h-meta { color: #8aa0c2; font-size: 11px; white-space: nowrap; }
+.playback-time { color: #d7e7ff; font-variant-numeric: tabular-nums; }
 .cell-v { width: 100%; display: block; min-height: 160px; object-fit: contain; background: #060c18; }
 .form-hint { margin-left: 10px; color: #8aa0c2; font-size: 12px; }
 .cell-dets {

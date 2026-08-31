@@ -171,9 +171,14 @@ class CamState:
     tracker_vehicle: Any = None
     vehicle_session_id: str = ""
     last_process_at: float = 0.0
+    playback_started_at: float = 0.0
+    playback_last_at: float = 0.0
     overlay_jpeg: bytes | None = None
     frame_seq: int = 0
     last_dets: list = field(default_factory=list)
+    # 当前帧会随采样清空；会话结果按目标保留并持续更新，供每路卡片展示。
+    session_dets: dict = field(default_factory=dict)
+    state_lock: Any = field(default_factory=threading.RLock, repr=False)
     congestion: dict = field(default_factory=dict)
     person_builders: dict = field(default_factory=dict)
     vehicle_builders: dict = field(default_factory=dict)
@@ -184,12 +189,26 @@ class CamState:
     fast_preview: bool = False
 
 
+def _mark_playback(cam_state: CamState, now: float | None = None):
+    """记录该路视频实际收到帧的播放时间，不受检测/ReID耗时影响。"""
+    ts = float(now if now is not None else time.time())
+    if cam_state.playback_started_at <= 0:
+        cam_state.playback_started_at = ts
+    cam_state.playback_last_at = max(ts, cam_state.playback_started_at)
+
+
+def _playback_seconds(cam_state: CamState) -> float:
+    if cam_state.playback_started_at <= 0 or cam_state.playback_last_at <= 0:
+        return 0.0
+    return max(0.0, cam_state.playback_last_at - cam_state.playback_started_at)
+
+
 def _public_live_det(d: dict) -> dict:
     """Compact current-frame detection for session snapshot / UI (no full trail)."""
     attrs = d.get("attrs") or {}
     trail = d.get("trail") or []
     tip = trail[-1] if trail else None
-    return {
+    public = {
         "objectType": d.get("objectType"),
         "globalId": d.get("globalId"),
         "localTrackId": d.get("localTrackId"),
@@ -208,6 +227,63 @@ def _public_live_det(d: dict) -> dict:
         "assocMode": attrs.get("assocMode"),
         "trailTip": tip,
     }
+    if d.get("lastSeenAt") is not None:
+        public["lastSeenAt"] = d.get("lastSeenAt")
+    return public
+
+
+def _record_session_dets(cam_state: "CamState", items: list[dict], now: float | None = None):
+    """按摄像头保留会话内目标；同一 local/global 持续更新而不是逐帧清空。"""
+    with cam_state.state_lock:
+        _record_session_dets_unlocked(cam_state, items, now)
+
+
+def _record_session_dets_unlocked(cam_state: "CamState", items: list[dict], now: float | None = None):
+    seen_at = float(now if now is not None else time.time())
+    confirmed_kinds = {
+        str(item.get("objectType") or "object")
+        for item in (items or [])
+        if not bool((item.get("attrs") or {}).get("detectOnly"))
+    }
+    if confirmed_kinds:
+        stale_provisional = [
+            key for key, row in cam_state.session_dets.items()
+            if str(row.get("objectType") or "object") in confirmed_kinds
+            and bool((row.get("attrs") or {}).get("detectOnly"))
+        ]
+        for key in stale_provisional:
+            cam_state.session_dets.pop(key, None)
+    for item in items or []:
+        kind = str(item.get("objectType") or "object")
+        local_id = item.get("localTrackId")
+        global_id = item.get("globalId")
+        # 目标从 local 晋升为 global 时，移除该 local 的旧临时项。
+        if local_id is not None:
+            local_key = f"{kind}:local:{local_id}"
+            if global_id:
+                cam_state.session_dets.pop(local_key, None)
+        key = f"{kind}:global:{global_id}" if global_id else f"{kind}:local:{local_id}"
+        row = dict(item)
+        row["lastSeenAt"] = seen_at
+        cam_state.session_dets[key] = row
+    # 防止超长会话无限增长；保留最近更新的 200 个目标。
+    if len(cam_state.session_dets) > 200:
+        newest = sorted(
+            cam_state.session_dets.items(),
+            key=lambda pair: float(pair[1].get("lastSeenAt") or 0),
+            reverse=True,
+        )[:200]
+        cam_state.session_dets = dict(reversed(newest))
+
+
+def _session_det_snapshot(cam_state: "CamState") -> list[dict]:
+    with cam_state.state_lock:
+        return list(cam_state.session_dets.values())
+
+
+def _session_det_count(cam_state: "CamState") -> int:
+    with cam_state.state_lock:
+        return len(cam_state.session_dets)
 
 
 class MtmcSession:
@@ -272,11 +348,14 @@ class MtmcSession:
             "cams": {
                 str(cid): {
                     "frameSeq": st.frame_seq,
-                    "detCount": len(st.last_dets),
+                    "detCount": _session_det_count(st),
+                    "currentDetCount": len(st.last_dets),
                     "congestion": st.congestion,
                     "updatedAt": st.last_process_at,
+                    "playbackStartedAt": st.playback_started_at or None,
+                    "playbackSeconds": round(_playback_seconds(st), 1),
                     "lastError": getattr(st, "last_error", None),
-                    "detections": [_public_live_det(d) for d in (st.last_dets or [])],
+                    "detections": [_public_live_det(d) for d in _session_det_snapshot(st)],
                 }
                 for cid, st in self.cams.items()
             },
@@ -286,6 +365,8 @@ class MtmcSession:
 _sessions: dict[str, MtmcSession] = {}
 _sessions_lock = threading.Lock()
 _detect_fail_logged: set[str] = set()
+_detect_model_locks: dict[str, threading.Lock] = {}
+_detect_model_locks_guard = threading.Lock()
 
 
 def get_session(session_id: str) -> MtmcSession | None:
@@ -510,6 +591,7 @@ def _cam_worker_local_file(session: MtmcSession, cam_state: CamState, source_pat
                 frame_idx = 0
                 next_tick = time.monotonic()
             frame_idx += 1
+            _mark_playback(cam_state)
             frame = _resize_max_side(frame, display_side)
             try:
                 if frame_idx == 1 or (frame_idx % sample_stride == 0):
@@ -556,7 +638,12 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
         from inference import _get_model, _yolo_predict_kwargs
         model = _get_model(path)
         kw = _yolo_predict_kwargs(conf=conf, classes=classes, imgsz=640)
-        r = model.predict(frame, **kw)[0]
+        # 同一 YOLO 实例由多摄像头线程共享。Ultralytics predictor 内部状态
+        # 不是可重入的，并发调用会出现随机的 "bn"/predictor 初始化异常。
+        with _detect_model_locks_guard:
+            predict_lock = _detect_model_locks.setdefault(os.path.abspath(path), threading.Lock())
+        with predict_lock:
+            r = model.predict(frame, **kw)[0]
         out = []
         if r.boxes is None:
             return out
@@ -1352,6 +1439,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         )
         session.stats["persons"] += sum(1 for it in items if it.get("objectType") == "person")
         session.stats["vehicles"] += sum(1 for it in items if it.get("objectType") == "vehicle")
+        _record_session_dets(cam_state, items, now)
         _publish_overlay(cam_state, frame, items, None)
         session.stats["frames"] += 1
         return
@@ -1372,6 +1460,17 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     reid_left = max(0, int(cfg.reid_budget or 0))
     plate_left = max(0, int(cfg.plate_budget or 0))
     raw_p, raw_v = _detect_person_vehicle(cfg, frame)
+    # “命中”表示检测器命中，必须在耗时的 ReID/车牌/关联前统计；否则首帧
+    # ReID 尚未完成时页面会错误地长期显示人员 0。
+    session.stats["persons"] += len(raw_p) if cfg.enable_person else 0
+    session.stats["vehicles"] += len(raw_v) if cfg.enable_vehicle else 0
+    session.stats["frames"] += 1
+    preliminary = _detect_items_from_raw(
+        raw_p if cfg.enable_person else [],
+        raw_v if cfg.enable_vehicle else [],
+    )
+    _record_session_dets(cam_state, preliminary, now)
+    _publish_overlay(cam_state, frame, preliminary, cam_state.congestion)
     # ---- 人员 ----
     if cfg.enable_person and cfg.det_person_path:
         tracks = _tracks_or_raw(cam_state.tracker_person, raw_p, frame, id_base=800001)
@@ -1399,7 +1498,6 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     "label": f"人 L{t.track_id}",
                     "attrs": {"cameraId": cam_id, "className": getattr(t, "class_name", "person")},
                 })
-                session.stats["persons"] += 1
                 continue
             sticky_gid = session.associator.peek_sticky(
                 object_type="person",
@@ -1492,7 +1590,6 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 },
             }
             items.append(item)
-            session.stats["persons"] += 1
             if g is not None:
                 row = {
                     "sessionId": session.session_id,
@@ -1548,7 +1645,6 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     "label": f"{cls} L{t.track_id}",
                     "attrs": {"cameraId": cam_id, "className": cls},
                 })
-                session.stats["vehicles"] += 1
                 continue
             sticky_gid = session.associator.peek_sticky(
                 object_type="vehicle",
@@ -1687,7 +1783,6 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 },
             }
             items.append(item)
-            session.stats["vehicles"] += 1
             if g is not None:
                 row = {"sessionId": session.session_id, "cameraId": cam_id, **item}
                 with session._events_lock:
@@ -1729,8 +1824,8 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             pass
 
     _enforce_unique_camera_global_ids(items)
+    _record_session_dets(cam_state, items, now)
     _publish_overlay(cam_state, frame, items, cam_state.congestion)
-    session.stats["frames"] += 1
 
 
 def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
@@ -1767,6 +1862,7 @@ def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
                 if seq == last_seq:
                     continue
                 last_seq = seq
+                _mark_playback(cam_state)
                 # RTSP/device 分支之前会对源流的每一帧执行完整推理，sampleFps
                 # 没有生效。两路 25 FPS 视频因此可能触发每秒 50 次推理并造成积压。
                 # 在 JPEG 解码之前节流，只处理最新采样帧，预览仍由共享 hub 流畅输出。
