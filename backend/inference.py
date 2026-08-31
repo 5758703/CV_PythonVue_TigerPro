@@ -13,6 +13,19 @@ import sys
 import threading
 import time
 
+# Ultralytics 默认把 settings.json 写到用户 Roaming 目录。在 Windows 服务、
+# 沙箱或受限账号下该目录经常不可写，YOLO 初始化会因此失败并让检测结果恒为空。
+# 在任何 ultralytics 惰性导入发生前，将配置固定到项目 uploads 下的可写目录。
+_DEFAULT_YOLO_CONFIG_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "uploads", ".ultralytics"
+)
+os.environ.setdefault("YOLO_CONFIG_DIR", _DEFAULT_YOLO_CONFIG_DIR)
+try:
+    os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
+except OSError:
+    # 保留显式环境配置；后续 YOLO 会给出包含实际路径的明确异常。
+    pass
+
 import cv2
 import numpy as np
 

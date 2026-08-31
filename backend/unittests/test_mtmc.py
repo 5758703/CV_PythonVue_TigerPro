@@ -947,3 +947,14 @@ def test_mtmc_preview_hub_keeps_low_source_fps():
     session = SimpleNamespace(cfg=SimpleNamespace(width=640, fps=8))
     camera = SimpleNamespace(resolution=1280, fps=25)
     assert _hub_stream_params(session, camera) == (640, 8)
+
+
+def test_ultralytics_config_uses_project_writable_dir():
+    import os
+    import inference
+
+    configured = os.path.abspath(os.environ["YOLO_CONFIG_DIR"])
+    backend_dir = os.path.dirname(os.path.abspath(inference.__file__))
+    expected_root = os.path.join(backend_dir, "uploads")
+    assert os.path.commonpath([configured, expected_root]) == expected_root
+    assert os.path.isdir(configured)

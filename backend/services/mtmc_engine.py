@@ -575,7 +575,9 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
         if key not in _detect_fail_logged:
             _detect_fail_logged.add(key)
             log.error("mtmc detect failed path=%s: %s", path, e)
-        return []
+        # 不再把模型初始化/推理故障伪装成“本帧没有目标”。上层 worker 会
+        # 记录 errors 和 lastError，前端摄像头标题栏可直接显示真实原因。
+        raise RuntimeError(f"检测模型执行失败: {e}") from e
 
 
 _PV_CLASSES = [0, 1, 2, 3, 5, 7]
