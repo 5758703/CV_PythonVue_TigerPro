@@ -2,8 +2,14 @@
   <div class="track-scenario-root">
     <el-card shadow="never" class="scenario-card">
       <div class="scenario-header">
-        <div class="scenario-title">目标追踪</div>
-        <div class="scenario-sub">按任务场景切换：通用追踪 / 车辆追踪 / 人员离岗检测</div>
+        <div>
+          <div class="scenario-kicker">VISION WORKBENCH</div>
+          <div class="scenario-title">目标追踪工作台</div>
+          <div class="scenario-sub">选择场景，配置输入与推荐模型，保留原始素材并独立生成识别结果。</div>
+        </div>
+        <div class="workflow-rail" aria-label="任务流程">
+          <span><b>1</b> 配置任务</span><i></i><span><b>2</b> 处理素材</span><i></i><span><b>3</b> 查看结果</span>
+        </div>
       </div>
       <el-tabs v-model="scenario" class="scenario-tabs" @tab-change="onScenarioChange">
         <el-tab-pane
@@ -53,6 +59,7 @@ import { computed, ref, watch, onMounted, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '../../../store/user'
 import { TRACK_SCENARIOS, DEFAULT_SCENARIO, resolveScenario } from './scenarios'
+import './workbench.css'
 
 const GeneralTrackPanel = defineAsyncComponent(() => import('./panels/GeneralTrackPanel.vue'))
 const VehicleTrackPanel = defineAsyncComponent(() => import('./panels/VehicleTrackPanel.vue'))
@@ -117,13 +124,22 @@ watch([canUseVehicle, canUseAbsence], () => {
 
 <style scoped>
 .track-scenario-root { min-height: 360px; }
-.scenario-card { margin-bottom: 12px; }
-.scenario-header { margin-bottom: 4px; }
-.scenario-title { font-size: 18px; font-weight: 650; color: #2c3e57; }
-.scenario-sub { font-size: 13px; color: #7a8aa5; margin-top: 4px; }
+.scenario-card { margin-bottom: 16px; border: 0; border-radius: 14px; }
+.scenario-header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; margin-bottom: 10px; }
+.scenario-kicker { font-size: 11px; font-weight: 750; letter-spacing: 2px; color: #0891b2; }
+.scenario-title { margin-top: 4px; font-size: 24px; font-weight: 720; letter-spacing: -.5px; color: #12233f; }
+.scenario-sub { font-size: 13px; color: #71809a; margin-top: 6px; }
+.workflow-rail { display: flex; align-items: center; color: #607089; font-size: 12px; white-space: nowrap; }
+.workflow-rail span { display: inline-flex; align-items: center; gap: 5px; }
+.workflow-rail b { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #e6f7fa; color: #087f99; font-size: 11px; }
+.workflow-rail i { width: 28px; height: 1px; margin: 0 8px; background: #dbe4ef; }
 .scenario-tabs { margin-top: 8px; }
 .scenario-desc { margin: 0; font-size: 13px; color: #5a6b87; }
 .tab-label { display: inline-flex; align-items: center; gap: 4px; }
 .tab-lock { font-size: 12px; color: #c0c4cc; }
 .perm-alert { margin-bottom: 12px; }
+@media (max-width: 900px) {
+  .scenario-header { align-items: flex-start; flex-direction: column; }
+  .workflow-rail { width: 100%; overflow-x: auto; padding-bottom: 3px; }
+}
 </style>

@@ -446,6 +446,7 @@ import { ElMessage } from 'element-plus'
 import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
 import { modelApi, absenceApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
+import { recommendedModelId } from '../../../../utils/trackModelRecommendation'
 
 const mode = ref('file')
 const detectModels = ref([])
@@ -904,12 +905,13 @@ const isBuffaloS = (m) => {
 }
 
 const detectOptionLabel = (m) => {
-  const key = String(m.modelKey || '').toLowerCase()
-  if (key === 'yolo26s') return `${m.modelName}（推荐）`
+  if (m.id === recommendedModelId(detectModels.value, 'person')) return `${m.modelName}（推荐）`
   return m.modelName
 }
 
-const faceOptionLabel = (m) => (isBuffaloL(m) ? `${m.modelName}（推荐）` : m.modelName)
+const faceOptionLabel = (m) => (
+  m.id === recommendedModelId(faceModels.value, 'face') ? `${m.modelName}（推荐）` : m.modelName
+)
 
 const pickDefaultDetectId = (models) => {
   const general = models.filter((m) => {
@@ -918,6 +920,8 @@ const pickDefaultDetectId = (models) => {
     return !DETECT_EXCLUDE_RE.test(key) && !DETECT_EXCLUDE_RE.test(name)
   })
   const pool = general.length ? general : models
+  const recommended = recommendedModelId(pool, 'person')
+  if (recommended != null) return recommended
   for (const pref of DETECT_PREF_KEYS) {
     const hit = pool.find((m) => String(m.modelKey || '').toLowerCase() === pref)
     if (hit?.filePath) return hit.id
@@ -929,6 +933,8 @@ const pickDefaultDetectId = (models) => {
 }
 
 const pickDefaultFaceId = (models) => {
+  const recommended = recommendedModelId(models, 'face')
+  if (recommended != null) return recommended
   const l = models.find((m) => isBuffaloL(m))
   if (l) return l.id
   const s = models.find((m) => isBuffaloS(m))

@@ -242,7 +242,16 @@
                 <el-button link type="primary" :icon="Download" @click="downloadImageResult">下载标注图</el-button>
                 <el-button link type="primary" @click="activeTab = 'config'">返回配置</el-button>
               </div>
-              <img :src="imageResultSrc" class="preview-img result-img" alt="识别结果" />
+              <div class="image-compare">
+                <figure>
+                  <figcaption>原始图片</figcaption>
+                  <img :src="imagePreviewUrl" class="preview-img" alt="原始车辆图片" />
+                </figure>
+                <figure>
+                  <figcaption>识别结果</figcaption>
+                  <img :src="imageResultSrc" class="preview-img result-img" alt="识别结果" />
+                </figure>
+              </div>
               <div class="stats">
                 <el-tag type="success" effect="dark">车辆 {{ imageDets.length }}</el-tag>
                 <el-tag type="warning" effect="dark">号牌 {{ imagePlateCount }}</el-tag>
@@ -369,6 +378,7 @@ import {
 } from '@element-plus/icons-vue'
 import { modelApi, vehicleApi, alertApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
+import { pickRecommendedModel } from '../../../../utils/trackModelRecommendation'
 
 const ALERT_SOURCE_KEY = 'vehicle-camera'
 
@@ -434,6 +444,7 @@ const pickPreferred = (list, prefs) => {
 const modelOptionLabel = (m, kind) => {
   const text = `${m.modelKey || ''} ${m.modelName || ''}`
   let tag = ''
+  if (kind === 'detect' && m.id === pickRecommendedModel(detectModels.value, 'vehicle')?.id) tag = ' · 推荐'
   if (kind === 'plate' && /yolo26s-plate-pose/i.test(text)) tag = ' · 推荐·透视四点'
   else if (kind === 'plate' && /yolo26n-plate/i.test(text)) tag = ' · 推荐·bbox'
   else if (kind === 'plate' && /yolo26n-obb/i.test(text)) tag = ' · OBB 旋转框'
@@ -625,7 +636,7 @@ const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 200 })
   allModels.value = res.data.rows || []
   if (detectModels.value.length) {
-    const preferred = pickPreferred(detectModels.value, DETECT_PREF)
+    const preferred = pickRecommendedModel(detectModels.value, 'vehicle') || pickPreferred(detectModels.value, DETECT_PREF)
     const currentOk = detectId.value && detectModels.value.some((m) => m.id === detectId.value)
     if (!currentOk) detectId.value = preferred?.id || detectModels.value[0].id
   }
@@ -1519,6 +1530,10 @@ onBeforeUnmount(() => {
 .player { width: 100%; max-height: 480px; background: #000; border-radius: 6px; }
 .preview-img { max-width: 100%; max-height: 480px; border-radius: 6px; display: block; background: #0c1733; }
 .result-img { margin-top: 4px; }
+.image-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.image-compare figure { min-width: 0; margin: 0; padding: 12px; border: 1px solid #e3eaf2; border-radius: 10px; background: #f8fafc; }
+.image-compare figcaption { margin-bottom: 9px; color: #52647c; font-size: 13px; font-weight: 650; }
+@media (max-width: 900px) { .image-compare { grid-template-columns: 1fr; } }
 .stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .rec-table { margin-top: 12px; }
 .cam-wrap { margin-top: 4px; }

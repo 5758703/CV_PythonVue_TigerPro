@@ -1,0 +1,17 @@
+.track-scenario-root { --track-ink:#12233f; --track-muted:#71809a; --track-accent:#0891b2; --track-line:#dfe7f1; }
+.track-scenario-root .el-card { border-color:var(--track-line); border-radius:14px; box-shadow:0 8px 28px rgba(31,59,92,.045); }
+.track-scenario-root .cfg-card,.track-scenario-root .draw-card,.track-scenario-root .res-card { margin-bottom:16px; }
+.track-scenario-root .cfg-form { background:linear-gradient(135deg,rgba(244,248,251,.9),rgba(255,255,255,.75)); border:1px solid #e7edf4; border-radius:12px; padding:16px 16px 6px; }
+.track-scenario-root .cfg-section-title,.track-scenario-root .section-title,.track-scenario-root .preview-title,.track-scenario-root .res-title { color:var(--track-ink); font-weight:680; }
+.track-scenario-root .el-button--primary { --el-button-bg-color:#087f99; --el-button-border-color:#087f99; --el-button-hover-bg-color:#0694b2; --el-button-hover-border-color:#0694b2; }
+.track-scenario-root .player,.track-scenario-root .preview-img,.track-scenario-root .frame-canvas { border-radius:10px; background:#07111f; }
+.track-scenario-root .progress-box { padding:18px; border:1px solid #cfe8ed; border-radius:12px; background:#f0fafb; }
+.track-scenario-root .el-progress-bar__inner { background:linear-gradient(90deg,#087f99,#22b8c7); }
+.track-scenario-root .general-config-form { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:4px 16px; align-items:end; }
+.track-scenario-root .general-config-form .el-form-item { display:block; margin:0 0 10px; }
+.track-scenario-root .general-config-form .el-form-item__label { display:block; height:auto; margin-bottom:5px; color:#607089; font-size:12px; line-height:20px; }
+.track-scenario-root .general-config-form .el-select { width:100% !important; }
+.track-scenario-root .general-config-form .alert-action-item { grid-column:1 / -1; }
+@media (max-width:900px) { .track-scenario-root .cfg-form { padding:12px 12px 2px; } }
+@media (max-width:1100px) { .track-scenario-root .general-config-form { grid-template-columns:repeat(2,minmax(150px,1fr)); } }
+@media (max-width:640px) { .track-scenario-root .general-config-form { grid-template-columns:1fr; } }

@@ -1,7 +1,7 @@
 <template>
   <div>
     <el-card shadow="never" class="cfg-card">
-      <el-form :inline="true">
+      <el-form :inline="true" class="cfg-form general-config-form">
         <el-form-item label="模式">
           <el-select v-model="mode" style="width: 140px" :disabled="camRunning" @change="onModeChange">
             <el-option label="视频文件" value="file" />
@@ -15,9 +15,9 @@
           </el-select>
         </el-form-item>
         <el-form-item label="检测模型">
-          <el-select v-model="modelId" placeholder="选择 YOLO 模型" style="width: 220px">
+          <el-select v-model="modelId" placeholder="自动选择推荐模型" style="width: 240px" filterable>
             <el-option v-for="m in filteredModels" :key="m.id"
-                       :label="`${m.modelName}（${m.category || '未分类'}）`" :value="m.id" />
+                       :label="modelOptionLabel(m)" :value="m.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="分辨率">
@@ -237,6 +237,7 @@ import {
   ensureModelInList,
   categoriesFromModels,
 } from '../../../../utils/alertModels'
+import { recommendedModelId } from '../../../../utils/trackModelRecommendation'
 
 const ALERT_SOURCE_KEY = 'track-camera'
 
@@ -353,7 +354,14 @@ const filteredModels = computed(() =>
 )
 
 const syncModelSelection = () => {
-  modelId.value = ensureModelInList(modelId.value, filteredModels.value)
+  const currentValid = modelId.value != null && filteredModels.value.some((m) => m.id === modelId.value)
+  modelId.value = currentValid
+    ? modelId.value
+    : (recommendedModelId(filteredModels.value, 'general') ?? ensureModelInList(null, filteredModels.value))
+}
+const modelOptionLabel = (m) => {
+  const recommended = m.id === recommendedModelId(filteredModels.value, 'general') ? ' · 推荐' : ''
+  return `${m.modelName}${recommended}（${m.category || '未分类'}）`
 }
 const onCategoryChange = () => { syncModelSelection() }
 
