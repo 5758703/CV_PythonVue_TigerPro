@@ -59,6 +59,24 @@ def _double_line_sample(session, track_id, x, timestamp, **overrides):
     return result["detections"][0]
 
 
+def _double_line_point_sample(session, point, timestamp, *, line_a, line_b):
+    x, y = point
+    frame = np.zeros((120, 80, 3), dtype=np.uint8)
+    result = enrich_vehicle_frame(
+        frame,
+        [_det(7, [x - 2, y - 10, x + 2, y])],
+        session,
+        enable_ocr=False,
+        enable_trail=False,
+        speed_mode="double-line",
+        speed_line_a_px=line_a,
+        speed_line_b_px=line_b,
+        speed_distance_m=10.0,
+        sample_ts=timestamp,
+    )
+    return result["detections"][0]
+
+
 def test_scale_speed_uses_explicit_timestamp_and_bottom_center():
     """Speed must use supplied media time and the road-contact point."""
     session = VehicleSession()
@@ -348,6 +366,48 @@ def test_double_line_turnaround_starts_at_first_inward_gate_crossing(line_a, lin
     assert speed["speedQuality"] == "measured"
     assert session.speed_gates[7]["first_ts"] == 1.5
     assert session.speed_gates[7]["completed_at"] == 2.0
+
+
+@pytest.mark.parametrize(
+    ("line_a", "line_b"),
+    [
+        ([20, 0, 20, 100], [30, 0, 30, 10]),
+        ([20, 100, 20, 0], [30, 0, 30, 10]),
+        ([20, 0, 20, 100], [30, 10, 30, 0]),
+    ],
+    ids=["original", "a-reversed", "b-reversed"],
+)
+@pytest.mark.parametrize(
+    ("points", "first_line", "direction"),
+    [
+        ([(10, -7), (25, 5), (35, 13)], "a", 1),
+        ([(35, 13), (25, 5), (10, -7)], "b", -1),
+    ],
+    ids=["forward", "reverse"],
+)
+def test_double_line_offset_unequal_gates_use_local_crossing_direction(
+    line_a,
+    line_b,
+    points,
+    first_line,
+    direction,
+):
+    """Actual crossing geometry must support offset unequal gates in either travel direction."""
+    session = VehicleSession()
+    _double_line_point_sample(session, points[0], 0.0, line_a=line_a, line_b=line_b)
+    waiting = _double_line_point_sample(session, points[1], 1.0, line_a=line_a, line_b=line_b)
+
+    assert waiting["speedKmh"] is None
+    assert waiting["speedSource"] is None
+    assert waiting["speedQuality"] == "warming-up"
+    assert session.speed_gates[7]["first_line"] == first_line
+    assert session.speed_gates[7]["first_ts"] == 1.0
+    assert session.speed_gates[7]["direction"] == direction
+
+    measured = _double_line_point_sample(session, points[2], 2.0, line_a=line_a, line_b=line_b)
+    assert measured["speedKmh"] == 36.0
+    assert measured["speedSource"] == "double-line"
+    assert measured["speedQuality"] == "measured"
 
 
 def test_double_line_gate_state_is_isolated_by_track_id():

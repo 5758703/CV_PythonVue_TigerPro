@@ -535,10 +535,6 @@ def _valid_speed_line(line: list[float] | None) -> bool:
         return False
 
 
-def _line_midpoint(line: list[float]) -> tuple[float, float]:
-    return ((float(line[0]) + float(line[2])) / 2.0, (float(line[1]) + float(line[3])) / 2.0)
-
-
 def _valid_speed_gates(line_a: list[float] | None, line_b: list[float] | None) -> bool:
     if not _valid_speed_line(line_a) or not _valid_speed_line(line_b):
         return False
@@ -560,24 +556,54 @@ def _gate_travel_projection(
     point: tuple[float, float],
     line_a: list[float],
     line_b: list[float],
+    crossed_gate: str,
 ) -> float:
-    """Project track motion onto A-to-B gate order, independent of line endpoint order."""
-    midpoint_a = _line_midpoint(line_a)
-    midpoint_b = _line_midpoint(line_b)
+    """Project motion onto local A-to-B geometry at the actual gate crossing."""
+    crossed_line = line_a if crossed_gate == "a" else line_b
+    other_line = line_b if crossed_gate == "a" else line_a
+    crossing_point = _segment_intersection_point(previous_point, point, crossed_line)
+    if crossing_point is None:
+        return 0.0
+    nearest_other = _nearest_point_on_segment(crossing_point, other_line)
     movement = (point[0] - previous_point[0], point[1] - previous_point[1])
-    gate_order = (midpoint_b[0] - midpoint_a[0], midpoint_b[1] - midpoint_a[1])
+    if crossed_gate == "a":
+        gate_order = (nearest_other[0] - crossing_point[0], nearest_other[1] - crossing_point[1])
+    else:
+        gate_order = (crossing_point[0] - nearest_other[0], crossing_point[1] - nearest_other[1])
     return movement[0] * gate_order[0] + movement[1] * gate_order[1]
 
 
-def _point_segment_distance(point: tuple[float, float], line: list[float]) -> float:
+def _nearest_point_on_segment(point: tuple[float, float], line: list[float]) -> tuple[float, float]:
     px, py = point
     x1, y1, x2, y2 = (float(value) for value in line)
     dx, dy = x2 - x1, y2 - y1
     length_sq = dx * dx + dy * dy
     if length_sq <= 0:
-        return hypot(px - x1, py - y1)
+        return x1, y1
     ratio = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / length_sq))
-    return hypot(px - (x1 + ratio * dx), py - (y1 + ratio * dy))
+    return x1 + ratio * dx, y1 + ratio * dy
+
+
+def _point_segment_distance(point: tuple[float, float], line: list[float]) -> float:
+    nearest = _nearest_point_on_segment(point, line)
+    return hypot(point[0] - nearest[0], point[1] - nearest[1])
+
+
+def _segment_intersection_point(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    line: list[float],
+) -> tuple[float, float] | None:
+    px, py = float(start[0]), float(start[1])
+    rx, ry = float(end[0]) - px, float(end[1]) - py
+    qx, qy, x2, y2 = (float(value) for value in line)
+    sx, sy = x2 - qx, y2 - qy
+    denominator = rx * sy - ry * sx
+    if abs(denominator) <= 1e-9:
+        return None
+    offset_x, offset_y = qx - px, qy - py
+    ratio = (offset_x * sy - offset_y * sx) / denominator
+    return px + ratio * rx, py + ratio * ry
 
 
 def _update_double_line_speed(
@@ -631,13 +657,16 @@ def _update_double_line_speed(
 
     crossed_a = _crosses(previous_point, (x, y), line_a)
     crossed_b = _crosses(previous_point, (x, y), line_b)
-    travel_projection = _gate_travel_projection(previous_point, (x, y), line_a, line_b)
     state["last_point"] = (x, y)
     state["last_ts"] = timestamp
 
     first_line = state.get("first_line")
     if first_line is None:
         if bool(crossed_a) != bool(crossed_b):
+            crossed_gate = "a" if crossed_a else "b"
+            travel_projection = _gate_travel_projection(
+                previous_point, (x, y), line_a, line_b, crossed_gate,
+            )
             enters_at_a = bool(crossed_a) and travel_projection > 0
             enters_at_b = bool(crossed_b) and travel_projection < 0
             if enters_at_a or enters_at_b:
@@ -650,6 +679,10 @@ def _update_double_line_speed(
     if not crossed_other:
         return None, "warming-up", False
 
+    crossed_gate = "b" if first_line == "a" else "a"
+    travel_projection = _gate_travel_projection(
+        previous_point, (x, y), line_a, line_b, crossed_gate,
+    )
     direction = int(state.get("direction") or (1 if first_line == "a" else -1))
     if travel_projection * direction <= 0:
         state["first_line"] = "b" if first_line == "a" else "a"
