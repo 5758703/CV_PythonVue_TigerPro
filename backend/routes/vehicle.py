@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -222,7 +223,9 @@ def _vehicle_worker(job_id, cfg_bundle):
         cap = cv2.VideoCapture(src_path)
         if not cap.isOpened():
             raise ValueError("无法打开视频文件")
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        if not math.isfinite(fps) or not 0 < fps <= 240:
+            fps = 25.0
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
@@ -290,6 +293,7 @@ def _vehicle_worker(job_id, cfg_bundle):
                 plate_conf=cfg_bundle.get("plate_conf", 0.2),
                 ocr_cooldown_sec=cfg_bundle.get("ocr_cooldown_sec", 0.55),
                 congestion_thresholds=cfg_bundle.get("congestion_thresholds"),
+                sample_ts=frames / fps,
             )
             congestion_samples.append(enriched.get("congestion", {}).get("level"))
             annotated = draw_vehicle_hud(
