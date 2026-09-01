@@ -123,6 +123,41 @@ def _parse_bool(name, default=False):
     )
 
 
+def _parse_speed_config():
+    mode = (request.form.get("speedMode") or "scale").strip().lower()
+    if mode not in {"scale", "double-line"}:
+        mode = "scale"
+
+    line_a = _parse_line(request.form.get("speedLineA"))
+    line_b = _parse_line(request.form.get("speedLineB"))
+    if line_a is not None and not all(math.isfinite(value) for value in line_a):
+        line_a = None
+    if line_b is not None and not all(math.isfinite(value) for value in line_b):
+        line_b = None
+
+    distance_m = _parse_float("speedDistanceM")
+    if distance_m is None or not math.isfinite(distance_m) or distance_m <= 0:
+        distance_m = None
+
+    max_kmh = _parse_float("speedMaxKmh", 240.0)
+    if max_kmh is None or not math.isfinite(max_kmh):
+        max_kmh = 240.0
+    max_kmh = max(30.0, min(400.0, max_kmh))
+    return {
+        "speed_mode": mode,
+        "speed_line_a": line_a,
+        "speed_line_b": line_b,
+        "speed_distance_m": distance_m,
+        "speed_max_kmh": max_kmh,
+    }
+
+
+def _line_to_pixels(line, width, height):
+    if line is None:
+        return None
+    return [line[0] * width, line[1] * height, line[2] * width, line[3] * height]
+
+
 def _resolve_models():
     def _int(name):
         try:
@@ -234,6 +269,8 @@ def _vehicle_worker(job_id, cfg_bundle):
             cfg_bundle["progress_cb"](0, total)
         writer, ew, eh = _open_h264(dst_path, fps, w, h)
         px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h] if line else None
+        px_speed_line_a = _line_to_pixels(cfg_bundle.get("speed_line_a"), w, h)
+        px_speed_line_b = _line_to_pixels(cfg_bundle.get("speed_line_b"), w, h)
         px_region = region_to_pixels(region_norm, w, h) if region_norm else None
         # 区域模式优先，不画越线计数线
         if px_region is not None:
@@ -294,6 +331,11 @@ def _vehicle_worker(job_id, cfg_bundle):
                 ocr_cooldown_sec=cfg_bundle.get("ocr_cooldown_sec", 0.55),
                 congestion_thresholds=cfg_bundle.get("congestion_thresholds"),
                 sample_ts=frames / fps,
+                speed_mode=cfg_bundle.get("speed_mode", "scale"),
+                speed_line_a_px=px_speed_line_a,
+                speed_line_b_px=px_speed_line_b,
+                speed_distance_m=cfg_bundle.get("speed_distance_m"),
+                speed_max_kmh=cfg_bundle.get("speed_max_kmh", 240.0),
             )
             congestion_samples.append(enriched.get("congestion", {}).get("level"))
             annotated = draw_vehicle_hud(
@@ -471,6 +513,7 @@ def track_frame():
     enable_speed = _parse_bool("enableSpeed", True)
     enable_trail = _parse_bool("enableTrail", True)
     meters_per_pixel = _parse_float("metersPerPixel")
+    speed_config = _parse_speed_config()
     plate_conf = _parse_float("plateConf", 0.2) or 0.2
     session_id = (request.form.get("sessionId") or "").strip() or uuid.uuid4().hex
     reset = _parse_bool("reset", False)
@@ -499,6 +542,8 @@ def track_frame():
         session = get_session(session_id, reset=reset)
         h, w = img.shape[:2]
         px_line = [line[0] * w, line[1] * h, line[2] * w, line[3] * h] if line else None
+        px_speed_line_a = _line_to_pixels(speed_config["speed_line_a"], w, h)
+        px_speed_line_b = _line_to_pixels(speed_config["speed_line_b"], w, h)
         px_region = region_to_pixels(region, w, h) if region else None
         if px_region is not None:
             px_line = None
@@ -518,6 +563,11 @@ def track_frame():
             plate_conf=plate_conf,
             ocr_cooldown_sec=0.5,
             congestion_thresholds=congestion,
+            speed_mode=speed_config["speed_mode"],
+            speed_line_a_px=px_speed_line_a,
+            speed_line_b_px=px_speed_line_b,
+            speed_distance_m=speed_config["speed_distance_m"],
+            speed_max_kmh=speed_config["speed_max_kmh"],
         )
         enriched["sessionId"] = session_id
         if zone_style:
@@ -553,6 +603,7 @@ def track_video():
     enable_speed = _parse_bool("enableSpeed", True)
     enable_trail = _parse_bool("enableTrail", True)
     meters_per_pixel = _parse_float("metersPerPixel")
+    speed_config = _parse_speed_config()
     plate_conf = _parse_float("plateConf", 0.2) or 0.2
     session_id = uuid.uuid4().hex
     congestion = {
@@ -614,6 +665,7 @@ def track_video():
         "enable_speed": enable_speed,
         "enable_trail": enable_trail,
         "meters_per_pixel": meters_per_pixel if meters_per_pixel and meters_per_pixel > 0 else None,
+        **speed_config,
         "plate_conf": plate_conf,
         "ocr_cooldown_sec": 0.55,
         "session_id": session_id,

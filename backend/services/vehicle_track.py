@@ -52,6 +52,7 @@ class VehicleSession:
     track_history: dict[int, list[tuple[float, float, float]]] = field(default_factory=dict)
     speed_history: dict[int, list[tuple[float, float, float]]] = field(default_factory=dict)
     speed_ema: dict[int, float] = field(default_factory=dict)
+    speed_gates: dict[int, dict[str, Any]] = field(default_factory=dict)
     plates: dict[int, dict[str, Any]] = field(default_factory=dict)
     plate_votes: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
     last_ocr_at: dict[int, float] = field(default_factory=dict)
@@ -521,6 +522,116 @@ def _update_scale_speed(
     return round(estimate, 1), "estimated"
 
 
+def _valid_speed_line(line: list[float] | None) -> bool:
+    if not isinstance(line, (list, tuple)) or len(line) != 4:
+        return False
+    try:
+        return all(isfinite(float(value)) for value in line)
+    except (TypeError, ValueError):
+        return False
+
+
+def _point_segment_distance(point: tuple[float, float], line: list[float]) -> float:
+    px, py = point
+    x1, y1, x2, y2 = (float(value) for value in line)
+    dx, dy = x2 - x1, y2 - y1
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 0:
+        return hypot(px - x1, py - y1)
+    ratio = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+    return hypot(px - (x1 + ratio * dx), py - (y1 + ratio * dy))
+
+
+def _update_double_line_speed(
+    session: VehicleSession,
+    track_id: int,
+    point: tuple[float, float],
+    sample_ts: float,
+    line_a: list[float],
+    line_b: list[float],
+    distance_m: float,
+    max_kmh: float,
+) -> tuple[float | None, str, bool]:
+    """Update one track's double-line gate and report whether a gate result exists."""
+    tid = int(track_id)
+    x, y = float(point[0]), float(point[1])
+    timestamp = float(sample_ts)
+    if not all(isfinite(value) for value in (x, y, timestamp)):
+        return None, "invalid", True
+
+    state = session.speed_gates.get(tid)
+    if state is None:
+        session.speed_gates[tid] = {"last_point": (x, y), "last_ts": timestamp}
+        return None, "warming-up", False
+
+    previous_point = state.get("last_point")
+    previous_ts = state.get("last_ts")
+    if previous_point is None or previous_ts is None:
+        state.clear()
+        state.update(last_point=(x, y), last_ts=timestamp)
+        return None, "warming-up", False
+
+    elapsed = timestamp - float(previous_ts)
+    if elapsed <= 0 or elapsed > SPEED_MAX_GAP_SEC:
+        state.clear()
+        state.update(last_point=(x, y), last_ts=timestamp)
+        return None, "warming-up", False
+
+    if state.get("completed_at") is not None:
+        cooldown_elapsed = timestamp - float(state["completed_at"]) >= SPEED_MAX_GAP_SEC
+        outside_lines = (
+            _point_segment_distance((x, y), line_a) > 5.0
+            and _point_segment_distance((x, y), line_b) > 5.0
+        )
+        if cooldown_elapsed or outside_lines:
+            state.clear()
+            state.update(last_point=(x, y), last_ts=timestamp)
+            return None, "warming-up", False
+        state["last_point"] = (x, y)
+        state["last_ts"] = timestamp
+        return state.get("speed_kmh"), str(state.get("quality") or "invalid"), True
+
+    crossed_a = _crosses(previous_point, (x, y), line_a)
+    crossed_b = _crosses(previous_point, (x, y), line_b)
+    state["last_point"] = (x, y)
+    state["last_ts"] = timestamp
+
+    first_line = state.get("first_line")
+    if first_line is None:
+        if bool(crossed_a) != bool(crossed_b):
+            state["first_line"] = "a" if crossed_a else "b"
+            state["first_ts"] = timestamp
+            state["direction"] = crossed_a or crossed_b
+        return None, "warming-up", False
+
+    crossed_other = crossed_b if first_line == "a" else crossed_a
+    if not crossed_other:
+        return None, "warming-up", False
+
+    gate_distance = limit = dt = speed = float("nan")
+    try:
+        gate_distance = float(distance_m)
+        limit = float(max_kmh)
+        dt = timestamp - float(state["first_ts"])
+        speed = gate_distance / abs(dt) * 3.6
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        speed = float("nan")
+
+    valid = (
+        isfinite(speed)
+        and isfinite(gate_distance)
+        and gate_distance > 0
+        and isfinite(limit)
+        and limit > 0
+        and dt > 0
+        and speed <= limit
+    )
+    state["completed_at"] = timestamp
+    state["speed_kmh"] = round(speed, 1) if valid else None
+    state["quality"] = "measured" if valid else "invalid"
+    return state["speed_kmh"], state["quality"], True
+
+
 def _trail_color_bgr(track_id: int) -> tuple[int, int, int]:
     return _TRAIL_COLORS_BGR[int(track_id) % len(_TRAIL_COLORS_BGR)]
 
@@ -549,6 +660,10 @@ def enrich_vehicle_frame(
     congestion_thresholds: dict | None = None,
     sample_ts: float | None = None,
     speed_max_kmh: float = 240.0,
+    speed_mode: str = "scale",
+    speed_line_a_px: list[float] | None = None,
+    speed_line_b_px: list[float] | None = None,
+    speed_distance_m: float | None = None,
 ) -> dict:
     """在追踪结果上叠加车牌、速度、轨迹、越线/区域进出与会话记录。
 
@@ -632,7 +747,7 @@ def enrich_vehicle_frame(
 
         if enable_speed and is_vehicle:
             speed_point = ((bbox[0] + bbox[2]) / 2.0, float(bbox[3]))
-            speed_kmh, speed_quality = _update_scale_speed(
+            scale_kmh, scale_quality = _update_scale_speed(
                 session,
                 tid_i,
                 speed_point,
@@ -640,9 +755,39 @@ def enrich_vehicle_frame(
                 meters_per_pixel,
                 speed_max_kmh,
             )
-            item["speedKmh"] = speed_kmh
-            item["speedSource"] = "scale" if speed_kmh is not None else None
-            item["speedQuality"] = speed_quality
+            double_line_ready = (
+                speed_mode == "double-line"
+                and _valid_speed_line(speed_line_a_px)
+                and _valid_speed_line(speed_line_b_px)
+            )
+            try:
+                double_line_ready = double_line_ready and float(speed_distance_m) > 0
+            except (TypeError, ValueError):
+                double_line_ready = False
+
+            if double_line_ready:
+                gate_kmh, gate_quality, gate_complete = _update_double_line_speed(
+                    session,
+                    tid_i,
+                    speed_point,
+                    now,
+                    speed_line_a_px,
+                    speed_line_b_px,
+                    float(speed_distance_m),
+                    speed_max_kmh,
+                )
+            else:
+                session.speed_gates.pop(tid_i, None)
+                gate_kmh, gate_quality, gate_complete = None, "warming-up", False
+
+            if gate_complete:
+                item["speedKmh"] = gate_kmh
+                item["speedSource"] = "double-line"
+                item["speedQuality"] = gate_quality
+            else:
+                item["speedKmh"] = scale_kmh
+                item["speedSource"] = "scale" if scale_kmh is not None else None
+                item["speedQuality"] = scale_quality
 
         # 号牌 OCR 仅对车辆
         plate_info = session.plates.get(tid_i)

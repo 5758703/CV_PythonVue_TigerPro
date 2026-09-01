@@ -1,10 +1,12 @@
 import importlib.util
+import io
 import pathlib
 import sys
 import types
 
 import numpy as np
 import pytest
+from flask import Flask
 
 from services import vehicle_track
 from services.vehicle_track import SPEED_HISTORY_LEN, VehicleSession, enrich_vehicle_frame
@@ -182,6 +184,216 @@ def test_scale_speed_ema_uses_configured_weights_after_median_changes():
     assert session.speed_ema[7] == pytest.approx(5.679)
 
 
+@pytest.mark.parametrize(
+    "samples",
+    [
+        [(0.0, 10), (1.0, 30), (1.5, 110), (2.0, 130)],
+        [(0.0, 130), (1.0, 110), (1.5, 30), (2.0, 10)],
+    ],
+)
+def test_double_line_speed_in_both_directions(samples):
+    """Either gate order must measure 10 metres crossed in one second as 36 km/h."""
+    session = VehicleSession()
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    result = None
+    for timestamp, x in samples:
+        result = enrich_vehicle_frame(
+            frame,
+            [_det(7, [x - 5, 10, x + 5, 50])],
+            session,
+            enable_ocr=False,
+            enable_trail=False,
+            speed_mode="double-line",
+            speed_line_a_px=[20, 0, 20, 100],
+            speed_line_b_px=[120, 0, 120, 100],
+            speed_distance_m=10.0,
+            sample_ts=timestamp,
+        )
+
+    speed = result["detections"][0]
+    assert speed["speedKmh"] == 36.0
+    assert speed["speedSource"] == "double-line"
+    assert speed["speedQuality"] == "measured"
+
+
+def test_double_line_ignores_repeated_crossing_jitter():
+    """Repeated A-line crossings must not replace the first valid gate timestamp."""
+    session = VehicleSession()
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    result = None
+    for timestamp, x in [(0.0, 10), (0.2, 30), (0.4, 10), (0.6, 30), (0.8, 110), (1.2, 130)]:
+        result = enrich_vehicle_frame(
+            frame,
+            [_det(7, [x - 5, 10, x + 5, 50])],
+            session,
+            enable_ocr=False,
+            enable_trail=False,
+            speed_mode="double-line",
+            speed_line_a_px=[20, 0, 20, 100],
+            speed_line_b_px=[120, 0, 120, 100],
+            speed_distance_m=10.0,
+            sample_ts=timestamp,
+        )
+
+    speed = result["detections"][0]
+    assert speed["speedKmh"] == 36.0
+    assert speed["speedSource"] == "double-line"
+    assert speed["speedQuality"] == "measured"
+
+
+def test_incomplete_double_line_config_falls_back_to_scale():
+    """Missing gate distance must preserve calibrated scale-speed behavior."""
+    session = VehicleSession()
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    enrich_vehicle_frame(
+        frame,
+        [_det(7, [5, 10, 15, 50])],
+        session,
+        enable_ocr=False,
+        enable_trail=False,
+        speed_mode="double-line",
+        speed_line_a_px=[20, 0, 20, 100],
+        speed_line_b_px=[120, 0, 120, 100],
+        meters_per_pixel=0.1,
+        sample_ts=0.0,
+    )
+    result = enrich_vehicle_frame(
+        frame,
+        [_det(7, [15, 10, 25, 50])],
+        session,
+        enable_ocr=False,
+        enable_trail=False,
+        speed_mode="double-line",
+        speed_line_a_px=[20, 0, 20, 100],
+        speed_line_b_px=[120, 0, 120, 100],
+        meters_per_pixel=0.1,
+        sample_ts=1.0,
+    )
+
+    speed = result["detections"][0]
+    assert speed["speedKmh"] == 3.6
+    assert speed["speedSource"] == "scale"
+    assert speed["speedQuality"] == "estimated"
+
+
+def test_double_line_rejects_speed_above_limit():
+    """A physically impossible gate interval must not produce a numeric speed."""
+    session = VehicleSession()
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    result = None
+    for timestamp, x in [(0.0, 10), (1.0, 30), (1.05, 110), (1.1, 130)]:
+        result = enrich_vehicle_frame(
+            frame,
+            [_det(7, [x - 5, 10, x + 5, 50])],
+            session,
+            enable_ocr=False,
+            enable_trail=False,
+            speed_mode="double-line",
+            speed_line_a_px=[20, 0, 20, 100],
+            speed_line_b_px=[120, 0, 120, 100],
+            speed_distance_m=10.0,
+            speed_max_kmh=100.0,
+            sample_ts=timestamp,
+        )
+
+    speed = result["detections"][0]
+    assert speed["speedKmh"] is None
+    assert speed["speedQuality"] == "invalid"
+
+
+def test_track_frame_double_line_parameters_are_scaled_and_clamped(monkeypatch):
+    """The frame API must convert normalized gates to pixels and clamp the speed limit."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    captured = {}
+    monkeypatch.setattr(
+        vehicle_route,
+        "_resolve_models",
+        lambda: ({"detect_path": "fake.pt", "plate_path": None, "ocr_fn": None}, None),
+    )
+    monkeypatch.setattr(vehicle_route, "_resolve_track_classes", lambda **_kwargs: ([2], None))
+    monkeypatch.setattr(inference, "track_frame", lambda *_args, **_kwargs: {"detections": []})
+
+    def capture_enrich(_image, _detections, _session, **kwargs):
+        captured.update(kwargs)
+        return {"detections": []}
+
+    monkeypatch.setattr(vehicle_track, "enrich_vehicle_frame", capture_enrich)
+    ok, encoded = cv2.imencode(".jpg", np.zeros((100, 200, 3), dtype=np.uint8))
+    assert ok
+    response = app.test_client().post(
+        "/api/ai/vehicle/track-frame",
+        data={
+            "file": (io.BytesIO(encoded.tobytes()), "frame.jpg"),
+            "speedMode": "double-line",
+            "speedLineA": "[0.1, 0, 0.1, 1]",
+            "speedLineB": "[0.6, 0, 0.6, 1]",
+            "speedDistanceM": "10",
+            "speedMaxKmh": "5",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert captured["speed_mode"] == "double-line"
+    assert captured["speed_line_a_px"] == [20.0, 0.0, 20.0, 100.0]
+    assert captured["speed_line_b_px"] == [120.0, 0.0, 120.0, 100.0]
+    assert captured["speed_distance_m"] == 10.0
+    assert captured["speed_max_kmh"] == 30.0
+
+
+def test_track_video_double_line_parameters_reach_worker_config(monkeypatch, tmp_path):
+    """The video API must preserve normalized gate config for dimension-aware worker conversion."""
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.config.update(
+        VIDEO_ALLOWED_EXT={".mp4"},
+        VIDEO_FOLDER=str(tmp_path / "videos"),
+        OUTPUT_FOLDER=str(tmp_path / "outputs"),
+    )
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    launched = {}
+    monkeypatch.setattr(
+        vehicle_route,
+        "_resolve_models",
+        lambda: ({"detect_path": "fake.pt", "plate_path": None, "ocr_fn": None}, None),
+    )
+    monkeypatch.setattr(vehicle_route, "_resolve_track_classes", lambda **_kwargs: ([2], None))
+
+    class _CapturedThread:
+        def __init__(self, *, target, args, daemon):
+            launched.update(target=target, args=args, daemon=daemon)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(vehicle_route.threading, "Thread", _CapturedThread)
+    response = app.test_client().post(
+        "/api/ai/vehicle/track-video",
+        data={
+            "file": (io.BytesIO(b"not-a-real-video"), "traffic.mp4"),
+            "speedMode": "double-line",
+            "speedLineA": "[0.1, 0, 0.1, 1]",
+            "speedLineB": "[0.6, 0, 0.6, 1]",
+            "speedDistanceM": "10",
+            "speedMaxKmh": "999",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    config = launched["args"][1]
+    assert config["speed_mode"] == "double-line"
+    assert config["speed_line_a"] == [0.1, 0.0, 0.1, 1.0]
+    assert config["speed_line_b"] == [0.6, 0.0, 0.6, 1.0]
+    assert config["speed_distance_m"] == 10.0
+    assert config["speed_max_kmh"] == 400.0
+
+
 class _FakeCapture:
     def __init__(self, frames, fps):
         self._frames = frames
@@ -302,3 +514,61 @@ def test_vehicle_video_speed_uses_media_timeline(monkeypatch, tmp_path):
     first = _run_fake_vehicle_worker(vehicle_route, monkeypatch, tmp_path, monotonic_values=[1, 100, 900])
     second = _run_fake_vehicle_worker(vehicle_route, monkeypatch, tmp_path, monotonic_values=[5, 6, 7])
     assert first == second == [7.2, 7.2]
+
+
+def test_double_line_video_worker_converts_normalized_lines(monkeypatch, tmp_path):
+    """The video worker must scale normalized gates with the decoded video dimensions."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    frames = [np.zeros((100, 200, 3), dtype=np.uint8)]
+    captured = {}
+    real_enrich = vehicle_track.enrich_vehicle_frame
+    job_id = "double-line-worker"
+
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: _FakeCapture(frames, fps=25.0))
+    monkeypatch.setattr(inference, "_get_model", lambda _path: _FakeVehicleModel())
+    monkeypatch.setattr(inference, "_open_h264", lambda _dst, _fps, w, h: (_FakeWriter(), w, h))
+    monkeypatch.setattr(inference, "_write_bgr", lambda *_args: None)
+    monkeypatch.setattr(inference, "_video_alert_ctx", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(inference, "_video_alert_stats", lambda _ctx: {})
+
+    def capture_enrich(*args, **kwargs):
+        captured.update(kwargs)
+        return real_enrich(*args, **kwargs)
+
+    monkeypatch.setattr(vehicle_track, "enrich_vehicle_frame", capture_enrich)
+    monkeypatch.setattr(vehicle_track, "draw_vehicle_hud", lambda frame, _enriched, **_kwargs: frame)
+    monkeypatch.setitem(
+        vehicle_route._video_jobs,
+        job_id,
+        {"status": "running", "processed": 0, "total": 0, "stats": None, "error": None},
+    )
+    vehicle_route._vehicle_worker(job_id, {
+        "detect_path": "fake.pt",
+        "src_path": str(tmp_path / "input.mp4"),
+        "dst_path": str(tmp_path / "output.mp4"),
+        "out_name": "output.mp4",
+        "conf": 0.25,
+        "imgsz": 640,
+        "line": None,
+        "region": None,
+        "session_id": "double-line-worker-session",
+        "enable_ocr": False,
+        "enable_speed": True,
+        "enable_trail": False,
+        "meters_per_pixel": None,
+        "speed_mode": "double-line",
+        "speed_line_a": [0.1, 0.0, 0.1, 1.0],
+        "speed_line_b": [0.6, 0.0, 0.6, 1.0],
+        "speed_distance_m": 10.0,
+        "speed_max_kmh": 240.0,
+    })
+
+    assert vehicle_route._video_jobs[job_id]["status"] == "done"
+    assert captured["speed_mode"] == "double-line"
+    assert captured["speed_line_a_px"] == [20.0, 0.0, 20.0, 100.0]
+    assert captured["speed_line_b_px"] == [120.0, 0.0, 120.0, 100.0]
+    assert captured["speed_distance_m"] == 10.0
+    assert captured["speed_max_kmh"] == 240.0
