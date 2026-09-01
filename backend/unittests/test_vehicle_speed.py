@@ -574,6 +574,50 @@ def test_track_frame_double_line_parameters_are_scaled_and_clamped(monkeypatch):
     assert captured["speed_max_kmh"] == 30.0
 
 
+def test_legacy_meters_per_pixel_request_remains_supported(monkeypatch):
+    """A pre-calibration client must still obtain scale speed from metersPerPixel."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    detections = iter([
+        {"detections": [_det(7, [10, 20, 30, 60])]},
+        {"detections": [_det(7, [30, 20, 50, 60])]},
+    ])
+    monkeypatch.setattr(
+        vehicle_route,
+        "_resolve_models",
+        lambda: ({"detect_path": "fake.pt", "plate_path": None, "ocr_fn": None}, None),
+    )
+    monkeypatch.setattr(vehicle_route, "_resolve_track_classes", lambda **_kwargs: ([2], None))
+    monkeypatch.setattr(inference, "track_frame", lambda *_args, **_kwargs: next(detections))
+    timestamps = iter([0.0, 1.0])
+    monkeypatch.setattr(vehicle_track.time, "monotonic", lambda: next(timestamps))
+    ok, encoded = cv2.imencode(".jpg", np.zeros((100, 200, 3), dtype=np.uint8))
+    assert ok
+    client = app.test_client()
+
+    for reset in ("1", "0"):
+        response = client.post(
+            "/api/ai/vehicle/track-frame",
+            data={
+                "file": (io.BytesIO(encoded.tobytes()), "frame.jpg"),
+                "sessionId": "legacy-scale",
+                "reset": reset,
+                "enableOcr": "0",
+                "enableTrail": "0",
+                "enableSpeed": "1",
+                "metersPerPixel": "0.05",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 200
+
+    assert response.json["data"]["detections"][0]["speedSource"] == "scale"
+
+
 def test_track_video_double_line_parameters_reach_worker_config(monkeypatch, tmp_path):
     """The video API must preserve normalized gate config for dimension-aware worker conversion."""
     vehicle_route = _load_vehicle_route(monkeypatch)
@@ -742,6 +786,68 @@ def test_vehicle_video_speed_uses_media_timeline(monkeypatch, tmp_path):
     first = _run_fake_vehicle_worker(vehicle_route, monkeypatch, tmp_path, monotonic_values=[1, 100, 900])
     second = _run_fake_vehicle_worker(vehicle_route, monkeypatch, tmp_path, monotonic_values=[5, 6, 7])
     assert first == second == [7.2, 7.2]
+
+
+@pytest.mark.parametrize(
+    "invalid_fps",
+    [0.0, -1.0, float("nan"), float("inf"), 241.0],
+    ids=["zero", "negative", "nan", "infinite", "over-240"],
+)
+def test_vehicle_video_invalid_fps_uses_25_for_writer_and_media_timestamps(
+    monkeypatch, tmp_path, invalid_fps,
+):
+    """Invalid source FPS must not leak into output timing or writer configuration."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    frames = [np.zeros((100, 200, 3), dtype=np.uint8) for _ in range(3)]
+    writer_fps = []
+    sample_timestamps = []
+    real_enrich = vehicle_track.enrich_vehicle_frame
+    job_id = f"invalid-fps-{invalid_fps!r}"
+
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: _FakeCapture(frames, fps=invalid_fps))
+    monkeypatch.setattr(inference, "_get_model", lambda _path: _FakeVehicleModel())
+
+    def open_writer(_dst, fps, width, height):
+        writer_fps.append(fps)
+        return _FakeWriter(), width, height
+
+    def capture_enrich(*args, **kwargs):
+        sample_timestamps.append(kwargs["sample_ts"])
+        return real_enrich(*args, **kwargs)
+
+    monkeypatch.setattr(inference, "_open_h264", open_writer)
+    monkeypatch.setattr(inference, "_write_bgr", lambda *_args: None)
+    monkeypatch.setattr(inference, "_video_alert_ctx", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(inference, "_video_alert_stats", lambda _ctx: {})
+    monkeypatch.setattr(vehicle_track, "enrich_vehicle_frame", capture_enrich)
+    monkeypatch.setattr(vehicle_track, "draw_vehicle_hud", lambda frame, _enriched, **_kwargs: frame)
+    monkeypatch.setitem(
+        vehicle_route._video_jobs,
+        job_id,
+        {"status": "running", "processed": 0, "total": 0, "stats": None, "error": None},
+    )
+
+    vehicle_route._vehicle_worker(job_id, {
+        "detect_path": "fake.pt",
+        "src_path": str(tmp_path / "input.mp4"),
+        "dst_path": str(tmp_path / "output.mp4"),
+        "out_name": "output.mp4",
+        "conf": 0.25,
+        "imgsz": 640,
+        "line": None,
+        "session_id": f"{job_id}-session",
+        "enable_ocr": False,
+        "enable_speed": True,
+        "enable_trail": False,
+        "meters_per_pixel": 0.1,
+    })
+
+    assert vehicle_route._video_jobs[job_id]["status"] == "done"
+    assert writer_fps == [25.0]
+    assert sample_timestamps == pytest.approx([0.0, 0.04, 0.08])
 
 
 def test_double_line_video_worker_converts_normalized_lines(monkeypatch, tmp_path):
