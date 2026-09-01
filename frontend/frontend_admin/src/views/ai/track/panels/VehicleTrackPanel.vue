@@ -96,8 +96,41 @@
               <el-checkbox v-if="mode !== 'image'" v-model="enableTrail" :disabled="busy" style="margin-left: 8px">运动轨迹</el-checkbox>
               <el-checkbox v-if="mode === 'image'" v-model="vehicleOnly" :disabled="busy" style="margin-left: 8px">仅车辆类</el-checkbox>
             </el-form-item>
-            <el-form-item v-if="enableSpeed && mode !== 'image'" label="米/像素">
-              <el-input-number v-model="metersPerPixel" :min="0" :step="0.001" :precision="4" style="width: 130px" :disabled="busy" />
+            <el-form-item v-if="enableSpeed && mode !== 'image'" label="测速设置" class="speed-setting-item">
+              <div class="speed-settings">
+                <el-radio-group v-model="speedMode" :disabled="busy">
+                  <el-radio-button label="double-line">双线标定（推荐）</el-radio-button>
+                  <el-radio-button label="scale">局部米/像素</el-radio-button>
+                </el-radio-group>
+                <template v-if="speedMode === 'double-line'">
+                  <div class="speed-field-row">
+                    <span>两线实际距离</span>
+                    <el-input-number v-model="speedDistanceM" :min="0" :step="1" :precision="2" style="width: 130px" :disabled="busy" />
+                    <span>米</span>
+                    <span>速度上限</span>
+                    <el-input-number v-model="speedMaxKmh" :min="1" :max="999" :step="10" :precision="0" style="width: 120px" :disabled="busy" />
+                    <span>km/h</span>
+                  </div>
+                  <div class="speed-field-row speed-draw-controls">
+                    <el-button size="small" type="primary" plain :disabled="!canDrawSpeedLines" @click="setDrawTool('speedA')">绘制测速线 A</el-button>
+                    <el-button size="small" type="warning" plain :disabled="!canDrawSpeedLines" @click="setDrawTool('speedB')">绘制测速线 B</el-button>
+                    <el-button v-if="activeSpeedLineA || activeSpeedLineB" size="small" link type="primary" :disabled="busy" @click="clearActiveSpeedLines">清除测速线</el-button>
+                    <el-tag size="small" :type="activeSpeedLineA ? 'success' : 'info'">A{{ activeSpeedLineA ? '已绘制' : '待绘制' }}</el-tag>
+                    <el-tag size="small" :type="activeSpeedLineB ? 'success' : 'info'">B{{ activeSpeedLineB ? '已绘制' : '待绘制' }}</el-tag>
+                  </div>
+                  <div class="speed-help">在{{ mode === 'file' ? '视频首帧' : '实时画面' }}依次点击两点绘制 A、B 两条测速线。</div>
+                </template>
+                <template v-else>
+                  <div class="speed-field-row">
+                    <span>米/像素</span>
+                    <el-input-number v-model="metersPerPixel" :min="0" :step="0.001" :precision="4" style="width: 130px" :disabled="busy" />
+                    <span>速度上限</span>
+                    <el-input-number v-model="speedMaxKmh" :min="1" :max="999" :step="10" :precision="0" style="width: 120px" :disabled="busy" />
+                    <span>km/h</span>
+                  </div>
+                  <el-alert class="speed-scale-warning" type="warning" :closable="false" title="米/像素需按当前分辨率和道路区域标定，结果仅供估算参考。" />
+                </template>
+              </div>
             </el-form-item>
             <el-form-item v-if="mode === 'image'">
               <el-upload :show-file-list="false" :auto-upload="false" :on-change="onPickImage" accept="image/*">
@@ -189,7 +222,10 @@
             <el-col v-if="file" :xs="24" :lg="previewUrl ? 12 : 24">
               <el-card shadow="never" class="cfg-card">
                 <div class="line-tip">
-                  <template v-if="countMode === 'zone'">
+                  <template v-if="speedMode === 'double-line' && enableSpeed && drawTool !== 'count'">
+                    正在绘制测速线 {{ drawTool === 'speedA' ? 'A（青色）' : 'B（琥珀色）' }}：请点击第 {{ fileSpeedDrawPointCount + 1 }} 个点。
+                  </template>
+                  <template v-else-if="countMode === 'zone'">
                     绘制多边形：依次点击添加顶点（≥3），完成后点「闭合区域」。
                     <el-button link type="success" :disabled="fileRegionPts.length < 3" @click="finishFileRegion">闭合区域</el-button>
                     <el-button link type="primary" @click="clearFileRegion">清除区域</el-button>
@@ -310,7 +346,12 @@
                 <el-table-column prop="trackId" label="ID" width="70" />
                 <el-table-column prop="className" label="车型" width="90" />
                 <el-table-column prop="plate" label="号牌" min-width="100" />
-                <el-table-column prop="speedKmh" label="速度 km/h" width="100" />
+                <el-table-column label="速度" width="180">
+                  <template #default="{ row }">
+                    <span>{{ speedDisplay(row) }}</span>
+                    <el-tag v-if="speedSourceLabel(row)" size="small" class="speed-source-tag">{{ speedSourceLabel(row) }}</el-tag>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="plateScore" label="OCR 分" width="80" />
               </el-table>
             </div>
@@ -324,7 +365,10 @@
               实时画面
               <el-button v-if="!liveRunning" type="primary" size="small" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
               <el-button v-else type="danger" size="small" :icon="SwitchButton" @click="liveStop">停止</el-button>
+              <el-button v-if="liveRunning && enableSpeed && speedMode === 'double-line'" size="small" type="primary" plain @click="setDrawTool('speedA')">绘制测速线 A</el-button>
+              <el-button v-if="liveRunning && enableSpeed && speedMode === 'double-line'" size="small" type="warning" plain @click="setDrawTool('speedB')">绘制测速线 B</el-button>
               <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
+              <el-button v-if="liveSpeedLineA || liveSpeedLineB" link type="primary" @click="clearLiveSpeedLines">清除测速线</el-button>
               <el-button v-if="liveRegion" link type="primary" @click="clearLiveRegion">清除区域</el-button>
               <el-button v-if="countMode==='zone' && liveRegionPts.length >= 3 && !liveRegion" link type="success" @click="finishLiveRegion">闭合区域</el-button>
               <el-button v-if="recordCount" link type="primary" :icon="Download" @click="exportCsv">导出 CSV</el-button>
@@ -346,6 +390,9 @@
                     {{ mode === 'network' ? '选择网络摄像头后点「开始」' : '点「开始」启用摄像头' }}
                   </template>
                 </div>
+                <div v-if="liveRunning && speedMode === 'double-line' && enableSpeed && drawTool !== 'count'" class="cam-draw-tip">
+                  正在绘制测速线 {{ drawTool === 'speedA' ? 'A（青色）' : 'B（琥珀色）' }}：请点击第 {{ liveSpeedDrawPointCount + 1 }} 个点。
+                </div>
                 <div v-if="liveRunning" class="cam-hud">
                   <el-tag type="success" effect="dark">{{ camFps }} FPS</el-tag>
                   <el-tag type="warning" effect="dark">目标 {{ liveDets.length }}</el-tag>
@@ -361,7 +408,12 @@
               <el-table-column prop="trackId" label="ID" width="70" />
               <el-table-column prop="className" label="车型" width="90" />
               <el-table-column prop="plate" label="号牌" min-width="100" />
-              <el-table-column prop="speedKmh" label="速度" width="80" />
+              <el-table-column label="速度" width="180">
+                <template #default="{ row }">
+                  <span>{{ speedDisplay(row) }}</span>
+                  <el-tag v-if="speedSourceLabel(row)" size="small" class="speed-source-tag">{{ speedSourceLabel(row) }}</el-tag>
+                </template>
+              </el-table-column>
             </el-table>
           </el-card>
         </template>
@@ -399,6 +451,10 @@ const classPreset = ref('person_vehicle')
 const zoneBorderColor = ref('#2196f3')
 const zoneFillColor = ref('rgba(33, 150, 243, 0.12)')
 const metersPerPixel = ref(0.05)
+const speedMode = ref('double-line') // double-line | scale
+const speedDistanceM = ref(10)
+const speedMaxKmh = ref(240)
+const drawTool = ref('count') // count | speedA | speedB
 const alertEnabled = ref(false)
 
 /** 推荐权重优先级（高精度 + CPU 友好，面向行驶车牌） */
@@ -520,6 +576,10 @@ const imagePlateCount = ref(0)
 const frameCanvas = ref(null)
 const fileLinePts = ref([])
 const fileLine = ref(null)
+const fileSpeedLineAPts = ref([])
+const fileSpeedLineBPts = ref([])
+const fileSpeedLineA = ref(null)
+const fileSpeedLineB = ref(null)
 const fileRegionPts = ref([])
 const fileRegion = ref(null)
 let frameBaseImage = null
@@ -537,6 +597,10 @@ const liveRunning = ref(false)
 const liveDets = ref([])
 const camFps = ref(0)
 const liveLine = ref(null)
+const liveSpeedLineAPts = ref([])
+const liveSpeedLineBPts = ref([])
+const liveSpeedLineA = ref(null)
+const liveSpeedLineB = ref(null)
 const liveRegionPts = ref([])
 const liveRegion = ref(null)
 const zoneOcc = ref({ person: 0, vehicle: 0 })
@@ -575,7 +639,27 @@ const zoneStylePayload = () => ({
   fillColor: zoneFillColor.value,
 })
 
+const isSpeedLine = (line) => Array.isArray(line) && line.length === 4 && line.every((v) => Number.isFinite(Number(v)))
+const isDoubleLineCalibrationReady = (lineA, lineB) => (
+  isSpeedLine(lineA) && isSpeedLine(lineB) && Number(speedDistanceM.value) > 0
+)
 const busy = computed(() => liveRunning.value || fileRunning.value || imageRunning.value)
+const activeSpeedLineA = computed(() => (mode.value === 'file' ? fileSpeedLineA.value : liveSpeedLineA.value))
+const activeSpeedLineB = computed(() => (mode.value === 'file' ? fileSpeedLineB.value : liveSpeedLineB.value))
+const fileSpeedDrawPointCount = computed(() => (
+  drawTool.value === 'speedA' ? fileSpeedLineAPts.value.length : drawTool.value === 'speedB' ? fileSpeedLineBPts.value.length : 0
+))
+const liveSpeedDrawPointCount = computed(() => (
+  drawTool.value === 'speedA' ? liveSpeedLineAPts.value.length : drawTool.value === 'speedB' ? liveSpeedLineBPts.value.length : 0
+))
+const canDrawSpeedLines = computed(() => {
+  if (fileRunning.value || imageRunning.value || speedMode.value !== 'double-line') return false
+  if (mode.value === 'file') return !!(file.value && frameCanvas.value)
+  return liveRunning.value && !!camCanvas.value
+})
+const fileSpeedCalibrationReady = computed(() => (
+  !enableSpeed.value || speedMode.value !== 'double-line' || isDoubleLineCalibrationReady(fileSpeedLineA.value, fileSpeedLineB.value)
+))
 const hasResults = computed(() => {
   if (mode.value === 'image') return !!(imageResultSrc.value || imageRunning.value)
   if (mode.value === 'file') return !!(resultUrl.value || fileRunning.value)
@@ -586,7 +670,7 @@ const resultBadge = computed(() => {
   if (mode.value === 'file') return fileRecords.value.length || (fileRunning.value ? '…' : 0)
   return recordCount.value || (liveRunning.value ? '…' : 0)
 })
-const canRunFile = computed(() => detectId.value && file.value && !fileRunning.value)
+const canRunFile = computed(() => detectId.value && file.value && !fileRunning.value && fileSpeedCalibrationReady.value)
 const canRunImage = computed(() => detectId.value && imageFile.value && !imageRunning.value)
 const canStartLive = computed(() => {
   if (!detectId.value) return false
@@ -605,7 +689,13 @@ const newSessionId = () => {
   sessionId.value = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`)
 }
 
-const appendCommonFields = (fd, { reset = false, line = null, region = null } = {}) => {
+const appendCommonFields = (fd, {
+  reset = false,
+  line = null,
+  region = null,
+  speedLineA = null,
+  speedLineB = null,
+} = {}) => {
   fd.append('detectId', detectId.value)
   if (plateId.value) fd.append('plateId', plateId.value)
   if (detId.value && recId.value) {
@@ -620,8 +710,16 @@ const appendCommonFields = (fd, { reset = false, line = null, region = null } = 
   fd.append('classPreset', classPreset.value)
   // 图片模式仍可用 vehicleOnly；视频/实时以 classPreset 为准
   fd.append('vehicleOnly', (classPreset.value === 'vehicle' || vehicleOnly.value) ? '1' : '0')
-  if (enableSpeed.value && metersPerPixel.value > 0) {
-    fd.append('metersPerPixel', metersPerPixel.value)
+  if (enableSpeed.value && mode.value !== 'image') {
+    fd.append('speedMode', speedMode.value)
+    fd.append('speedMaxKmh', String(speedMaxKmh.value))
+    if (speedMode.value === 'double-line') {
+      if (isSpeedLine(speedLineA)) fd.append('speedLineA', JSON.stringify(speedLineA))
+      if (isSpeedLine(speedLineB)) fd.append('speedLineB', JSON.stringify(speedLineB))
+      fd.append('speedDistanceM', String(speedDistanceM.value))
+    } else if (metersPerPixel.value > 0) {
+      fd.append('metersPerPixel', String(metersPerPixel.value))
+    }
   }
   if (countMode.value === 'line' && line) fd.append('line', JSON.stringify(line))
   if (countMode.value === 'zone' && region) {
@@ -757,6 +855,7 @@ const onPick = (uploadFile) => {
   previewUrl.value = URL.createObjectURL(raw)
   clearFileLine()
   clearFileRegion()
+  clearFileSpeedLines()
   frameBaseImage = null
   clearFileOutput()
   drawFirstFrame(raw)
@@ -790,6 +889,78 @@ const drawFirstFrame = (raw) => {
     URL.revokeObjectURL(url)
     redrawFileCanvas()
   })
+}
+
+const drawSpeedLine = (ctx, cv, line, pendingPoints, color, label) => {
+  const points = isSpeedLine(line)
+    ? [
+      { x: Number(line[0]) * cv.width, y: Number(line[1]) * cv.height },
+      { x: Number(line[2]) * cv.width, y: Number(line[3]) * cv.height },
+    ]
+    : pendingPoints
+  if (!points.length) return
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.fillStyle = color
+  ctx.lineWidth = 3
+  points.forEach((point) => {
+    ctx.beginPath()
+    ctx.arc(point.x, point.y, 4, 0, Math.PI * 2)
+    ctx.fill()
+  })
+  if (points.length === 2) {
+    ctx.beginPath()
+    ctx.moveTo(points[0].x, points[0].y)
+    ctx.lineTo(points[1].x, points[1].y)
+    ctx.stroke()
+    const x = (points[0].x + points[1].x) / 2
+    const y = (points[0].y + points[1].y) / 2
+    const text = `测速线 ${label}`
+    ctx.font = 'bold 13px sans-serif'
+    const width = ctx.measureText(text).width + 10
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.68)'
+    ctx.fillRect(Math.max(0, x - width / 2), Math.max(0, y - 24), width, 18)
+    ctx.fillStyle = color
+    ctx.fillText(text, Math.max(5, x - width / 2 + 5), Math.max(1, y - 22))
+  }
+  ctx.restore()
+}
+
+const addSpeedLinePoint = (points, line, cv, x, y) => {
+  if (line.value || points.value.length >= 2) {
+    points.value = []
+    line.value = null
+  }
+  points.value.push({ x, y })
+  if (points.value.length === 2) {
+    line.value = [
+      points.value[0].x / cv.width, points.value[0].y / cv.height,
+      points.value[1].x / cv.width, points.value[1].y / cv.height,
+    ]
+    points.value = []
+    drawTool.value = 'count'
+  }
+}
+
+const setDrawTool = (tool) => {
+  if (!canDrawSpeedLines.value) return
+  drawTool.value = tool
+  if (mode.value === 'file') redrawFileCanvas()
+  else redrawLiveCanvas()
+}
+
+const clearFileSpeedLines = () => {
+  fileSpeedLineAPts.value = []
+  fileSpeedLineBPts.value = []
+  fileSpeedLineA.value = null
+  fileSpeedLineB.value = null
+  if (mode.value === 'file') drawTool.value = 'count'
+  redrawFileCanvas()
+}
+
+const clearActiveSpeedLines = () => {
+  if (mode.value === 'file') clearFileSpeedLines()
+  else clearLiveSpeedLines()
 }
 
 const redrawFileCanvas = () => {
@@ -833,14 +1004,26 @@ const redrawFileCanvas = () => {
       ctx.fill()
     }
   }
+
+  if (enableSpeed.value && speedMode.value === 'double-line') {
+    drawSpeedLine(ctx, cv, fileSpeedLineA.value, fileSpeedLineAPts.value, '#00d9ff', 'A')
+    drawSpeedLine(ctx, cv, fileSpeedLineB.value, fileSpeedLineBPts.value, '#ffb000', 'B')
+  }
 }
 
 const onFileCanvasClick = (e) => {
   const cv = frameCanvas.value
-  if (!cv || countMode.value === 'none') return
+  if (!cv) return
   const rect = cv.getBoundingClientRect()
   const x = (e.clientX - rect.left) * (cv.width / rect.width)
   const y = (e.clientY - rect.top) * (cv.height / rect.height)
+  if (enableSpeed.value && speedMode.value === 'double-line' && drawTool.value !== 'count') {
+    if (drawTool.value === 'speedA') addSpeedLinePoint(fileSpeedLineAPts, fileSpeedLineA, cv, x, y)
+    else addSpeedLinePoint(fileSpeedLineBPts, fileSpeedLineB, cv, x, y)
+    redrawFileCanvas()
+    return
+  }
+  if (countMode.value === 'none') return
   if (countMode.value === 'line') {
     if (fileLinePts.value.length >= 2) return
     fileLinePts.value.push({ x, y })
@@ -901,6 +1084,7 @@ const clearFile = () => {
   file.value = null
   clearFileLine()
   clearFileRegion()
+  clearFileSpeedLines()
   frameBaseImage = null
   processed.value = 0
   total.value = 0
@@ -908,6 +1092,10 @@ const clearFile = () => {
 }
 
 const runVideo = async () => {
+  if (!fileSpeedCalibrationReady.value) {
+    ElMessage.warning('双线测速需绘制测速线 A、B 并填写大于 0 的实际距离')
+    return
+  }
   if (countMode.value === 'zone' && !fileRegion.value) {
     ElMessage.warning('请先绘制并闭合多边形监控区域')
     return
@@ -923,6 +1111,8 @@ const runVideo = async () => {
     appendCommonFields(fd, {
       line: fileLine.value,
       region: fileRegion.value,
+      speedLineA: fileSpeedLineA.value,
+      speedLineB: fileSpeedLineB.value,
     })
     fd.append('alertEnabled', alertEnabled.value ? '1' : '0')
     const res = await vehicleApi.trackVideo(fd)
@@ -1149,11 +1339,19 @@ const scheduleLoop = (delayMs = 0) => {
 }
 
 const onLiveClick = (e) => {
-  if (!liveRunning.value || countMode.value === 'none') return
+  if (!liveRunning.value) return
   const cv = camCanvas.value
+  if (!cv) return
   const rect = cv.getBoundingClientRect()
   const x = (e.clientX - rect.left) * (cv.width / rect.width)
   const y = (e.clientY - rect.top) * (cv.height / rect.height)
+  if (enableSpeed.value && speedMode.value === 'double-line' && drawTool.value !== 'count') {
+    if (drawTool.value === 'speedA') addSpeedLinePoint(liveSpeedLineAPts, liveSpeedLineA, cv, x, y)
+    else addSpeedLinePoint(liveSpeedLineBPts, liveSpeedLineB, cv, x, y)
+    redrawLiveCanvas()
+    return
+  }
+  if (countMode.value === 'none') return
   if (countMode.value === 'line') {
     if (!cv._p0) {
       cv._p0 = [x, y]
@@ -1174,6 +1372,15 @@ const onLiveClick = (e) => {
 const clearLiveLine = () => {
   liveLine.value = null
   if (camCanvas.value) camCanvas.value._p0 = null
+}
+
+const clearLiveSpeedLines = () => {
+  liveSpeedLineAPts.value = []
+  liveSpeedLineBPts.value = []
+  liveSpeedLineA.value = null
+  liveSpeedLineB.value = null
+  if (mode.value !== 'file') drawTool.value = 'count'
+  redrawLiveCanvas()
 }
 
 const clearLiveRegion = () => {
@@ -1230,6 +1437,24 @@ const evaluateAlerts = async (detections, frameW, frameH) => {
 
 const COLORS = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#9254de', '#13c2c2']
 
+const speedSourceLabel = (item) => {
+  if (item?.speedSource === 'double-line') return '区间实测'
+  if (item?.speedSource === 'scale') return '比例估算'
+  return ''
+}
+
+const speedDisplay = (item) => {
+  if (item?.speedQuality === 'warming-up') return '测速准备中'
+  const speed = Number(item?.speedKmh)
+  if (!item?.speedSource || item?.speedKmh == null || !Number.isFinite(speed)) return '—'
+  return `${Math.round(speed * 10) / 10} km/h`
+}
+
+const redrawLiveCanvas = () => {
+  if (!liveRunning.value || !camCanvas.value) return
+  camDraw({ detections: liveDets.value, congestion: congestion.value })
+}
+
 const camDraw = (data, overlayStyle = null) => {
   const cv = camCanvas.value
   const ctx = cv.getContext('2d')
@@ -1271,7 +1496,10 @@ const camDraw = (data, overlayStyle = null) => {
     if (d.trackId != null) parts.push(`ID${d.trackId}`)
     parts.push(d.className || 'vehicle')
     if (d.plate) parts.push(d.plate)
-    if (d.speedKmh) parts.push(`${d.speedKmh}km/h`)
+    const speed = speedDisplay(d)
+    if (speed !== '—') parts.push(speed)
+    const source = speedSourceLabel(d)
+    if (source) parts.push(source)
     const label = parts.join(' ')
     const tw = ctx.measureText(label).width + 8
     ctx.fillStyle = color
@@ -1296,6 +1524,11 @@ const camDraw = (data, overlayStyle = null) => {
     ctx.moveTo(ln[0], ln[1])
     ctx.lineTo(ln[2], ln[3])
     ctx.stroke()
+  }
+
+  if (enableSpeed.value && speedMode.value === 'double-line') {
+    drawSpeedLine(ctx, cv, liveSpeedLineA.value, liveSpeedLineAPts.value, '#00d9ff', 'A')
+    drawSpeedLine(ctx, cv, liveSpeedLineB.value, liveSpeedLineBPts.value, '#ffb000', 'B')
   }
 
   const zonePts = liveRegion.value
@@ -1437,6 +1670,8 @@ const liveLoop = () => {
         reset: camFirst,
         line: liveLine.value,
         region: liveRegion.value,
+        speedLineA: liveSpeedLineA.value,
+        speedLineB: liveSpeedLineB.value,
       })
       camFirst = false
       const res = await vehicleApi.trackFrame(fd)
@@ -1519,6 +1754,13 @@ onBeforeUnmount(() => {
 .tab-badge :deep(.el-badge__content) { transform: translateY(-2px); }
 .cfg-card { margin-bottom: 12px; }
 .cfg-form { row-gap: 4px; }
+.speed-setting-item :deep(.el-form-item__content) { min-width: 0; }
+.speed-settings { display: grid; gap: 8px; min-width: 0; }
+.speed-field-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: #52647c; font-size: 13px; }
+.speed-draw-controls { gap: 8px; }
+.speed-help { color: #7a889e; font-size: 12px; }
+.speed-scale-warning { max-width: 540px; }
+.speed-source-tag { margin-left: 6px; vertical-align: middle; }
 .flow-tip { margin-top: 8px; }
 .alert-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 .section-title { font-weight: 600; color: #3a4a63; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -1541,5 +1783,6 @@ onBeforeUnmount(() => {
 .cam-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .cam-canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; cursor: crosshair; }
 .cam-hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #8aa0c8; text-align: center; padding: 16px; }
+.cam-draw-tip { position: absolute; right: 10px; bottom: 10px; max-width: calc(100% - 20px); padding: 7px 10px; border-radius: 4px; background: rgba(0, 0, 0, 0.68); color: #fff; font-size: 13px; }
 .cam-hud { position: absolute; top: 10px; left: 10px; display: flex; flex-wrap: wrap; gap: 8px; max-width: calc(100% - 20px); }
 </style>
