@@ -1338,13 +1338,39 @@ const scheduleLoop = (delayMs = 0) => {
   }, delayMs)
 }
 
+const getContainedContentBox = (boxWidth, boxHeight, contentWidth, contentHeight) => {
+  if (![boxWidth, boxHeight, contentWidth, contentHeight].every((value) => Number.isFinite(value) && value > 0)) return null
+  const scale = Math.min(boxWidth / contentWidth, boxHeight / contentHeight)
+  const width = contentWidth * scale
+  const height = contentHeight * scale
+  return {
+    left: (boxWidth - width) / 2,
+    top: (boxHeight - height) / 2,
+    width,
+    height,
+  }
+}
+
+const mapContainedCanvasPoint = (clientX, clientY, rect, canvasWidth, canvasHeight) => {
+  const content = getContainedContentBox(rect.width, rect.height, canvasWidth, canvasHeight)
+  if (!content) return null
+  const x = clientX - rect.left
+  const y = clientY - rect.top
+  if (x < content.left || x > content.left + content.width || y < content.top || y > content.top + content.height) return null
+  return {
+    x: (x - content.left) * (canvasWidth / content.width),
+    y: (y - content.top) * (canvasHeight / content.height),
+  }
+}
+
 const onLiveClick = (e) => {
   if (!liveRunning.value) return
   const cv = camCanvas.value
   if (!cv) return
   const rect = cv.getBoundingClientRect()
-  const x = (e.clientX - rect.left) * (cv.width / rect.width)
-  const y = (e.clientY - rect.top) * (cv.height / rect.height)
+  const point = mapContainedCanvasPoint(e.clientX, e.clientY, rect, cv.width, cv.height)
+  if (!point) return
+  const { x, y } = point
   if (enableSpeed.value && speedMode.value === 'double-line' && drawTool.value !== 'count') {
     if (drawTool.value === 'speedA') addSpeedLinePoint(liveSpeedLineAPts, liveSpeedLineA, cv, x, y)
     else addSpeedLinePoint(liveSpeedLineBPts, liveSpeedLineB, cv, x, y)
