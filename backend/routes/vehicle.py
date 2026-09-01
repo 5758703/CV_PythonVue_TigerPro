@@ -130,9 +130,9 @@ def _parse_speed_config():
 
     line_a = _parse_line(request.form.get("speedLineA"))
     line_b = _parse_line(request.form.get("speedLineB"))
-    if line_a is not None and not all(math.isfinite(value) for value in line_a):
+    if line_a is not None and not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in line_a):
         line_a = None
-    if line_b is not None and not all(math.isfinite(value) for value in line_b):
+    if line_b is not None and not all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in line_b):
         line_b = None
 
     distance_m = _parse_float("speedDistanceM")
@@ -736,7 +736,10 @@ def export_records():
     session = get_session(str(session_id), reset=False)
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(["time", "trackId", "className", "plate", "plateScore", "speedKmh", "confidence"])
+    writer.writerow([
+        "time", "trackId", "className", "plate", "plateScore",
+        "speedKmh", "speedSource", "speedQuality", "confidence",
+    ])
     for row in session.records:
         writer.writerow([
             row.get("time"),
@@ -745,6 +748,8 @@ def export_records():
             row.get("plate"),
             row.get("plateScore"),
             row.get("speedKmh"),
+            row.get("speedSource"),
+            row.get("speedQuality"),
             row.get("confidence"),
         ])
     return jsonify(code=0, data={"csv": buf.getvalue(), "count": len(session.records)})

@@ -1,3 +1,4 @@
+import csv
 import importlib.util
 import io
 import pathlib
@@ -437,6 +438,29 @@ def test_double_line_gate_state_is_isolated_by_track_id():
     )
 
 
+@pytest.mark.parametrize(
+    ("changed_options", "final_x"),
+    [
+        ({"speed_distance_m": 20.0}, 130),
+        ({"speed_max_kmh": 100.0}, 130),
+        ({"speed_line_b_px": [130, 0, 130, 100]}, 140),
+    ],
+    ids=["distance", "speed-limit", "line"],
+)
+def test_double_line_configuration_change_resets_pending_gate(changed_options, final_x):
+    """A pending first gate cannot be completed under a different calibration."""
+    session = VehicleSession()
+    _double_line_sample(session, 7, 10, 0.0)
+    _double_line_sample(session, 7, 30, 1.0)
+
+    speed = _double_line_sample(session, 7, final_x, 2.0, **changed_options)
+
+    assert speed["speedKmh"] is None
+    assert speed["speedSource"] is None
+    assert speed["speedQuality"] == "warming-up"
+    assert "completed_at" not in session.speed_gates[7]
+
+
 @pytest.mark.parametrize("timestamp", [1.0, 0.5, 3.1], ids=["zero-dt", "non-monotonic", "gap"])
 def test_double_line_invalid_timeline_resets_only_that_gate(timestamp):
     """Equal, reversed, and interrupted media time cannot complete a gate interval."""
@@ -500,6 +524,99 @@ def test_invalid_double_line_configuration_safely_falls_back_to_scale(overrides)
     assert speed["speedSource"] == "scale"
     assert speed["speedQuality"] == "estimated"
     assert 7 not in session.speed_gates
+
+
+def test_records_are_created_without_ocr_and_refresh_when_speed_completes():
+    """One Track ID owns one record even without OCR, including later speed state changes."""
+    session = VehicleSession()
+    samples = [(0.0, 10), (1.0, 30), (1.5, 110), (2.0, 130)]
+
+    first = _double_line_sample(session, 7, samples[0][1], samples[0][0])
+    assert first["speedQuality"] == "warming-up"
+    assert len(session.records) == 1
+    assert session.records[0]["plate"] is None
+    assert session.records[0]["speedKmh"] is None
+    assert session.records[0]["speedSource"] is None
+    assert session.records[0]["speedQuality"] == "warming-up"
+
+    for timestamp, x in samples[1:]:
+        _double_line_sample(session, 7, x, timestamp)
+
+    assert len(session.records) == 1
+    assert session.records[0]["speedKmh"] == 36.0
+    assert session.records[0]["speedSource"] == "double-line"
+    assert session.records[0]["speedQuality"] == "measured"
+
+    _double_line_sample(session, 7, 150, 2.5)
+    assert session.records[0]["speedKmh"] == 36.0
+    assert session.records[0]["speedSource"] == "double-line"
+    assert session.records[0]["speedQuality"] == "measured"
+
+
+def test_stale_track_cleanup_removes_all_speed_state_and_record_index():
+    """Evicting stale trail state must evict the same Track IDs from speed ownership."""
+    session = VehicleSession()
+    session.record_indices = {}
+    for track_id in range(70):
+        session.track_history[track_id] = [(0.0, 0.0, 0.0)]
+        session.speed_history[track_id] = [(0.0, 0.0, 0.0)]
+        session.speed_ema[track_id] = 1.0
+        session.speed_gates[track_id] = {"last_point": (0.0, 0.0), "last_ts": 0.0}
+        session.record_indices[track_id] = track_id
+        session.records.append({"trackId": track_id})
+
+    enrich_vehicle_frame(
+        np.zeros((100, 200, 3), dtype=np.uint8),
+        [_det(999, [10, 20, 30, 60])],
+        session,
+        enable_ocr=False,
+        enable_speed=False,
+        enable_trail=False,
+        sample_ts=1.0,
+    )
+
+    for state in (
+        session.track_history,
+        session.speed_history,
+        session.speed_ema,
+        session.speed_gates,
+        session.record_indices,
+    ):
+        assert 0 not in state
+
+
+@pytest.mark.parametrize(
+    "detection",
+    [
+        {"speedKmh": 0.0, "speedSource": "scale", "speedQuality": "estimated"},
+        {"speedKmh": None, "speedSource": None, "speedQuality": "warming-up"},
+    ],
+    ids=["legal-zero", "warming-up"],
+)
+def test_video_hud_renders_speed_quality_and_source(monkeypatch, detection):
+    """Video HUD must render legal zero and the same Chinese quality/source vocabulary as the UI."""
+    labels = []
+
+    def capture_label(image, text, *_args, **_kwargs):
+        labels.append(text)
+        return image
+
+    monkeypatch.setattr(vehicle_track, "_draw_label_bgr", capture_label)
+    vehicle_track.draw_vehicle_hud(
+        np.zeros((100, 200, 3), dtype=np.uint8),
+        {
+            "detections": [{
+                **_det(7, [10, 20, 30, 60]),
+                **detection,
+                "plate": None,
+                "alarm": None,
+            }],
+        },
+        draw_trails=False,
+    )
+
+    expected = "0.0km/h 比例估算" if detection["speedKmh"] == 0.0 else "测速准备中"
+    assert any(expected in label for label in labels)
 
 
 @pytest.mark.parametrize(
@@ -574,6 +691,56 @@ def test_track_frame_double_line_parameters_are_scaled_and_clamped(monkeypatch):
     assert captured["speed_max_kmh"] == 30.0
 
 
+@pytest.mark.parametrize(
+    "invalid_line",
+    [
+        "[-0.1, 0, 0.1, 1]",
+        "[0.1, 0, 1.1, 1]",
+    ],
+    ids=["below-zero", "above-one"],
+)
+def test_track_frame_rejects_out_of_range_normalized_speed_lines(monkeypatch, invalid_line):
+    """Normalized gate coordinates outside 0..1 must not reach pixel geometry."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    captured = {}
+    monkeypatch.setattr(
+        vehicle_route,
+        "_resolve_models",
+        lambda: ({"detect_path": "fake.pt", "plate_path": None, "ocr_fn": None}, None),
+    )
+    monkeypatch.setattr(vehicle_route, "_resolve_track_classes", lambda **_kwargs: ([2], None))
+    monkeypatch.setattr(inference, "track_frame", lambda *_args, **_kwargs: {"detections": []})
+
+    def capture_enrich(_image, _detections, _session, **kwargs):
+        captured.update(kwargs)
+        return {"detections": []}
+
+    monkeypatch.setattr(vehicle_track, "enrich_vehicle_frame", capture_enrich)
+    ok, encoded = cv2.imencode(".jpg", np.zeros((100, 200, 3), dtype=np.uint8))
+    assert ok
+    response = app.test_client().post(
+        "/api/ai/vehicle/track-frame",
+        data={
+            "file": (io.BytesIO(encoded.tobytes()), "frame.jpg"),
+            "speedMode": "double-line",
+            "speedLineA": invalid_line,
+            "speedLineB": "[0.6, 0, 0.6, 1]",
+            "speedDistanceM": "10",
+            "metersPerPixel": "0.1",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert captured["speed_line_a_px"] is None
+    assert captured["speed_line_b_px"] == [120.0, 0.0, 120.0, 100.0]
+
+
 def test_legacy_meters_per_pixel_request_remains_supported(monkeypatch):
     """A pre-calibration client must still obtain scale speed from metersPerPixel."""
     import cv2
@@ -616,6 +783,34 @@ def test_legacy_meters_per_pixel_request_remains_supported(monkeypatch):
         assert response.status_code == 200
 
     assert response.json["data"]["detections"][0]["speedSource"] == "scale"
+
+
+def test_export_records_csv_includes_speed_source_and_quality(monkeypatch):
+    """The live export endpoint must preserve the record's speed provenance end to end."""
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    session_id = "speed-export"
+    session = vehicle_track.get_session(session_id, reset=True)
+    try:
+        for timestamp, x in [(0.0, 10), (1.0, 30), (1.5, 110), (2.0, 130)]:
+            _double_line_sample(session, 7, x, timestamp)
+
+        response = app.test_client().post(
+            "/api/ai/vehicle/export-records",
+            json={"sessionId": session_id},
+        )
+
+        assert response.status_code == 200
+        rows = list(csv.reader(io.StringIO(response.json["data"]["csv"])))
+        assert rows[0] == [
+            "time", "trackId", "className", "plate", "plateScore",
+            "speedKmh", "speedSource", "speedQuality", "confidence",
+        ]
+        assert rows[1][5:8] == ["36.0", "double-line", "measured"]
+        assert response.json["data"]["count"] == 1
+    finally:
+        vehicle_track.clear_session(session_id)
 
 
 def test_track_video_double_line_parameters_reach_worker_config(monkeypatch, tmp_path):

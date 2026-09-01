@@ -98,17 +98,17 @@
             </el-form-item>
             <el-form-item v-if="enableSpeed && mode !== 'image'" label="测速设置" class="speed-setting-item">
               <div class="speed-settings">
-                <el-radio-group v-model="speedMode" :disabled="busy">
+                <el-radio-group v-model="speedMode" :disabled="busy" @change="onSpeedModeChange">
                   <el-radio-button label="double-line">双线标定（推荐）</el-radio-button>
                   <el-radio-button label="scale">局部米/像素</el-radio-button>
                 </el-radio-group>
                 <template v-if="speedMode === 'double-line'">
                   <div class="speed-field-row">
                     <span>两线实际距离</span>
-                    <el-input-number v-model="speedDistanceM" :min="0" :step="1" :precision="2" style="width: 130px" :disabled="busy" />
+                    <el-input-number v-model="speedDistanceM" :min="0.01" :step="1" :precision="2" style="width: 130px" :disabled="busy" />
                     <span>米</span>
                     <span>速度上限</span>
-                    <el-input-number v-model="speedMaxKmh" :min="1" :max="999" :step="10" :precision="0" style="width: 120px" :disabled="busy" />
+                    <el-input-number v-model="speedMaxKmh" :min="30" :max="400" :step="10" :precision="0" style="width: 120px" :disabled="busy" />
                     <span>km/h</span>
                   </div>
                   <div class="speed-field-row speed-draw-controls">
@@ -123,9 +123,9 @@
                 <template v-else>
                   <div class="speed-field-row">
                     <span>米/像素</span>
-                    <el-input-number v-model="metersPerPixel" :min="0" :step="0.001" :precision="4" style="width: 130px" :disabled="busy" />
+                    <el-input-number v-model="metersPerPixel" :min="0.0001" :step="0.001" :precision="4" placeholder="请标定" style="width: 130px" :disabled="busy" />
                     <span>速度上限</span>
-                    <el-input-number v-model="speedMaxKmh" :min="1" :max="999" :step="10" :precision="0" style="width: 120px" :disabled="busy" />
+                    <el-input-number v-model="speedMaxKmh" :min="30" :max="400" :step="10" :precision="0" style="width: 120px" :disabled="busy" />
                     <span>km/h</span>
                   </div>
                   <el-alert class="speed-scale-warning" type="warning" :closable="false" title="米/像素需按当前分辨率和道路区域标定，结果仅供估算参考。" />
@@ -143,12 +143,12 @@
               </el-upload>
             </el-form-item>
             <el-form-item v-if="mode === 'local'" label="摄像头">
-              <el-select v-model="deviceId" placeholder="默认" style="width: 180px" :disabled="liveRunning">
+              <el-select v-model="deviceId" placeholder="默认" style="width: 180px" :disabled="liveRunning" @change="onLiveSourceChange">
                 <el-option v-for="d in devices" :key="d.deviceId" :label="d.label || `摄像头 ${d.idx}`" :value="d.deviceId" />
               </el-select>
             </el-form-item>
             <el-form-item v-if="mode === 'network'" label="网络摄像头">
-              <el-select v-model="cameraId" placeholder="选择" filterable style="width: 200px" :disabled="liveRunning" :loading="camerasLoading">
+              <el-select v-model="cameraId" placeholder="选择" filterable style="width: 200px" :disabled="liveRunning" :loading="camerasLoading" @change="onLiveSourceChange">
                 <el-option v-for="c in managedCameras" :key="c.id" :label="cameraLabel(c)" :value="c.id" />
               </el-select>
               <el-button link type="primary" :disabled="liveRunning" @click="loadManagedCameras">刷新</el-button>
@@ -170,8 +170,10 @@
             </el-form-item>
             <el-form-item v-if="mode === 'local' || mode === 'network'" class="alert-action-item">
               <div class="alert-action-row">
-                <el-button v-if="!liveRunning" type="primary" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
+                <el-button v-if="!livePreviewing" type="primary" :icon="VideoCamera" :disabled="!canOpenLivePreview" @click="openLivePreview">打开预览</el-button>
+                <el-button v-else-if="!liveRunning" type="primary" :icon="VideoPlay" :disabled="!canStartLive" @click="liveStart">开始分析</el-button>
                 <el-button v-else type="danger" :icon="SwitchButton" @click="liveStop">停止</el-button>
+                <el-button v-if="livePreviewing && !liveRunning" :icon="SwitchButton" @click="liveStop">关闭预览</el-button>
                 <el-checkbox v-model="alertEnabled" :disabled="liveRunning" style="margin-left: 12px">启用告警</el-checkbox>
                 <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
                 <el-button v-if="liveRegion" link type="primary" @click="clearLiveRegion">清除区域</el-button>
@@ -250,7 +252,7 @@
             type="info"
             :closable="false"
             show-icon
-            title="实时模式：在本页完成模型与摄像头配置后点「开始」，画面与过车记录在「追踪结果」页查看。"
+            title="实时模式：先打开摄像头预览并绘制计数/测速标定，再点「开始分析」；画面与过车记录在「追踪结果」页查看。"
           />
         </template>
       </el-tab-pane>
@@ -363,10 +365,12 @@
           <el-card shadow="never">
             <div class="section-title">
               实时画面
-              <el-button v-if="!liveRunning" type="primary" size="small" :icon="VideoCamera" :disabled="!canStartLive" @click="liveStart">开始</el-button>
+              <el-button v-if="!livePreviewing" type="primary" size="small" :icon="VideoCamera" :disabled="!canOpenLivePreview" @click="openLivePreview">打开预览</el-button>
+              <el-button v-else-if="!liveRunning" type="primary" size="small" :icon="VideoPlay" :disabled="!canStartLive" @click="liveStart">开始分析</el-button>
               <el-button v-else type="danger" size="small" :icon="SwitchButton" @click="liveStop">停止</el-button>
-              <el-button v-if="liveRunning && enableSpeed && speedMode === 'double-line'" size="small" type="primary" plain @click="setDrawTool('speedA')">绘制测速线 A</el-button>
-              <el-button v-if="liveRunning && enableSpeed && speedMode === 'double-line'" size="small" type="warning" plain @click="setDrawTool('speedB')">绘制测速线 B</el-button>
+              <el-button v-if="livePreviewing && !liveRunning" size="small" :icon="SwitchButton" @click="liveStop">关闭预览</el-button>
+              <el-button v-if="livePreviewing && !liveRunning && enableSpeed && speedMode === 'double-line'" size="small" type="primary" plain @click="setDrawTool('speedA')">绘制测速线 A</el-button>
+              <el-button v-if="livePreviewing && !liveRunning && enableSpeed && speedMode === 'double-line'" size="small" type="warning" plain @click="setDrawTool('speedB')">绘制测速线 B</el-button>
               <el-button v-if="liveLine" link type="primary" @click="clearLiveLine">清除线</el-button>
               <el-button v-if="liveSpeedLineA || liveSpeedLineB" link type="primary" @click="clearLiveSpeedLines">清除测速线</el-button>
               <el-button v-if="liveRegion" link type="primary" @click="clearLiveRegion">清除区域</el-button>
@@ -379,18 +383,18 @@
                 <video v-show="mode === 'local'" ref="camVideo" class="cam-video" autoplay playsinline muted />
                 <img v-show="mode === 'network'" ref="streamImg" class="cam-video" alt="网络摄像头" />
                 <canvas ref="camCanvas" class="cam-canvas" @click="onLiveClick" />
-                <div v-if="!liveRunning" class="cam-hint">
+                <div v-if="!livePreviewing" class="cam-hint">
                   <template v-if="countMode === 'zone'">
-                    {{ mode === 'network' ? '点「开始」后在画面点 ≥3 点并闭合区域' : '点「开始」后绘制多边形监控区域' }}
+                    {{ mode === 'network' ? '点「打开预览」后在画面点 ≥3 点并闭合区域' : '点「打开预览」后绘制多边形监控区域' }}
                   </template>
                   <template v-else-if="countMode === 'line'">
-                    {{ mode === 'network' ? '点「开始」后可画计数线' : '点「开始」后可在画面点两点画计数线' }}
+                    {{ mode === 'network' ? '点「打开预览」后可画计数线' : '点「打开预览」后可在画面点两点画计数线' }}
                   </template>
                   <template v-else>
-                    {{ mode === 'network' ? '选择网络摄像头后点「开始」' : '点「开始」启用摄像头' }}
+                    {{ mode === 'network' ? '选择网络摄像头后点「打开预览」' : '点「打开预览」启用摄像头' }}
                   </template>
                 </div>
-                <div v-if="liveRunning && speedMode === 'double-line' && enableSpeed && drawTool !== 'count'" class="cam-draw-tip">
+                <div v-if="livePreviewing && !liveRunning && speedMode === 'double-line' && enableSpeed && drawTool !== 'count'" class="cam-draw-tip">
                   正在绘制测速线 {{ drawTool === 'speedA' ? 'A（青色）' : 'B（琥珀色）' }}：请点击第 {{ liveSpeedDrawPointCount + 1 }} 个点。
                 </div>
                 <div v-if="liveRunning" class="cam-hud">
@@ -450,7 +454,7 @@ const countMode = ref('zone')  // zone | line | none
 const classPreset = ref('person_vehicle')
 const zoneBorderColor = ref('#2196f3')
 const zoneFillColor = ref('rgba(33, 150, 243, 0.12)')
-const metersPerPixel = ref(0.05)
+const metersPerPixel = ref(null)
 const speedMode = ref('double-line') // double-line | scale
 const speedDistanceM = ref(10)
 const speedMaxKmh = ref(240)
@@ -593,6 +597,7 @@ const cameraId = ref(null)
 const camVideo = ref(null)
 const streamImg = ref(null)
 const camCanvas = ref(null)
+const livePreviewing = ref(false)
 const liveRunning = ref(false)
 const liveDets = ref([])
 const camFps = ref(0)
@@ -639,9 +644,13 @@ const zoneStylePayload = () => ({
   fillColor: zoneFillColor.value,
 })
 
-const isSpeedLine = (line) => Array.isArray(line) && line.length === 4 && line.every((v) => Number.isFinite(Number(v)))
+const isSpeedLine = (line) => Array.isArray(line) && line.length === 4 && line.every((v) => {
+  const value = Number(v)
+  return Number.isFinite(value) && value >= 0 && value <= 1
+})
+const isPositiveNumber = (value) => Number.isFinite(Number(value)) && Number(value) > 0
 const isDoubleLineCalibrationReady = (lineA, lineB) => (
-  isSpeedLine(lineA) && isSpeedLine(lineB) && Number(speedDistanceM.value) > 0
+  isSpeedLine(lineA) && isSpeedLine(lineB) && isPositiveNumber(speedDistanceM.value)
 )
 const busy = computed(() => liveRunning.value || fileRunning.value || imageRunning.value)
 const activeSpeedLineA = computed(() => (mode.value === 'file' ? fileSpeedLineA.value : liveSpeedLineA.value))
@@ -653,17 +662,26 @@ const liveSpeedDrawPointCount = computed(() => (
   drawTool.value === 'speedA' ? liveSpeedLineAPts.value.length : drawTool.value === 'speedB' ? liveSpeedLineBPts.value.length : 0
 ))
 const canDrawSpeedLines = computed(() => {
-  if (fileRunning.value || imageRunning.value || speedMode.value !== 'double-line') return false
+  if (fileRunning.value || imageRunning.value || liveRunning.value || speedMode.value !== 'double-line') return false
   if (mode.value === 'file') return !!(file.value && frameCanvas.value)
-  return liveRunning.value && !!camCanvas.value
+  return livePreviewing.value && !!camCanvas.value
 })
+const isSpeedCalibrationReady = (lineA, lineB) => (
+  !enableSpeed.value
+  || (speedMode.value === 'double-line'
+    ? isDoubleLineCalibrationReady(lineA, lineB)
+    : isPositiveNumber(metersPerPixel.value))
+)
 const fileSpeedCalibrationReady = computed(() => (
-  !enableSpeed.value || speedMode.value !== 'double-line' || isDoubleLineCalibrationReady(fileSpeedLineA.value, fileSpeedLineB.value)
+  isSpeedCalibrationReady(fileSpeedLineA.value, fileSpeedLineB.value)
+))
+const liveSpeedCalibrationReady = computed(() => (
+  isSpeedCalibrationReady(liveSpeedLineA.value, liveSpeedLineB.value)
 ))
 const hasResults = computed(() => {
   if (mode.value === 'image') return !!(imageResultSrc.value || imageRunning.value)
   if (mode.value === 'file') return !!(resultUrl.value || fileRunning.value)
-  return !!(liveRunning.value || recentRecords.value.length)
+  return !!(livePreviewing.value || liveRunning.value || recentRecords.value.length)
 })
 const resultBadge = computed(() => {
   if (mode.value === 'image') return imageDets.value.length || (imageRunning.value ? '…' : 0)
@@ -672,11 +690,17 @@ const resultBadge = computed(() => {
 })
 const canRunFile = computed(() => detectId.value && file.value && !fileRunning.value && fileSpeedCalibrationReady.value)
 const canRunImage = computed(() => detectId.value && imageFile.value && !imageRunning.value)
-const canStartLive = computed(() => {
+const canOpenLivePreview = computed(() => {
   if (!detectId.value) return false
   if (mode.value === 'network') return !!cameraId.value
   return true
 })
+const canStartLive = computed(() => (
+  canOpenLivePreview.value
+  && livePreviewing.value
+  && !liveRunning.value
+  && liveSpeedCalibrationReady.value
+))
 const percent = computed(() => (total.value ? Math.min(100, Math.floor((processed.value / total.value) * 100)) : 0))
 const congestionTagType = computed(() => {
   const lv = congestion.value.level
@@ -780,9 +804,20 @@ const enumCams = async () => {
   } catch (_) { /* ignore */ }
 }
 
-const onModeChange = () => {
-  if (liveRunning.value) liveStop()
+const onModeChange = async () => {
+  await liveStop()
+  clearFileSpeedLines()
   activeTab.value = 'config'
+}
+
+const onLiveSourceChange = async () => {
+  await liveStop()
+}
+
+const onSpeedModeChange = () => {
+  drawTool.value = 'count'
+  if (mode.value === 'file') clearFileSpeedLines()
+  else clearLiveSpeedLines()
 }
 
 const onPickImage = (uploadFile) => {
@@ -1093,7 +1128,9 @@ const clearFile = () => {
 
 const runVideo = async () => {
   if (!fileSpeedCalibrationReady.value) {
-    ElMessage.warning('双线测速需绘制测速线 A、B 并填写大于 0 的实际距离')
+    ElMessage.warning(speedMode.value === 'double-line'
+      ? '双线测速需绘制测速线 A、B 并填写大于 0 的实际距离'
+      : '比例测速需先填写显式大于 0 的米/像素标定值')
     return
   }
   if (countMode.value === 'zone' && !fileRegion.value) {
@@ -1198,7 +1235,10 @@ const downloadBlob = (text, filename) => {
 }
 
 const recordsToCsv = (rows) => {
-  const header = ['time', 'trackId', 'className', 'plate', 'plateScore', 'speedKmh', 'confidence']
+  const header = [
+    'time', 'trackId', 'className', 'plate', 'plateScore',
+    'speedKmh', 'speedSource', 'speedQuality', 'confidence',
+  ]
   const lines = [header.join(',')]
   for (const r of rows) {
     lines.push(header.map((k) => JSON.stringify(r[k] ?? '')).join(','))
@@ -1253,29 +1293,15 @@ const getFrameSource = () => {
   return { el: video, w: video?.videoWidth || 0, h: video?.videoHeight || 0 }
 }
 
-const liveStart = async () => {
-  newSessionId()
-  crossing.value = emptyCross()
-  zoneOcc.value = { person: 0, vehicle: 0 }
-  recentRecords.value = []
-  recordCount.value = 0
-  congestion.value = { label: '—', level: 'smooth' }
-  camFirst = true
+const openLivePreview = async () => {
+  if (!canOpenLivePreview.value || livePreviewing.value) return
   activeTab.value = 'results'
+  streamReady = false
+  await nextTick()
 
   if (mode.value === 'network') {
-    if (!cameraId.value) {
-      ElMessage.warning('请选择网络摄像头')
-      return
-    }
-    liveRunning.value = true
-    streamReady = false
-    await nextTick()
     const img = streamImg.value
-    if (!img) {
-      liveRunning.value = false
-      return
-    }
+    if (!img) return
     img.removeAttribute('crossorigin')
     img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
     try {
@@ -1284,12 +1310,11 @@ const liveStart = async () => {
     } catch (_) {
       ElMessage.error('无法连接网络摄像头')
       img.removeAttribute('src')
-      liveRunning.value = false
       return
     }
     setupCapCanvas(img.naturalWidth, img.naturalHeight)
-    fpsTimer = setInterval(() => { camFps.value = frameCount; frameCount = 0 }, 1000)
-    scheduleLoop(80)
+    livePreviewing.value = true
+    redrawLiveCanvas()
     return
   }
 
@@ -1314,9 +1339,34 @@ const liveStart = async () => {
   await camVideo.value.play()
   await enumCams()
   setupCapCanvas(camVideo.value.videoWidth, camVideo.value.videoHeight)
+  livePreviewing.value = true
+  redrawLiveCanvas()
+}
+
+const liveStart = () => {
+  if (!livePreviewing.value) {
+    ElMessage.warning('请先打开摄像头预览并完成标定')
+    return
+  }
+  if (!liveSpeedCalibrationReady.value) {
+    ElMessage.warning(speedMode.value === 'double-line'
+      ? '双线测速需绘制测速线 A、B 并填写大于 0 的实际距离'
+      : '比例测速需先填写显式大于 0 的米/像素标定值')
+    return
+  }
+
+  newSessionId()
+  crossing.value = emptyCross()
+  zoneOcc.value = { person: 0, vehicle: 0 }
+  recentRecords.value = []
+  recordCount.value = 0
+  congestion.value = { label: '—', level: 'smooth' }
+  camFirst = true
+  camBusy = false
+  frameCount = 0
   liveRunning.value = true
   fpsTimer = setInterval(() => { camFps.value = frameCount; frameCount = 0 }, 1000)
-  scheduleLoop(0)
+  scheduleLoop(mode.value === 'network' ? 80 : 0)
 }
 
 const setupCapCanvas = (vw, vh) => {
@@ -1364,7 +1414,7 @@ const mapContainedCanvasPoint = (clientX, clientY, rect, canvasWidth, canvasHeig
 }
 
 const onLiveClick = (e) => {
-  if (!liveRunning.value) return
+  if (!livePreviewing.value || liveRunning.value) return
   const cv = camCanvas.value
   if (!cv) return
   const rect = cv.getBoundingClientRect()
@@ -1471,13 +1521,14 @@ const speedSourceLabel = (item) => {
 
 const speedDisplay = (item) => {
   if (item?.speedQuality === 'warming-up') return '测速准备中'
+  if (item?.speedQuality === 'invalid') return '测速无效'
   const speed = Number(item?.speedKmh)
   if (!item?.speedSource || item?.speedKmh == null || !Number.isFinite(speed)) return '—'
   return `${Math.round(speed * 10) / 10} km/h`
 }
 
 const redrawLiveCanvas = () => {
-  if (!liveRunning.value || !camCanvas.value) return
+  if (!livePreviewing.value || !camCanvas.value) return
   camDraw({ detections: liveDets.value, congestion: congestion.value })
 }
 
@@ -1738,6 +1789,7 @@ const liveLoop = () => {
 
 const liveStop = async () => {
   liveRunning.value = false
+  livePreviewing.value = false
   if (loopTimer) { clearTimeout(loopTimer); loopTimer = null }
   if (fpsTimer) { clearInterval(fpsTimer); fpsTimer = null }
   if (camStream) {
@@ -1747,7 +1799,13 @@ const liveStop = async () => {
   if (camVideo.value) camVideo.value.srcObject = null
   if (streamImg.value) streamImg.value.removeAttribute('src')
   streamReady = false
+  camBusy = false
+  camFirst = true
+  frameCount = 0
+  capCanvas = null
+  clearLiveSpeedLines()
   if (camCanvas.value) {
+    camCanvas.value._p0 = null
     const ctx = camCanvas.value.getContext('2d')
     ctx.clearRect(0, 0, camCanvas.value.width, camCanvas.value.height)
   }

@@ -55,12 +55,14 @@ class VehicleSession:
     speed_history: dict[int, list[tuple[float, float, float]]] = field(default_factory=dict)
     speed_ema: dict[int, float] = field(default_factory=dict)
     speed_gates: dict[int, dict[str, Any]] = field(default_factory=dict)
+    speed_gate_config: tuple[float, ...] | None = None
     plates: dict[int, dict[str, Any]] = field(default_factory=dict)
     plate_votes: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
     last_ocr_at: dict[int, float] = field(default_factory=dict)
     crossing: dict[str, int] = field(default_factory=lambda: {"in": 0, "out": 0, "total": 0})
     counted: set[tuple[int, int]] = field(default_factory=set)
     records: list[dict[str, Any]] = field(default_factory=list)
+    record_indices: dict[int, int] = field(default_factory=dict)
     created_at: float = field(default_factory=time.time)
     zone_counter: Any = None  # ZoneFlowCounter：多边形区域人/车进出
 
@@ -551,6 +553,15 @@ def _valid_speed_gates(line_a: list[float] | None, line_b: list[float] | None) -
     return separation >= SPEED_GATE_MIN_SEPARATION_PX
 
 
+def _speed_gate_config_fingerprint(
+    line_a: list[float],
+    line_b: list[float],
+    distance_m: float,
+    max_kmh: float,
+) -> tuple[float, ...]:
+    return tuple(float(value) for value in (*line_a, *line_b, distance_m, max_kmh))
+
+
 def _gate_travel_projection(
     previous_point: tuple[float, float],
     point: tuple[float, float],
@@ -723,6 +734,34 @@ def _trail_points(hist: list[tuple[float, float, float]]) -> list[list[float]]:
     return [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in hist]
 
 
+def _upsert_vehicle_record(
+    session: VehicleSession,
+    track_id: int,
+    detection: dict,
+    item: dict,
+    timestamp: float,
+) -> None:
+    """Create one record per live Track ID and refresh its observable state."""
+    index = session.record_indices.get(track_id)
+    if index is None or index >= len(session.records) or session.records[index].get("trackId") != track_id:
+        index = len(session.records)
+        session.record_indices[track_id] = index
+        session.records.append({"time": timestamp, "trackId": track_id})
+    record = session.records[index]
+    record.update({
+        "className": detection.get("className"),
+        "plate": item.get("plate"),
+        "plateScore": item.get("plateScore"),
+        "confidence": detection.get("confidence"),
+    })
+    if record.get("speedQuality") != "measured" or item.get("speedQuality") == "measured":
+        record.update({
+            "speedKmh": item.get("speedKmh"),
+            "speedSource": item.get("speedSource"),
+            "speedQuality": item.get("speedQuality"),
+        })
+
+
 def enrich_vehicle_frame(
     img_bgr: np.ndarray,
     detections: list[dict],
@@ -769,6 +808,36 @@ def enrich_vehicle_frame(
     if history_len is None:
         history_len = DEFAULT_TRAIL_LEN if enable_trail else DEFAULT_HISTORY_LEN
     history_len = max(2, int(history_len))
+
+    double_line_ready = (
+        speed_mode == "double-line"
+        and _valid_speed_gates(speed_line_a_px, speed_line_b_px)
+    )
+    try:
+        distance_value = float(speed_distance_m)
+        max_speed_value = float(speed_max_kmh)
+        double_line_ready = (
+            double_line_ready
+            and isfinite(distance_value)
+            and distance_value > 0
+            and isfinite(max_speed_value)
+            and max_speed_value > 0
+        )
+    except (TypeError, ValueError):
+        double_line_ready = False
+    gate_config = (
+        _speed_gate_config_fingerprint(
+            speed_line_a_px,
+            speed_line_b_px,
+            distance_value,
+            max_speed_value,
+        )
+        if double_line_ready
+        else None
+    )
+    if gate_config != session.speed_gate_config:
+        session.speed_gates.clear()
+        session.speed_gate_config = gate_config
 
     for d in detections:
         tid = d.get("trackId")
@@ -837,15 +906,6 @@ def enrich_vehicle_frame(
                 meters_per_pixel,
                 speed_max_kmh,
             )
-            double_line_ready = (
-                speed_mode == "double-line"
-                and _valid_speed_gates(speed_line_a_px, speed_line_b_px)
-            )
-            try:
-                double_line_ready = double_line_ready and float(speed_distance_m) > 0
-            except (TypeError, ValueError):
-                double_line_ready = False
-
             if double_line_ready:
                 gate_kmh, gate_quality, gate_complete = _update_double_line_speed(
                     session,
@@ -854,8 +914,8 @@ def enrich_vehicle_frame(
                     now,
                     speed_line_a_px,
                     speed_line_b_px,
-                    float(speed_distance_m),
-                    speed_max_kmh,
+                    distance_value,
+                    max_speed_value,
                 )
             else:
                 session.speed_gates.pop(tid_i, None)
@@ -933,20 +993,13 @@ def enrich_vehicle_frame(
                     session.plates[tid_i] = plate_info
                     item["plateBbox"] = best_pb
                     item["plateSource"] = best_src
-                    session.records.append({
-                        "time": now,
-                        "trackId": tid_i,
-                        "className": d.get("className"),
-                        "plate": display_text,
-                        "plateScore": best_score,
-                        "speedKmh": item.get("speedKmh"),
-                        "confidence": d.get("confidence"),
-                    })
-
         if plate_info:
             item["plate"] = plate_info.get("text")
             item["plateScore"] = plate_info.get("score")
             item["plateSource"] = plate_info.get("source")
+
+        if is_vehicle:
+            _upsert_vehicle_record(session, tid_i, d, item, now)
 
         enriched.append(item)
 
@@ -966,6 +1019,10 @@ def enrich_vehicle_frame(
     if live_ids and len(stale) > 64:
         for tid in stale[: len(stale) - 32]:
             session.track_history.pop(tid, None)
+            session.speed_history.pop(tid, None)
+            session.speed_ema.pop(tid, None)
+            session.speed_gates.pop(tid, None)
+            session.record_indices.pop(tid, None)
 
     vehicle_count = sum(
         1 for d in enriched
@@ -1066,6 +1123,30 @@ def _draw_trails_bgr(vis: np.ndarray, detections: list[dict]) -> np.ndarray:
     return vis
 
 
+def _speed_hud_text(detection: dict) -> str:
+    quality = detection.get("speedQuality")
+    if quality == "warming-up":
+        return "测速准备中"
+    if quality == "invalid":
+        return "测速无效"
+
+    speed = detection.get("speedKmh")
+    if speed is None:
+        return ""
+    try:
+        numeric_speed = float(speed)
+    except (TypeError, ValueError):
+        return ""
+    if not isfinite(numeric_speed):
+        return ""
+
+    source_label = {
+        "double-line": "区间实测",
+        "scale": "比例估算",
+    }.get(detection.get("speedSource"), "")
+    return f"{numeric_speed:.1f}km/h{f' {source_label}' if source_label else ''}"
+
+
 def draw_vehicle_hud(
     img_bgr,
     result: dict,
@@ -1101,8 +1182,9 @@ def draw_vehicle_hud(
         parts.append(str(d.get("className") or "vehicle"))
         if d.get("plate"):
             parts.append(str(d["plate"]))
-        if d.get("speedKmh"):
-            parts.append(f"{d['speedKmh']}km/h")
+        speed_text = _speed_hud_text(d)
+        if speed_text:
+            parts.append(speed_text)
         if alarm:
             parts.append(str(alarm))
         label = " ".join(parts)
