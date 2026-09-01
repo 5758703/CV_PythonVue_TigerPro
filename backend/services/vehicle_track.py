@@ -22,6 +22,8 @@ DEFAULT_TRAIL_LEN = 90
 SPEED_HISTORY_LEN = 12
 SPEED_MAX_GAP_SEC = 2.0
 SPEED_EMA_ALPHA = 0.35
+SPEED_GATE_MIN_LENGTH_PX = 1.0
+SPEED_GATE_MIN_SEPARATION_PX = 5.0
 
 # 轨迹/框配色（BGR），按 trackId 取模
 _TRAIL_COLORS_BGR = [
@@ -526,9 +528,45 @@ def _valid_speed_line(line: list[float] | None) -> bool:
     if not isinstance(line, (list, tuple)) or len(line) != 4:
         return False
     try:
-        return all(isfinite(float(value)) for value in line)
+        values = [float(value) for value in line]
+        length = hypot(values[2] - values[0], values[3] - values[1])
+        return all(isfinite(value) for value in values) and length >= SPEED_GATE_MIN_LENGTH_PX
     except (TypeError, ValueError):
         return False
+
+
+def _line_midpoint(line: list[float]) -> tuple[float, float]:
+    return ((float(line[0]) + float(line[2])) / 2.0, (float(line[1]) + float(line[3])) / 2.0)
+
+
+def _valid_speed_gates(line_a: list[float] | None, line_b: list[float] | None) -> bool:
+    if not _valid_speed_line(line_a) or not _valid_speed_line(line_b):
+        return False
+    a_start, a_end = (line_a[0], line_a[1]), (line_a[2], line_a[3])
+    b_start, b_end = (line_b[0], line_b[1]), (line_b[2], line_b[3])
+    if _crosses(a_start, a_end, line_b):
+        return False
+    separation = min(
+        _point_segment_distance(a_start, line_b),
+        _point_segment_distance(a_end, line_b),
+        _point_segment_distance(b_start, line_a),
+        _point_segment_distance(b_end, line_a),
+    )
+    return separation >= SPEED_GATE_MIN_SEPARATION_PX
+
+
+def _gate_travel_projection(
+    previous_point: tuple[float, float],
+    point: tuple[float, float],
+    line_a: list[float],
+    line_b: list[float],
+) -> float:
+    """Project track motion onto A-to-B gate order, independent of line endpoint order."""
+    midpoint_a = _line_midpoint(line_a)
+    midpoint_b = _line_midpoint(line_b)
+    movement = (point[0] - previous_point[0], point[1] - previous_point[1])
+    gate_order = (midpoint_b[0] - midpoint_a[0], midpoint_b[1] - midpoint_a[1])
+    return movement[0] * gate_order[0] + movement[1] * gate_order[1]
 
 
 def _point_segment_distance(point: tuple[float, float], line: list[float]) -> float:
@@ -593,19 +631,30 @@ def _update_double_line_speed(
 
     crossed_a = _crosses(previous_point, (x, y), line_a)
     crossed_b = _crosses(previous_point, (x, y), line_b)
+    travel_projection = _gate_travel_projection(previous_point, (x, y), line_a, line_b)
     state["last_point"] = (x, y)
     state["last_ts"] = timestamp
 
     first_line = state.get("first_line")
     if first_line is None:
         if bool(crossed_a) != bool(crossed_b):
-            state["first_line"] = "a" if crossed_a else "b"
-            state["first_ts"] = timestamp
-            state["direction"] = crossed_a or crossed_b
+            enters_at_a = bool(crossed_a) and travel_projection > 0
+            enters_at_b = bool(crossed_b) and travel_projection < 0
+            if enters_at_a or enters_at_b:
+                state["first_line"] = "a" if enters_at_a else "b"
+                state["first_ts"] = timestamp
+                state["direction"] = 1 if enters_at_a else -1
         return None, "warming-up", False
 
     crossed_other = crossed_b if first_line == "a" else crossed_a
     if not crossed_other:
+        return None, "warming-up", False
+
+    direction = int(state.get("direction") or (1 if first_line == "a" else -1))
+    if travel_projection * direction <= 0:
+        state["first_line"] = "b" if first_line == "a" else "a"
+        state["first_ts"] = timestamp
+        state["direction"] = -direction
         return None, "warming-up", False
 
     gate_distance = limit = dt = speed = float("nan")
@@ -757,8 +806,7 @@ def enrich_vehicle_frame(
             )
             double_line_ready = (
                 speed_mode == "double-line"
-                and _valid_speed_line(speed_line_a_px)
-                and _valid_speed_line(speed_line_b_px)
+                and _valid_speed_gates(speed_line_a_px, speed_line_b_px)
             )
             try:
                 double_line_ready = double_line_ready and float(speed_distance_m) > 0

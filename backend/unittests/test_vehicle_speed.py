@@ -38,6 +38,27 @@ def _det(track_id, bbox):
     }
 
 
+def _double_line_sample(session, track_id, x, timestamp, **overrides):
+    frame = np.zeros((100, 200, 3), dtype=np.uint8)
+    options = {
+        "enable_ocr": False,
+        "enable_trail": False,
+        "speed_mode": "double-line",
+        "speed_line_a_px": [20, 0, 20, 100],
+        "speed_line_b_px": [120, 0, 120, 100],
+        "speed_distance_m": 10.0,
+        "sample_ts": timestamp,
+    }
+    options.update(overrides)
+    result = enrich_vehicle_frame(
+        frame,
+        [_det(track_id, [x - 5, 10, x + 5, 50])],
+        session,
+        **options,
+    )
+    return result["detections"][0]
+
+
 def test_scale_speed_uses_explicit_timestamp_and_bottom_center():
     """Speed must use supplied media time and the road-contact point."""
     session = VehicleSession()
@@ -299,6 +320,153 @@ def test_double_line_rejects_speed_above_limit():
     speed = result["detections"][0]
     assert speed["speedKmh"] is None
     assert speed["speedQuality"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("line_a", "line_b"),
+    [
+        ([20, 100, 20, 0], [120, 0, 120, 100]),
+        ([20, 0, 20, 100], [120, 100, 120, 0]),
+    ],
+)
+def test_double_line_turnaround_starts_at_first_inward_gate_crossing(line_a, line_b):
+    """An outward crossing from between the gates cannot become a measurement start."""
+    session = VehicleSession()
+    speed = None
+    for timestamp, x in [(0.0, 50), (1.0, 10), (1.5, 50), (1.8, 110), (2.0, 130)]:
+        speed = _double_line_sample(
+            session,
+            7,
+            x,
+            timestamp,
+            speed_line_a_px=line_a,
+            speed_line_b_px=line_b,
+        )
+
+    assert speed["speedKmh"] == 72.0
+    assert speed["speedSource"] == "double-line"
+    assert speed["speedQuality"] == "measured"
+    assert session.speed_gates[7]["first_ts"] == 1.5
+    assert session.speed_gates[7]["completed_at"] == 2.0
+
+
+def test_double_line_gate_state_is_isolated_by_track_id():
+    """Interleaved vehicles must retain independent first gates and timestamps."""
+    session = VehicleSession()
+    _double_line_sample(session, 7, 10, 0.0)
+    _double_line_sample(session, 8, 130, 0.0)
+    _double_line_sample(session, 7, 30, 1.0)
+    _double_line_sample(session, 8, 110, 1.0)
+
+    assert session.speed_gates[7]["first_line"] == "a"
+    assert session.speed_gates[7]["first_ts"] == 1.0
+    assert session.speed_gates[8]["first_line"] == "b"
+    assert session.speed_gates[8]["first_ts"] == 1.0
+
+    forward = _double_line_sample(session, 7, 130, 2.0)
+    reverse = _double_line_sample(session, 8, 10, 2.0)
+    assert (forward["speedKmh"], forward["speedSource"], forward["speedQuality"]) == (
+        36.0,
+        "double-line",
+        "measured",
+    )
+    assert (reverse["speedKmh"], reverse["speedSource"], reverse["speedQuality"]) == (
+        36.0,
+        "double-line",
+        "measured",
+    )
+
+
+@pytest.mark.parametrize("timestamp", [1.0, 0.5, 3.1], ids=["zero-dt", "non-monotonic", "gap"])
+def test_double_line_invalid_timeline_resets_only_that_gate(timestamp):
+    """Equal, reversed, and interrupted media time cannot complete a gate interval."""
+    session = VehicleSession()
+    _double_line_sample(session, 7, 10, 0.0)
+    _double_line_sample(session, 7, 30, 1.0)
+    speed = _double_line_sample(session, 7, 130, timestamp)
+
+    assert speed["speedKmh"] is None
+    assert speed["speedSource"] is None
+    assert speed["speedQuality"] == "warming-up"
+    assert session.speed_gates[7] == {"last_point": (130.0, 50.0), "last_ts": timestamp}
+
+
+def test_double_line_completed_gate_ignores_second_line_jitter():
+    """Second-line oscillation inside cooldown must not create or retime another measurement."""
+    session = VehicleSession()
+    speed = None
+    for timestamp, x in [(0.0, 10), (1.0, 30), (1.5, 119), (2.0, 121), (2.5, 119)]:
+        speed = _double_line_sample(session, 7, x, timestamp)
+
+    assert speed["speedKmh"] == 36.0
+    assert speed["speedSource"] == "double-line"
+    assert speed["speedQuality"] == "measured"
+    assert session.speed_gates[7]["first_ts"] == 1.0
+    assert session.speed_gates[7]["completed_at"] == 2.0
+
+
+def test_double_line_completed_gate_resets_after_two_second_cooldown():
+    """A completed gate held near line B must reset when its two-second cooldown expires."""
+    session = VehicleSession()
+    for timestamp, x in [(0.0, 10), (1.0, 30), (1.5, 119), (2.0, 121), (2.5, 119)]:
+        _double_line_sample(session, 7, x, timestamp)
+    speed = _double_line_sample(session, 7, 121, 4.1)
+
+    assert speed["speedKmh"] is None
+    assert speed["speedSource"] is None
+    assert speed["speedQuality"] == "warming-up"
+    assert session.speed_gates[7] == {"last_point": (121.0, 50.0), "last_ts": 4.1}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"speed_line_a_px": None},
+        {"speed_line_b_px": None},
+        {"speed_line_a_px": [float("nan"), 0, 20, 100]},
+        {"speed_distance_m": 0.0},
+        {"speed_distance_m": float("nan")},
+        {"speed_mode": "warp-drive"},
+    ],
+    ids=["missing-a", "missing-b", "nan-line", "zero-distance", "nan-distance", "invalid-mode"],
+)
+def test_invalid_double_line_configuration_safely_falls_back_to_scale(overrides):
+    """Malformed double-line inputs must leave no gate state and use calibrated scale speed."""
+    session = VehicleSession()
+    _double_line_sample(session, 7, 10, 0.0, meters_per_pixel=0.1, **overrides)
+    speed = _double_line_sample(session, 7, 20, 1.0, meters_per_pixel=0.1, **overrides)
+
+    assert speed["speedKmh"] == 3.6
+    assert speed["speedSource"] == "scale"
+    assert speed["speedQuality"] == "estimated"
+    assert 7 not in session.speed_gates
+
+
+@pytest.mark.parametrize(
+    ("line_a", "line_b"),
+    [
+        ([20, 0, 20, 0], [120, 0, 120, 100]),
+        ([20, 0, 20, 100], [20, 0, 20, 100]),
+        ([20, 0, 20, 100], [22, 0, 22, 100]),
+        ([0, 0, 100, 0], [10, 0, 110, 0]),
+    ],
+    ids=["zero-length", "overlapping", "near-overlapping", "partially-overlapping"],
+)
+def test_degenerate_double_line_gates_fall_back_to_scale(line_a, line_b):
+    """Zero-length and overlapping gate geometry cannot create measurement state."""
+    session = VehicleSession()
+    options = {
+        "meters_per_pixel": 0.1,
+        "speed_line_a_px": line_a,
+        "speed_line_b_px": line_b,
+    }
+    _double_line_sample(session, 7, 10, 0.0, **options)
+    speed = _double_line_sample(session, 7, 20, 1.0, **options)
+
+    assert speed["speedKmh"] == 3.6
+    assert speed["speedSource"] == "scale"
+    assert speed["speedQuality"] == "estimated"
+    assert 7 not in session.speed_gates
 
 
 def test_track_frame_double_line_parameters_are_scaled_and_clamped(monkeypatch):
