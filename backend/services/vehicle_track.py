@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+from math import hypot, isfinite
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -18,6 +19,9 @@ DEFAULT_VEHICLE_CLASSES = [1, 2, 3, 5, 7]
 # 测速用短历史；开启轨迹时保留更长路径点
 DEFAULT_HISTORY_LEN = 12
 DEFAULT_TRAIL_LEN = 90
+SPEED_HISTORY_LEN = 12
+SPEED_MAX_GAP_SEC = 2.0
+SPEED_EMA_ALPHA = 0.35
 
 # 轨迹/框配色（BGR），按 trackId 取模
 _TRAIL_COLORS_BGR = [
@@ -46,6 +50,8 @@ _sessions: dict[str, "VehicleSession"] = {}
 class VehicleSession:
     """单路视频流/摄像头的追踪会话状态。"""
     track_history: dict[int, list[tuple[float, float, float]]] = field(default_factory=dict)
+    speed_history: dict[int, list[tuple[float, float, float]]] = field(default_factory=dict)
+    speed_ema: dict[int, float] = field(default_factory=dict)
     plates: dict[int, dict[str, Any]] = field(default_factory=dict)
     plate_votes: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
     last_ocr_at: dict[int, float] = field(default_factory=dict)
@@ -454,16 +460,65 @@ def _ocr_plate(ocr_fn: Callable[[bytes], dict] | None, img_bgr, bbox, warped: np
     return {k: best_out[k] for k in ("text", "score", "lines")}
 
 
-def _calc_speed_kmh(history: list[tuple[float, float, float]], meters_per_pixel: float | None) -> float | None:
-    if not meters_per_pixel or meters_per_pixel <= 0 or len(history) < 2:
-        return None
-    x0, y0, t0 = history[0]
-    x1, y1, t1 = history[-1]
-    dt = t1 - t0
-    if dt <= 0:
-        return None
-    dist_m = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5 * meters_per_pixel
-    return round(dist_m / dt * 3.6, 1)
+def _update_scale_speed(
+    session: VehicleSession,
+    track_id: int,
+    point: tuple[float, float],
+    sample_ts: float,
+    meters_per_pixel: float | None,
+    max_kmh: float,
+) -> tuple[float | None, str]:
+    """Update one track's scale-speed window and return its estimate and quality."""
+    x, y = float(point[0]), float(point[1])
+    timestamp = float(sample_ts)
+    if not all(isfinite(value) for value in (x, y, timestamp)):
+        return None, "invalid"
+
+    history = session.speed_history.setdefault(int(track_id), [])
+    if history:
+        dt = timestamp - history[-1][2]
+        if dt <= 0 or dt > SPEED_MAX_GAP_SEC:
+            history.clear()
+            session.speed_ema.pop(int(track_id), None)
+    history.append((x, y, timestamp))
+    if len(history) > SPEED_HISTORY_LEN:
+        del history[:-SPEED_HISTORY_LEN]
+
+    try:
+        scale = float(meters_per_pixel) if meters_per_pixel is not None else 0.0
+        limit = float(max_kmh)
+    except (TypeError, ValueError):
+        return None, "invalid"
+    if not isfinite(scale) or scale <= 0:
+        return None, "warming-up"
+    if not isfinite(limit) or limit <= 0:
+        return None, "invalid"
+    if len(history) < 2:
+        return None, "warming-up"
+
+    interval_speeds: list[float] = []
+    latest_invalid = False
+    for index, ((x0, y0, t0), (x1, y1, t1)) in enumerate(zip(history, history[1:])):
+        dt = t1 - t0
+        speed = hypot(x1 - x0, y1 - y0) * scale / dt * 3.6 if dt > 0 else float("nan")
+        valid = isfinite(speed) and 0 <= speed <= limit
+        if valid:
+            interval_speeds.append(speed)
+        elif index == len(history) - 2:
+            latest_invalid = True
+
+    if latest_invalid:
+        return None, "invalid"
+    if not interval_speeds:
+        return None, "warming-up"
+
+    recent = sorted(interval_speeds[-5:])
+    midpoint = len(recent) // 2
+    sample = recent[midpoint] if len(recent) % 2 else (recent[midpoint - 1] + recent[midpoint]) / 2.0
+    previous = session.speed_ema.get(int(track_id))
+    estimate = sample if previous is None else SPEED_EMA_ALPHA * sample + (1.0 - SPEED_EMA_ALPHA) * previous
+    session.speed_ema[int(track_id)] = estimate
+    return round(estimate, 1), "estimated"
 
 
 def _trail_color_bgr(track_id: int) -> tuple[int, int, int]:
@@ -492,6 +547,8 @@ def enrich_vehicle_frame(
     ocr_cooldown_sec: float = 0.6,
     history_len: int | None = None,
     congestion_thresholds: dict | None = None,
+    sample_ts: float | None = None,
+    speed_max_kmh: float = 240.0,
 ) -> dict:
     """在追踪结果上叠加车牌、速度、轨迹、越线/区域进出与会话记录。
 
@@ -505,7 +562,7 @@ def enrich_vehicle_frame(
     )
 
     h, w = img_bgr.shape[:2]
-    now = time.time()
+    now = float(sample_ts) if sample_ts is not None else time.monotonic()
     enriched = []
     thr = congestion_thresholds or {}
     use_zone = region_px is not None and len(region_px) >= 3
@@ -524,6 +581,8 @@ def enrich_vehicle_frame(
         item["plateBbox"] = None
         item["plateSource"] = None
         item["speedKmh"] = None
+        item["speedSource"] = None
+        item["speedQuality"] = None
         item["inZone"] = None
         item["alarm"] = None
         item["trail"] = []
@@ -572,7 +631,18 @@ def enrich_vehicle_frame(
                     session.crossing["total"] = session.crossing["in"] + session.crossing["out"]
 
         if enable_speed and is_vehicle:
-            item["speedKmh"] = _calc_speed_kmh(hist, meters_per_pixel)
+            speed_point = ((bbox[0] + bbox[2]) / 2.0, float(bbox[3]))
+            speed_kmh, speed_quality = _update_scale_speed(
+                session,
+                tid_i,
+                speed_point,
+                now,
+                meters_per_pixel,
+                speed_max_kmh,
+            )
+            item["speedKmh"] = speed_kmh
+            item["speedSource"] = "scale" if speed_kmh is not None else None
+            item["speedQuality"] = speed_quality
 
         # 号牌 OCR 仅对车辆
         plate_info = session.plates.get(tid_i)
