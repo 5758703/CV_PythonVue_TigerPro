@@ -88,6 +88,13 @@ class LocalTracker:
         self._next_id = 1
         self.tracks: dict[int, Tracklet] = {}
         self._seen_ids: set[int] = set()
+        self._removed_track_ids: set[int] = set()
+
+    def pop_removed_track_ids(self) -> set[int]:
+        """Return local IDs that expired since the previous poll."""
+        removed = set(self._removed_track_ids)
+        self._removed_track_ids.clear()
+        return removed
 
     def update(self, detections: list[dict], frame=None) -> list[Tracklet]:
         if self.mask_cue.enabled and frame is not None:
@@ -149,6 +156,7 @@ class LocalTracker:
         dead = [tid for tid, t in self.tracks.items() if t.time_since_update > self.max_age]
         for tid in dead:
             self.tracks.pop(tid, None)
+            self._removed_track_ids.add(tid)
 
         return [t for t in self.tracks.values() if t.time_since_update == 0]
 
@@ -164,18 +172,28 @@ class _SvTrackerAdapter:
         pass_frame: bool = False,
         mask_cue: MaskCueHelper | None = None,
         iou_thresh: float = 0.3,
+        max_age: int = 30,
     ):
         self._tracker = tracker
         self.trail_len = int(trail_len)
         self.pass_frame = bool(pass_frame)
         self.mask_cue = mask_cue or MaskCueHelper(False)
         self.iou_thresh = float(iou_thresh)
+        self.max_age = int(max_age)
         self._trails: dict[int, list[tuple[float, float]]] = {}
         self._hits: dict[int, int] = {}
         self._class_names: dict[int, str] = {}
         self._seen_ids: set[int] = set()
         self._tentative_bbox: dict[int, list[float]] = {}
         self._next_tentative = 0
+        self._misses: dict[int, int] = {}
+        self._removed_track_ids: set[int] = set()
+
+    def pop_removed_track_ids(self) -> set[int]:
+        """Return adapter IDs only once their local grace period has elapsed."""
+        removed = set(self._removed_track_ids)
+        self._removed_track_ids.clear()
+        return removed
 
     def _promote_tentative_to_confirmed(self, bbox: list[float], confirmed_tid: int) -> int:
         """未激活→激活：若 IoU 命中临时轨迹则沿用临时 id，保证 MTMC sticky 连续。"""
@@ -236,14 +254,6 @@ class _SvTrackerAdapter:
         active_tentative: set[int] = set()
         out: list[Tracklet] = []
 
-        if tracked.tracker_id is None or len(tracked) == 0:
-            for tid in list(self._trails):
-                self._trails.pop(tid, None)
-                self._hits.pop(tid, None)
-                self._class_names.pop(tid, None)
-            self._tentative_bbox.clear()
-            return out
-
         for i in range(len(tracked)):
             raw_tid = int(tracked.tracker_id[i])
             bbox = [float(v) for v in tracked.xyxy[i].tolist()]
@@ -262,6 +272,7 @@ class _SvTrackerAdapter:
             self._hits[tid] = self._hits.get(tid, 0) + 1
             is_new = tid not in self._seen_ids
             self._seen_ids.add(tid)
+            self._misses.pop(tid, None)
             cx, cy = _center(bbox)
             trail = self._trails.setdefault(tid, [])
             trail.append((cx, cy))
@@ -287,11 +298,18 @@ class _SvTrackerAdapter:
 
         stale = [tid for tid in list(self._trails) if tid not in active_ids]
         for tid in stale:
+            self._misses[tid] = self._misses.get(tid, 0) + 1
+            if self._misses[tid] <= self.max_age:
+                continue
             self._trails.pop(tid, None)
             self._hits.pop(tid, None)
             self._class_names.pop(tid, None)
+            self._misses.pop(tid, None)
+            self._removed_track_ids.add(tid)
         stale_tent = [tid for tid in list(self._tentative_bbox) if tid not in active_tentative]
         for tid in stale_tent:
+            if tid in self._trails:
+                continue
             self._tentative_bbox.pop(tid, None)
         return out
 
@@ -327,6 +345,7 @@ class ByteTrackLocalTracker(_SvTrackerAdapter):
             pass_frame=False,
             mask_cue=mask_cue,
             iou_thresh=iou_thresh,
+            max_age=max_age,
         )
 
 
@@ -365,6 +384,7 @@ class BotSortLocalTracker(_SvTrackerAdapter):
             pass_frame=bool(enable_cmc),
             mask_cue=mask_cue,
             iou_thresh=iou_thresh,
+            max_age=max_age,
         )
 
 

@@ -13,6 +13,11 @@ _TOPK_BY_TYPE = {"person": 8, "vehicle": 10}
 _MIN_AREA_RATIO = 0.002  # bbox 过小则丢弃
 
 
+_KEYFRAME_MIN_INTERVAL_SEC = 0.75
+_KEYFRAME_MAX_INTERVAL_SEC = 3.0
+_KEYFRAME_QUALITY_GAIN = 0.08
+
+
 def _l2(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     a = np.asarray(v, dtype=np.float32).reshape(-1)
     n = float(np.linalg.norm(a))
@@ -71,6 +76,9 @@ class TrackletBuilder:
     start_ts: float = 0.0
     end_ts: float = 0.0
     trail: list[tuple[float, float]] = field(default_factory=list)
+    last_embedding_sample_at: float | None = None
+    last_embedding_sample_quality: float = 0.0
+    sampled_view_tokens: set[str] = field(default_factory=set)
 
     @classmethod
     def create(
@@ -93,6 +101,27 @@ class TrackletBuilder:
             start_ts=ts,
             end_ts=ts,
         )
+
+    def should_sample_embedding(self, now: float, quality: float, view_token: str | None = None) -> bool:
+        """Reserve a keyframe when its time, quality, or view adds evidence."""
+        ts = float(now)
+        q = max(0.0, min(1.0, float(quality or 0.0)))
+        view = str(view_token) if view_token else None
+        last = self.last_embedding_sample_at
+        unseen_view = view is not None and view not in self.sampled_view_tokens
+        should_sample = (
+            last is None
+            or (ts - last) >= _KEYFRAME_MAX_INTERVAL_SEC
+            or ((ts - last) >= _KEYFRAME_MIN_INTERVAL_SEC
+                and q >= self.last_embedding_sample_quality + _KEYFRAME_QUALITY_GAIN)
+            or unseen_view
+        )
+        if should_sample:
+            self.last_embedding_sample_at = ts
+            self.last_embedding_sample_quality = q
+            if view is not None:
+                self.sampled_view_tokens.add(view)
+        return should_sample
 
     def add_observation(
         self,

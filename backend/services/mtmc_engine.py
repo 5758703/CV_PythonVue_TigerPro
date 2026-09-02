@@ -151,6 +151,8 @@ class MtmcConfig:
     fps: int = 10
     persist_events: bool = False
     reid_budget: int = 2
+    person_reid_budget: int | None = None
+    vehicle_reid_budget: int | None = None
     plate_budget: int = 1
     # 局部跟踪：bytetrack（默认）| botsort | iou
     local_track_backend: str = "bytetrack"
@@ -933,9 +935,9 @@ def _runtime_status_lock(session):
 
 
 def _record_gallery_failure(
-    session, meta: dict, error: Exception, *, camera_id=None, errors_by_space=None,
+    session, meta: dict, error: Exception, *, camera_id=None, errors_by_space=None, detail: dict | None = None,
 ) -> None:
-    detail = {"ready": False, "degraded": True, "error": str(error)}
+    detail = {"ready": False, "degraded": True, "error": str(error), **(detail or {})}
     if errors_by_space:
         detail["errorsByModelKey"] = copy.deepcopy(errors_by_space)
     meta["gallery"] = detail
@@ -1438,10 +1440,18 @@ def _finalize_removed_builders(
     session: MtmcSession,
     cam_state: CamState,
     object_type: str,
-    active_local_ids: set[int],
+    removed_local_ids: set[int] | None = None,
+    *,
+    now: float | None = None,
+    timeout_sec: float | None = None,
 ):
     pool = cam_state.person_builders if object_type == "person" else cam_state.vehicle_builders
-    stale = [tid for tid in list(pool.keys()) if int(tid) not in active_local_ids]
+    stale = {int(tid) for tid in (removed_local_ids or set())}
+    if now is not None and timeout_sec is not None:
+        stale.update(
+            int(tid) for tid, builder in pool.items()
+            if float(now) - float(builder.end_ts or now) >= float(timeout_sec)
+        )
     for tid in stale:
         builder = pool.pop(tid, None)
         if builder is None or not builder.observations:
@@ -1450,6 +1460,64 @@ def _finalize_removed_builders(
             _finalize_tracklet(session, builder, exclude_gids=set())
         except Exception as e:  # noqa: BLE001
             log.debug("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
+
+
+def _pop_removed_track_ids(tracker) -> set[int]:
+    """Consume explicit tracker expiry notifications without changing update callers."""
+    pop_removed = getattr(tracker, "pop_removed_track_ids", None)
+    if not callable(pop_removed):
+        return set()
+    return {int(track_id) for track_id in pop_removed()}
+
+
+def _reid_budget_for(cfg: MtmcConfig, object_type: str) -> int:
+    configured = getattr(cfg, f"{object_type}_reid_budget", None)
+    return max(0, int(cfg.reid_budget if configured is None else configured))
+
+
+def _track_view_token(track) -> str | None:
+    attrs = getattr(track, "attrs", None) or {}
+    return attrs.get("viewToken") or attrs.get("view_token")
+
+
+def _sort_tracks_for_reid(
+    session, cam_state: CamState, object_type: str, tracks, *, frame_h: int = 0, frame_w: int = 0,
+):
+    """Spend each per-class budget on fresh, expiring, candidate, then better views."""
+    pool = cam_state.person_builders if object_type == "person" else cam_state.vehicle_builders
+    candidate_ids = {
+        int(row.get("localTrackId"))
+        for row in session.associator.list_candidates()
+        if row.get("objectType") == object_type and int(row.get("cameraId") or -1) == cam_state.camera_id
+        and row.get("localTrackId") is not None
+    }
+    from services.mtmc_tracklet import frame_quality
+
+    def key(track):
+        builder = pool.get(int(track.track_id))
+        has_embedding = bool(builder and any(
+            observation.embedding is not None or observation.embedding_spaces
+            for observation in builder.observations
+        ))
+        unsampled_new = bool(getattr(track, "is_new", False)) and not has_embedding
+        near_removal = int(getattr(track, "time_since_update", 0) or 0) >= max(1, int(session.cfg.local_track_max_age) - 1)
+        candidate = int(track.track_id) in candidate_ids
+        bbox = getattr(track, "bbox", [])
+        conf = float(getattr(track, "conf", 0.0) or 0.0)
+        quality = frame_quality(bbox, conf, frame_h, frame_w) if frame_h and frame_w else conf
+        quality_improvement = bool(
+            builder and quality >= builder.last_embedding_sample_quality + 0.08
+        )
+        return (
+            0 if unsampled_new else 1,
+            0 if near_removal else 1,
+            0 if candidate else 1,
+            0 if quality_improvement else 1,
+            -quality,
+            int(track.track_id),
+        )
+
+    return sorted(tracks, key=key)
 
 
 def _bbox_area(bbox) -> float:
@@ -1635,6 +1703,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         return
 
     from services.strong_reid import extract_person_embeddings, color_signature
+    from services.mtmc_tracklet import frame_quality
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.vehicle_track import congestion_level, get_session as get_vsession
     from services.reid_gallery import l2_normalize
@@ -1647,7 +1716,8 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     items = []
     claimed_person: set[str] = set()
     claimed_vehicle: set[str] = set()
-    reid_left = max(0, int(cfg.reid_budget or 0))
+    person_reid_left = _reid_budget_for(cfg, "person")
+    vehicle_reid_left = _reid_budget_for(cfg, "vehicle")
     plate_left = max(0, int(cfg.plate_budget or 0))
     raw_p, raw_v = _detect_person_vehicle(cfg, frame)
     # “命中”表示检测器命中，必须在耗时的 ReID/车牌/关联前统计；否则首帧
@@ -1665,7 +1735,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
     # ---- 人员 ----
     if cfg.enable_person and cfg.det_person_path:
         tracks = _tracks_or_raw(cam_state.tracker_person, raw_p, frame, id_base=800001)
-        active_person_local = {int(t.track_id) for t in tracks}
+        tracks = _sort_tracks_for_reid(session, cam_state, "person", tracks, frame_h=fh, frame_w=fw)
         for t in tracks:
             crop = _crop(frame, t.bbox)
             is_rider = str(getattr(t, "class_name", "")).lower() == "rider"
@@ -1696,13 +1766,16 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 local_track_id=int(t.track_id),
                 now=now,
             )
-            need_reid = (sticky_gid is None or bool(getattr(t, "is_new", False))) and reid_left > 0
+            quality = frame_quality(t.bbox, t.conf, fh, fw)
+            need_reid = person_reid_left > 0 and builder.should_sample_embedding(
+                now, quality, view_token=_track_view_token(t),
+            )
             emb, meta = None, {}
             embeddings: dict[str, np.ndarray] = {}
             c_sig = None
             gallery = {"matched": False, "name": None, "personId": None, "score": 0.0}
             if need_reid:
-                reid_left -= 1
+                person_reid_left -= 1
                 try:
                     embeddings, meta = extract_person_embeddings(
                         crop,
@@ -1724,27 +1797,42 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                             gallery_embeddings = {
                                 cfg.gallery_model_key: embeddings[cfg.gallery_model_key]
                             } if cfg.gallery_model_key in embeddings else {}
-                        gallery = _match_gallery(
-                            gallery_embeddings,
-                            cfg.appear_thresh,
-                            score_weights=_reid_score_weights(cfg, gallery_embeddings),
-                            model_versions_by_space={
-                                key: value for key, value in (meta.get("modelVersionsBySpace") or {}).items()
-                                if key in gallery_embeddings
-                            },
-                        )
-                        gallery_errors = gallery.get("errorsByModelKey") or {}
-                        if gallery_errors:
-                            error = RuntimeError("; ".join(
-                                f"{key}: {', '.join(errors)}"
-                                for key, errors in gallery_errors.items()
-                            ))
+                        if cfg.gallery_model_key and not gallery_embeddings:
+                            selected_space = str(cfg.gallery_model_key)
+                            error = RuntimeError(f"selected gallery space unavailable: {selected_space}")
+                            detail = {
+                                "code": "selected_space_unavailable",
+                                "selectedModelKey": selected_space,
+                                "availableModelSpaces": sorted(embeddings),
+                            }
                             _record_gallery_failure(
                                 session, meta, error, camera_id=cam_id,
-                                errors_by_space=gallery_errors,
+                                errors_by_space={selected_space: ["selected_space_unavailable"]}, detail=detail,
                             )
+                            gallery = {"matched": False, "name": None, "personId": None, "score": 0.0, **detail,
+                                       "ready": False, "degraded": True}
                         else:
-                            _record_gallery_ready(session, meta, camera_id=cam_id)
+                            gallery = _match_gallery(
+                                gallery_embeddings,
+                                cfg.appear_thresh,
+                                score_weights=_reid_score_weights(cfg, gallery_embeddings),
+                                model_versions_by_space={
+                                    key: value for key, value in (meta.get("modelVersionsBySpace") or {}).items()
+                                    if key in gallery_embeddings
+                                },
+                            )
+                            gallery_errors = gallery.get("errorsByModelKey") or {}
+                            if gallery_errors:
+                                error = RuntimeError("; ".join(
+                                    f"{key}: {', '.join(errors)}"
+                                    for key, errors in gallery_errors.items()
+                                ))
+                                _record_gallery_failure(
+                                    session, meta, error, camera_id=cam_id,
+                                    errors_by_space=gallery_errors,
+                                )
+                            else:
+                                _record_gallery_ready(session, meta, camera_id=cam_id)
                     except Exception as e:  # noqa: BLE001
                         _record_gallery_failure(session, meta, e, camera_id=cam_id)
             builder.add_observation(
@@ -1832,11 +1920,10 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
                     _persist_event(session.app, row)
                     cam_state.last_persist_at = now
-        _finalize_removed_builders(session, cam_state, "person", active_person_local)
-        try:
-            session.associator.prune_inactive_locals("person", cam_id, active_person_local)
-        except Exception:  # noqa: BLE001
-            pass
+        _finalize_removed_builders(
+            session, cam_state, "person", _pop_removed_track_ids(cam_state.tracker_person),
+            now=now, timeout_sec=cfg.lost_revive_sec,
+        )
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
@@ -1844,14 +1931,16 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         tracks_v = supplement_orphan_vehicle_dets(
             tracks_v, raw_v, frame_w=fw, frame_h=fh,
         )
-        active_vehicle_local = {int(t.track_id) for t in tracks_v}
         cong = congestion_level(len(tracks_v))
         cam_state.congestion = cong
         if not cam_state.vehicle_session_id:
             cam_state.vehicle_session_id = f"{session.session_id}:cam{cam_id}"
         vsession = get_vsession(cam_state.vehicle_session_id)
 
-        for t in _sort_vehicle_tracks_for_assoc(tracks_v, session.associator, cam_id, now):
+        tracks_v = _sort_vehicle_tracks_for_assoc(tracks_v, session.associator, cam_id, now)
+        for t in _sort_tracks_for_reid(
+            session, cam_state, "vehicle", tracks_v, frame_h=fh, frame_w=fw,
+        ):
             crop = _crop(frame, t.bbox)
             builder = _get_tracklet_builder(
                 cam_state,
@@ -1880,7 +1969,10 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 local_track_id=int(t.track_id),
                 now=now,
             )
-            need_reid = (sticky_gid is None or bool(getattr(t, "is_new", False))) and reid_left > 0
+            quality = frame_quality(t.bbox, t.conf, fh, fw)
+            need_reid = vehicle_reid_left > 0 and builder.should_sample_embedding(
+                now, quality, view_token=_track_view_token(t),
+            )
             emb, vmeta = None, {}
             plate_text, plate_score = None, 0.0
             fuse = {
@@ -1892,7 +1984,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 plate_text = cached_plate.get("text")
                 plate_score = float(cached_plate.get("score") or 0)
             if need_reid:
-                reid_left -= 1
+                vehicle_reid_left -= 1
                 emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
                 do_ocr = cfg.ocr_fn is not None and plate_left > 0 and not plate_text
                 if do_ocr:
@@ -2045,11 +2137,10 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                             if len(session.passes) > 300:
                                 session.passes = session.passes[-200:]
                         _persist_pass(session.app, pass_row)
-        _finalize_removed_builders(session, cam_state, "vehicle", active_vehicle_local)
-        try:
-            session.associator.prune_inactive_locals("vehicle", cam_id, active_vehicle_local)
-        except Exception:  # noqa: BLE001
-            pass
+        _finalize_removed_builders(
+            session, cam_state, "vehicle", _pop_removed_track_ids(cam_state.tracker_vehicle),
+            now=now, timeout_sec=cfg.lost_revive_sec,
+        )
 
     _enforce_unique_camera_global_ids(items)
     _record_session_dets(cam_state, items, now)
