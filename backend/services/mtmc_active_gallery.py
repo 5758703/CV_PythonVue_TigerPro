@@ -99,6 +99,30 @@ class MtmcActiveGallery:
                 for c in bucket.get(str(global_id), {}) if int(c) >= 0
             }
 
+    def prototype(
+        self,
+        object_type: str,
+        global_id: str,
+        *,
+        camera_id: int | None = None,
+        model_key: str | None = None,
+        model_version: str | None = None,
+    ) -> np.ndarray | None:
+        """Return a copy of one stored camera prototype for diagnostics/tests."""
+        cam_key = int(camera_id) if camera_id is not None else -1
+        with _lock:
+            for key, bucket in self._vecs.items():
+                if key[0] != object_type:
+                    continue
+                if model_key is not None and key[1] != str(model_key):
+                    continue
+                if model_version is not None and key[3] != model_version:
+                    continue
+                vector = bucket.get(str(global_id), {}).get(cam_key)
+                if vector is not None:
+                    return vector.copy()
+        return None
+
     def max_similarity(
         self,
         object_type: str,

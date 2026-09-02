@@ -1350,6 +1350,7 @@ def _associate_tracklet(
         builder.assigned_global_id = None
         prev_gid = None
 
+    best_observation = builder.best_observation()
     g = session.associator.associate(
         object_type=builder.object_type,
         camera_id=builder.camera_id,
@@ -1368,6 +1369,7 @@ def _associate_tracklet(
         exclude_gids=ex,
         now=now,
         force_long_term=force,
+        observation_quality=(best_observation.quality if best_observation is not None else None),
     )
     builder.assigned_global_id = g.global_id
     _record_association(session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False)
