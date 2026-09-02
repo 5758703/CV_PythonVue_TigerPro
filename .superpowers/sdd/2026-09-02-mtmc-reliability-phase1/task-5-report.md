@@ -38,6 +38,25 @@ python -m py_compile backend/services/mtmc_engine.py: exit 0
 git diff --check: exit 0
 ```
 
+## Round 3/5 follow-up
+
+When alias normalization collapses a candidate evidence target and candidate
+ID to the same global, the engine now rewrites it as `long_term` evidence and
+does not create a pending self-pair. The association record returns the
+canonical Global so downstream frame event/pass/cache code keeps the retained
+ID.
+
+Tracklet finalization now holds the session candidate lock through aggregate
+association and `persist_tracklet`, preventing a promotion from splitting that
+final persistence boundary.
+
+```text
+RED: 2 failed, 12 passed (self-pair and finalize/promotion barrier)
+GREEN: 14 passed, 26 warnings in 56.67s
+Final focused + MTMC regression: 91 passed, 26 warnings in 61.24s
+git diff --check: exit 0
+```
+
 The sandbox account cannot enumerate its default pytest temporary directory;
 the two pytest commands above were run with `PYTEST_ADDOPTS=--basetemp
 .pytest-task5-final`, and that workspace-only temporary directory was removed

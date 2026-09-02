@@ -1346,6 +1346,12 @@ def _canonical_association_locked(session: MtmcSession, builder, g, prev_global_
             source_global_id=_canonical_gid_locked(session, evidence.source_global_id),
             candidate_global_id=_canonical_gid_locked(session, evidence.candidate_global_id),
         )
+        if evidence.candidate_global_id == evidence.target_global_id:
+            evidence = replace(
+                evidence,
+                decision="long_term",
+                candidate_global_id=None,
+            )
     return g, prev_global_id, evidence
 
 
@@ -1634,7 +1640,7 @@ def _resolve_overlay_global(
     )
 
 
-def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | None = None):
+def _finalize_tracklet_locked(session: MtmcSession, builder, *, exclude_gids: set | None = None):
     """局部轨迹结束：聚合 embedding 后做最终关联并落库 tracklet。"""
     spaces = builder.aggregate_embedding_spaces()
     association_model_key = None
@@ -1685,6 +1691,12 @@ def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | Non
         from services.mtmc_persist import persist_tracklet
         persist_tracklet(session.app, builder, global_id=g.global_id)
     return g
+
+
+def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | None = None):
+    """Serialize final association and tracklet persistence with promotion."""
+    with session._candidate_lock:
+        return _finalize_tracklet_locked(session, builder, exclude_gids=exclude_gids)
 
 
 def _finalize_removed_builders(

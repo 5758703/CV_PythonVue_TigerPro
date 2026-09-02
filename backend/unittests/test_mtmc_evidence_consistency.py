@@ -21,6 +21,7 @@ from models.mtmc import (
 )
 from services import mtmc_engine
 from services.mtmc_associator import MtmcAssociator
+from services.mtmc_associator import AssocEvidence
 from services.mtmc_engine import MtmcConfig, MtmcSession
 from services.mtmc_persist import resolve_candidate_pair
 from services import vehicle_reid_feat
@@ -277,3 +278,49 @@ def test_promotion_alias_prevents_stale_association_result_from_persisting_old_g
 
     assert builder.assigned_global_id == known.global_id
     assert persisted == [known.global_id]
+
+
+def test_alias_collapsed_candidate_evidence_does_not_persist_self_pair(monkeypatch):
+    associator = MtmcAssociator(appear_thresh=0.99, confirm_thresh=0.99)
+    keep = associator.associate(object_type="vehicle", camera_id=1, embedding=np.asarray([1.0, 0.0]), now=1.0)
+    session = MtmcSession("self-pair", MtmcConfig(camera_ids=[], persist_events=True), associator, app=object())
+    session._gid_alias["drop"] = keep.global_id
+    builder = SimpleNamespace(tracklet_id="tl", object_type="vehicle", camera_id=1, assigned_global_id="drop")
+    edges: list[dict] = []
+    pairs: list[dict] = []
+    evidence = AssocEvidence(decision="candidate", target_global_id="drop", candidate_global_id=keep.global_id)
+    monkeypatch.setattr("services.mtmc_persist.persist_association_edge", lambda _app, **row: edges.append(row))
+    monkeypatch.setattr("services.mtmc_persist.persist_candidate_pair", lambda _app, **row: pairs.append(row))
+
+    mtmc_engine._record_association(session, builder, keep, prev_global_id="drop", evidence=evidence)
+
+    assert pairs == []
+    assert edges[0]["target_global_id"] == keep.global_id
+    assert edges[0]["decision"] == "long_term"
+
+
+def test_finalize_holds_candidate_lock_through_tracklet_persistence(monkeypatch):
+    associator = MtmcAssociator(appear_thresh=0.99, confirm_thresh=0.99)
+    keep = associator.associate(object_type="vehicle", camera_id=1, embedding=np.asarray([1.0, 0.0]), now=1.0)
+    drop = associator.associate(object_type="vehicle", camera_id=2, embedding=np.asarray([0.0, 1.0]), now=2.0)
+    session = MtmcSession("finalize-lock", MtmcConfig(camera_ids=[], persist_events=True), associator, app=object())
+    builder = SimpleNamespace(
+        object_type="vehicle", observations=[], end_ts=3.0, assigned_global_id=drop.global_id,
+        aggregate_embedding_spaces=lambda: {}, aggregate_embedding=lambda *_args: np.asarray([0.0, 1.0]),
+        aggregate_identity=lambda: {"identityKey": None, "plate": None, "visualKey": None},
+    )
+    persisted = __import__("threading").Event()
+    release = __import__("threading").Event()
+    monkeypatch.setattr(mtmc_engine, "get_session", lambda _sid: session)
+    monkeypatch.setattr("services.mtmc_persist.resolve_candidate_pair", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(mtmc_engine, "_associate_tracklet", lambda *_args, **_kwargs: drop)
+    monkeypatch.setattr("services.mtmc_persist.persist_tracklet", lambda *_args, **_kwargs: (persisted.set(), release.wait(2)))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        finalize = pool.submit(mtmc_engine._finalize_tracklet, session, builder)
+        assert persisted.wait(2)
+        promote = pool.submit(mtmc_engine.promote_candidate, session.session_id, drop.global_id, keep.global_id)
+        assert not promote.done()
+        release.set()
+        finalize.result(timeout=2)
+        assert promote.result(timeout=2)["ok"]
