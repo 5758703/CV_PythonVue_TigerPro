@@ -298,15 +298,16 @@
             class="runtime-risk"
           />
           <div class="runtime-models">
-            <article v-for="model in runtimeModels" :key="model.role" :class="['runtime-model', `is-${model.tone}`]">
+            <article v-for="model in runtimeModels" :key="`${model.role}:${model.cameraId ?? 'all'}`" :class="['runtime-model', `is-${model.tone}`]">
               <div class="runtime-model__role">
-                <span>{{ model.roleLabel }}</span>
+                <span>{{ model.roleLabel }}<template v-if="model.cameraId != null"> · Cam {{ model.cameraId }}</template></span>
                 <el-tag size="small" :type="model.tone" effect="plain">{{ model.statusLabel }}</el-tag>
               </div>
               <strong>{{ model.selectedModelKey }}</strong>
               <div class="runtime-model__meta">
                 <span>版本 {{ model.modelVersion }}</span>
-                <span>后端 {{ model.provider }}</span>
+                <span>实现 {{ model.backend }}</span>
+                <span>执行 {{ model.provider }}</span>
                 <span>输入 {{ model.inputSize }}</span>
                 <span>维度 {{ model.embeddingDim ?? '—' }}</span>
               </div>
@@ -317,7 +318,9 @@
             <div>
               <span class="runtime-policy__label">预算队列</span>
               <span v-for="budget in runtimeBudgets" :key="budget.role">
-                {{ budget.label }} {{ budget.consumed }}/{{ budget.queued }}，跳过 {{ budget.skipped }}（每帧 {{ budget.limitPerFrame }}）
+                {{ budget.label }}：考虑 {{ budget.considered }} / 合格 {{ budget.eligible }} / 入队 {{ budget.queued }} /
+                消耗 {{ budget.consumed }} / 预算跳过 {{ budget.budgetSkipped }} / 采样跳过 {{ budget.samplerSkipped }}
+                （每帧 {{ budget.limitPerFrame }}）
               </span>
             </div>
             <div>
@@ -821,6 +824,7 @@ import { cameraApi } from '../../../api/camera'
 import { mtmcApi } from '../../../api/mtmc'
 import {
   associationScoreParts,
+  runtimeBudgetRows,
   runtimeModelRows,
   runtimeRiskSummary,
   topologyPolicyText,
@@ -863,15 +867,7 @@ const runtimeOverallLabel = computed(() => ({
   info: '等待运行探测',
 })[runtimeOverallTone.value])
 const runtimeBudgets = computed(() => {
-  const labels = { personReid: '人员 ReID', vehicleReid: '车辆 ReID', plateOcr: '车牌 OCR' }
-  return Object.entries(session.value?.runtime?.budgets || {}).map(([role, value]) => ({
-    role,
-    label: labels[role] || role,
-    limitPerFrame: value.limitPerFrame ?? 0,
-    queued: value.queued ?? 0,
-    consumed: value.consumed ?? 0,
-    skipped: value.skipped ?? 0,
-  }))
+  return runtimeBudgetRows(session.value?.runtime?.budgets || {})
 })
 const effectiveThresholdText = computed(() => {
   const value = session.value?.runtime?.effectiveThresholds

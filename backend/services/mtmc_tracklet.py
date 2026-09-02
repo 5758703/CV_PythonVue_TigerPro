@@ -102,26 +102,38 @@ class TrackletBuilder:
             end_ts=ts,
         )
 
-    def should_sample_embedding(self, now: float, quality: float, view_token: str | None = None) -> bool:
-        """Reserve a keyframe when its time, quality, or view adds evidence."""
+    def embedding_sample_eligible(
+        self, now: float, quality: float, view_token: str | None = None,
+    ) -> bool:
+        """Return scheduler eligibility without reserving or mutating state."""
         ts = float(now)
         q = max(0.0, min(1.0, float(quality or 0.0)))
         view = str(view_token) if view_token else None
         last = self.last_embedding_sample_at
         unseen_view = view is not None and view not in self.sampled_view_tokens
-        should_sample = (
+        return (
             last is None
             or (ts - last) >= _KEYFRAME_MAX_INTERVAL_SEC
             or ((ts - last) >= _KEYFRAME_MIN_INTERVAL_SEC
                 and q >= self.last_embedding_sample_quality + _KEYFRAME_QUALITY_GAIN)
             or unseen_view
         )
-        if should_sample:
-            self.last_embedding_sample_at = ts
-            self.last_embedding_sample_quality = q
-            if view is not None:
-                self.sampled_view_tokens.add(view)
-        return should_sample
+
+    def reserve_embedding_sample(
+        self, now: float, quality: float, view_token: str | None = None,
+    ) -> bool:
+        """Reserve one eligible keyframe after a caller has secured budget."""
+        if not self.embedding_sample_eligible(now, quality, view_token):
+            return False
+        self.last_embedding_sample_at = float(now)
+        self.last_embedding_sample_quality = max(0.0, min(1.0, float(quality or 0.0)))
+        if view_token:
+            self.sampled_view_tokens.add(str(view_token))
+        return True
+
+    def should_sample_embedding(self, now: float, quality: float, view_token: str | None = None) -> bool:
+        """Compatibility API: atomically check and reserve one keyframe."""
+        return self.reserve_embedding_sample(now, quality, view_token)
 
     def add_observation(
         self,

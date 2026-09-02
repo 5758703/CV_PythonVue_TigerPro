@@ -83,8 +83,21 @@ def test_person_embeddings_report_failed_backend_and_keep_available_space(monkey
     )
 
     assert set(spaces) == {"opencv-person-reid-youtu"}
-    assert meta["backends"]["strong"] == {"ready": False, "error": "bad model"}
-    assert meta["backends"]["youtu"]["ready"] is True
+    assert meta["backends"]["strong"] == {
+        "ready": False,
+        "backend": "strong-onnx",
+        "provider": "onnxruntime-cpu",
+        "error": "bad model",
+    }
+    assert meta["backends"]["youtu"] == {
+        "ready": True,
+        "backend": "youtu-reid",
+        "provider": "unknown",
+        "modelKey": "opencv-person-reid-youtu",
+        "modelVersion": "youtu-v1",
+        "inputSize": None,
+        "dim": 3,
+    }
 
 
 def test_gallery_lookup_receives_only_its_matching_model_space(monkeypatch):

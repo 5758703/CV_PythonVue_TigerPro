@@ -1355,6 +1355,14 @@ class MtmcAssociator:
                     topology_score=best_breakdown.get("topology"),
                     time_score=best_breakdown.get("time"),
                     final_score=best_breakdown.get("final"),
+                    extra={
+                        "tier": "confirm",
+                        "confirmThresh": confirm_need,
+                        "bestScore": best_score,
+                        "secondBestScore": second_score,
+                        "matchMargin": match_margin,
+                        "minMatchMargin": self.min_match_margin,
+                    },
                 )
                 self._gallery_upsert(
                     g, embedding, observation_spaces=spaces,

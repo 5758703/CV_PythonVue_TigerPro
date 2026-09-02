@@ -108,6 +108,7 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         reid_budget=int(data.get("reidBudget") or 2),
         plate_budget=int(data.get("plateBudget") or 1),
         local_track_backend=track_backend,
+        requested_local_track_backend=track_backend,
         local_track_max_age=int(data.get("localTrackMaxAge") or 30),
         local_track_iou_thresh=float(data.get("localTrackIouThresh") or 0.3),
         enable_cmc=_form_bool(data.get("enableCmc"), False),
@@ -219,20 +220,29 @@ def _abs_weight(m: AiModel | None) -> str | None:
 
 
 def _model_runtime_descriptor(model: AiModel | None, resolved_path: str | None) -> dict:
-    ready = bool(model is not None and resolved_path and os.path.exists(resolved_path))
+    configured = model is not None
+    asset_present = bool(configured and resolved_path and os.path.exists(resolved_path))
     if model is None:
         reason = "no enabled model selected"
     elif not resolved_path:
         reason = "selected model has no resolved weight"
-    elif not ready:
+    elif not asset_present:
         reason = "selected model weight is missing"
     else:
         reason = None
     return {
-        "selectedModelKey": getattr(model, "model_key", None),
-        "modelVersion": getattr(model, "version", None),
-        "ready": ready,
-        "provider": getattr(model, "library", None),
+        "configured": configured,
+        "assetPresent": asset_present,
+        "configuredModelKey": getattr(model, "model_key", None),
+        "configuredModelVersion": getattr(model, "version", None),
+        "configuredProvider": getattr(model, "library", None),
+        # Actual execution fields remain unknown until the component runs.
+        "selectedModelKey": None,
+        "modelVersion": None,
+        "ready": None if asset_present else False,
+        "runtimeState": "pending" if asset_present else "unavailable",
+        "backend": None,
+        "provider": None,
         "inputSize": None,
         "embeddingDim": None,
         "degraded": bool(reason),
@@ -311,6 +321,24 @@ def _build_ocr_fn_from_ids(det_id, rec_id):
     def _fn(img_bytes: bytes):
         return paddle_ocr(det_dir, rec_dir, img_bytes, plate_mode=True, rec_only=True)
 
+    asset_present = os.path.exists(det_dir) and os.path.exists(rec_dir)
+    _fn._mtmc_runtime = {
+        "configured": True,
+        "assetPresent": asset_present,
+        "configuredModelKey": f"{det_m.model_key}+{rec_m.model_key}",
+        "configuredModelVersion": f"{det_m.version}+{rec_m.version}",
+        "configuredProvider": "paddleocr",
+        "selectedModelKey": None,
+        "modelVersion": None,
+        "ready": None if asset_present else False,
+        "runtimeState": "pending" if asset_present else "unavailable",
+        "backend": None,
+        "provider": None,
+        "inputSize": None,
+        "embeddingDim": None,
+        "degraded": not asset_present,
+        "degradedReason": None if asset_present else "configured OCR asset is missing",
+    }
     return _fn
 
 

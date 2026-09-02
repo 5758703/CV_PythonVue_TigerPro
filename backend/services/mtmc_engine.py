@@ -156,6 +156,7 @@ class MtmcConfig:
     plate_budget: int = 1
     # 局部跟踪：bytetrack（默认）| botsort | iou
     local_track_backend: str = "bytetrack"
+    requested_local_track_backend: str | None = None
     local_track_max_age: int = 30
     local_track_iou_thresh: float = 0.3
     # McByte++：CMC 仅云台/抖动时开；Mask 默认关（SAM/Cutie 太重）
@@ -349,9 +350,12 @@ def _effective_runtime_thresholds(associator) -> dict:
 def _runtime_budget(limit_per_frame: int) -> dict:
     return {
         "limitPerFrame": max(0, int(limit_per_frame)),
+        "considered": 0,
+        "eligible": 0,
         "queued": 0,
         "consumed": 0,
-        "skipped": 0,
+        "budgetSkipped": 0,
+        "samplerSkipped": 0,
         "lastFrameByCamera": {},
     }
 
@@ -369,16 +373,56 @@ def _initial_runtime_status(cfg: MtmcConfig, associator) -> dict:
             allowed_roles.update({"vehicleReid", "plateDetection"})
     models = {
         role: detail for role, detail in configured_models.items()
-        if role in allowed_roles and detail.get("selectedModelKey")
+        if role in allowed_roles
+        and (detail.get("configuredModelKey") or detail.get("selectedModelKey"))
     }
     person_candidates = [
         models.get("personReidStrong"), models.get("personReidFallback"),
     ]
-    preferred = next((row for row in person_candidates if row and row.get("ready")), None)
-    if preferred is None:
-        preferred = next((row for row in person_candidates if row), None)
-    if preferred:
-        models["personReid"] = copy.deepcopy(preferred)
+    configured_person = [row for row in person_candidates if row]
+    if configured_person:
+        configured_keys = sorted({
+            str(row.get("configuredModelKey") or row.get("selectedModelKey"))
+            for row in configured_person
+            if row.get("configuredModelKey") or row.get("selectedModelKey")
+        })
+        asset_present = any(bool(row.get("assetPresent", row.get("ready"))) for row in configured_person)
+        models["personReid"] = {
+            "configured": True,
+            "assetPresent": asset_present,
+            "configuredModelKeys": configured_keys,
+            "selectedModelKey": None,
+            "modelVersion": None,
+            "backend": None,
+            "provider": None,
+            "inputSize": None,
+            "embeddingDim": None,
+            "ready": None if asset_present else False,
+            "runtimeState": "pending" if asset_present else "unavailable",
+            "degraded": not asset_present,
+            "degradedReason": None if asset_present else "no configured person ReID asset is present",
+        }
+    if cfg.enable_vehicle and not cfg.detect_only and cfg.ocr_fn is not None:
+        ocr_detail = copy.deepcopy(getattr(cfg.ocr_fn, "_mtmc_runtime", {}) or {})
+        models["plateOcr"] = {
+            "configured": True,
+            "assetPresent": bool(ocr_detail.get("assetPresent", True)),
+            "configuredModelKey": ocr_detail.get("configuredModelKey") or "plate-ocr",
+            "configuredModelVersion": ocr_detail.get("configuredModelVersion"),
+            "configuredProvider": ocr_detail.get("configuredProvider") or "paddleocr",
+            "selectedModelKey": None,
+            "modelVersion": None,
+            "backend": None,
+            "provider": None,
+            "inputSize": None,
+            "embeddingDim": None,
+            "ready": None if ocr_detail.get("assetPresent", True) else False,
+            "runtimeState": "pending" if ocr_detail.get("assetPresent", True) else "unavailable",
+            "degraded": not bool(ocr_detail.get("assetPresent", True)),
+            "degradedReason": (
+                None if ocr_detail.get("assetPresent", True) else "configured OCR asset is missing"
+            ),
+        }
     return {
         "models": models,
         "budgets": {
@@ -869,8 +913,19 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
 _PV_CLASSES = [0, 1, 2, 3, 5, 7]
 
 
-def _detect_person_vehicle(cfg: MtmcConfig, frame):
+def _detect_person_vehicle(cfg: MtmcConfig, frame, *, runtime_observer=None):
     """人员+车辆一次 YOLO，避免每帧两次推理。"""
+    def run(role: str, model_path: str, conf: float, classes: list[int]):
+        try:
+            rows = _detect(model_path, frame, conf, classes)
+        except Exception as error:  # noqa: BLE001
+            if runtime_observer is not None:
+                runtime_observer(role, error)
+            raise
+        if runtime_observer is not None:
+            runtime_observer(role, None)
+        return rows
+
     person_conf = min(float(cfg.conf), 0.18) if cfg.enable_person else float(cfg.conf)
     vehicle_conf = float(cfg.conf)
     if (
@@ -878,7 +933,16 @@ def _detect_person_vehicle(cfg: MtmcConfig, frame):
         and cfg.det_person_path and cfg.det_vehicle_path
         and cfg.det_person_path == cfg.det_vehicle_path
     ):
-        raw = _detect(cfg.det_person_path, frame, min(person_conf, vehicle_conf), _PV_CLASSES)
+        try:
+            raw = _detect(cfg.det_person_path, frame, min(person_conf, vehicle_conf), _PV_CLASSES)
+        except Exception as error:  # noqa: BLE001
+            if runtime_observer is not None:
+                runtime_observer("personDetection", error)
+                runtime_observer("vehicleDetection", error)
+            raise
+        if runtime_observer is not None:
+            runtime_observer("personDetection", None)
+            runtime_observer("vehicleDetection", None)
         persons = [d for d in raw if int(d.get("classId", -1)) == 0]
         vehicles = [d for d in raw if int(d.get("classId", -1)) in (1, 2, 3, 5, 7)]
         persons = supplement_rider_person_dets(
@@ -888,9 +952,9 @@ def _detect_person_vehicle(cfg: MtmcConfig, frame):
     persons = []
     vehicles = []
     if cfg.enable_person and cfg.det_person_path:
-        persons = _detect(cfg.det_person_path, frame, person_conf, _PERSON_DET_CLASSES)
+        persons = run("personDetection", cfg.det_person_path, person_conf, _PERSON_DET_CLASSES)
     if cfg.enable_vehicle and cfg.det_vehicle_path:
-        vehicles = _detect(cfg.det_vehicle_path, frame, vehicle_conf, _VEHICLE_DET_CLASSES)
+        vehicles = run("vehicleDetection", cfg.det_vehicle_path, vehicle_conf, _VEHICLE_DET_CLASSES)
     if cfg.enable_person and vehicles:
         persons = supplement_rider_person_dets(
             persons, vehicles, frame_w=frame.shape[1], frame_h=frame.shape[0],
@@ -1215,18 +1279,187 @@ def _record_runtime_model(session, role: str, camera_id: int, observation: dict)
             str(row.get("degradedReason"))
             for row in camera_rows if row.get("degradedReason")
         })
-        merged = copy.deepcopy(observation)
-        merged["ready"] = bool(camera_rows) and all(row.get("ready") is True for row in camera_rows)
+        merged = {
+            key: copy.deepcopy(value)
+            for key, value in previous.items()
+            if key not in {
+                "selectedModelKey", "modelVersion", "backend", "provider",
+                "inputSize", "embeddingDim", "ready", "runtimeState",
+                "degraded", "degradedReason", "mixed", "byCamera",
+                "selectedModelKeys", "modelVersions", "backends", "providers",
+                "inputSizes", "embeddingDims",
+            }
+        }
+        ready_values = [row.get("ready") for row in camera_rows]
+        if ready_values and all(value is True for value in ready_values):
+            merged["ready"] = True
+        elif any(value is False for value in ready_values):
+            merged["ready"] = False
+        else:
+            merged["ready"] = None
         merged["degraded"] = any(
             row.get("degraded") is True or row.get("ready") is False for row in camera_rows
         )
         merged["degradedReason"] = "; ".join(reasons) or None
-        merged["selectedModelKey"] = selected_keys[0] if len(selected_keys) == 1 else None
+        merged["runtimeState"] = (
+            "failed" if merged["ready"] is False
+            else "degraded" if merged["degraded"]
+            else "ready" if merged["ready"] is True
+            else "pending"
+        )
+
+        def common_value(field):
+            values = [row.get(field) for row in camera_rows]
+            first = values[0] if values else None
+            return copy.deepcopy(first) if all(value == first for value in values) else None
+
+        def unique_values(field):
+            values = []
+            for row in camera_rows:
+                value = row.get(field)
+                if value is None or any(value == seen for seen in values):
+                    continue
+                values.append(copy.deepcopy(value))
+            return values
+
+        for field in ("selectedModelKey", "modelVersion", "backend", "provider", "inputSize", "embeddingDim"):
+            merged[field] = common_value(field)
+        for field in (
+            "configured", "assetPresent", "configuredModelKey",
+            "configuredModelVersion", "configuredProvider", "configuredModelKeys",
+        ):
+            if field not in merged:
+                merged[field] = common_value(field)
+        for field in ("availableModelSpaces", "backendReadiness"):
+            value = common_value(field)
+            if value is not None:
+                merged[field] = value
         merged["selectedModelKeys"] = selected_keys
-        merged["modelVersion"] = versions[0] if len(versions) == 1 else None
         merged["modelVersions"] = versions
+        merged["backends"] = unique_values("backend")
+        merged["providers"] = unique_values("provider")
+        merged["inputSizes"] = unique_values("inputSize")
+        merged["embeddingDims"] = unique_values("embeddingDim")
+        signatures = unique_values("selectedModelKey")
+        merged["mixed"] = len(signatures) > 1 or any(
+            len(unique_values(field)) > 1
+            for field in ("modelVersion", "backend", "provider", "inputSize", "embeddingDim")
+        )
         merged["byCamera"] = by_camera
         models[role] = merged
+
+
+def _configured_runtime_detail(cfg: MtmcConfig, role: str) -> dict:
+    return copy.deepcopy(dict((getattr(cfg, "selected_models", {}) or {}).get(role) or {}))
+
+
+def _execution_runtime_observation(
+    cfg: MtmcConfig,
+    role: str,
+    *,
+    ready: bool,
+    backend: str,
+    provider: str | None = None,
+    selected_model_key: str | None = None,
+    model_version: str | None = None,
+    input_size=None,
+    embedding_dim: int | None = None,
+    degraded: bool = False,
+    reason: str | None = None,
+) -> dict:
+    configured = _configured_runtime_detail(cfg, role)
+    configured_key = configured.get("configuredModelKey") or configured.get("selectedModelKey")
+    configured_version = configured.get("configuredModelVersion") or configured.get("modelVersion")
+    configured_provider = configured.get("configuredProvider")
+    return {
+        "configured": bool(configured.get("configured", configured_key is not None)),
+        "assetPresent": bool(configured.get("assetPresent", True)),
+        "configuredModelKey": configured_key,
+        "configuredModelVersion": configured_version,
+        "configuredProvider": configured_provider,
+        "selectedModelKey": selected_model_key or configured_key,
+        "modelVersion": model_version or configured_version,
+        "ready": bool(ready),
+        "runtimeState": "failed" if not ready else ("degraded" if degraded else "ready"),
+        "backend": backend,
+        "provider": provider or configured_provider,
+        "inputSize": copy.deepcopy(input_size),
+        "embeddingDim": embedding_dim,
+        "degraded": bool(degraded or not ready),
+        "degradedReason": reason,
+    }
+
+
+def _record_detection_runtime(
+    session,
+    camera_id: int,
+    error: Exception | None = None,
+    *,
+    roles: tuple[str, ...] | set[str] | None = None,
+) -> None:
+    selected_roles = set(roles or ())
+    for role, enabled, model_path in (
+        ("personDetection", session.cfg.enable_person, session.cfg.det_person_path),
+        ("vehicleDetection", session.cfg.enable_vehicle, session.cfg.det_vehicle_path),
+    ):
+        if (selected_roles and role not in selected_roles) or not enabled or not model_path:
+            continue
+        configured = _configured_runtime_detail(session.cfg, role)
+        reason = str(error) if error is not None else None
+        _record_runtime_model(
+            session,
+            role,
+            camera_id,
+            _execution_runtime_observation(
+                session.cfg,
+                role,
+                ready=error is None,
+                backend="yolo",
+                provider=configured.get("configuredProvider") or "inference",
+                selected_model_key=(
+                    configured.get("configuredModelKey")
+                    or os.path.basename(str(model_path))
+                ),
+                input_size=[640, 640],
+                reason=reason,
+            ),
+        )
+
+
+def _detect_person_vehicle_with_runtime(session, camera_id: int, frame):
+    observed_roles: set[str] = set()
+
+    def observe(role: str, error: Exception | None) -> None:
+        observed_roles.add(role)
+        _record_detection_runtime(session, camera_id, error, roles=(role,))
+
+    try:
+        result = _detect_person_vehicle(session.cfg, frame, runtime_observer=observe)
+    except Exception as error:  # noqa: BLE001
+        enabled_roles = {
+            role
+            for role, enabled, model_path in (
+                ("personDetection", session.cfg.enable_person, session.cfg.det_person_path),
+                ("vehicleDetection", session.cfg.enable_vehicle, session.cfg.det_vehicle_path),
+            )
+            if enabled and model_path
+        }
+        unobserved_roles = enabled_roles - observed_roles
+        if unobserved_roles:
+            _record_detection_runtime(session, camera_id, error, roles=unobserved_roles)
+        raise
+    enabled_roles = {
+        role
+        for role, enabled, model_path in (
+            ("personDetection", session.cfg.enable_person, session.cfg.det_person_path),
+            ("vehicleDetection", session.cfg.enable_vehicle, session.cfg.det_vehicle_path),
+        )
+        if enabled and model_path
+    }
+    unobserved_roles = enabled_roles - observed_roles
+    if unobserved_roles:
+        _record_detection_runtime(session, camera_id, roles=unobserved_roles)
+    return result
 
 
 def _person_reid_runtime_observation(
@@ -1245,12 +1478,14 @@ def _person_reid_runtime_observation(
     reason = _runtime_error_reason(backends, expected)
     selected_embedding = embeddings.get(selected_key) if selected_key else None
     if selected_key == "opencv-person-reid-youtu":
-        provider = meta.get("backend") or backend_detail.get("provider") or "opencv-dnn"
+        backend = backend_detail.get("backend") or "youtu-reid"
+        provider = backend_detail.get("provider") or "unknown"
         input_size = backend_detail.get("inputSize") or meta.get("inputSize")
     else:
         runtime_io = _strong_runtime_io(cfg.strong_reid_root)
+        backend = backend_detail.get("backend") or "strong-onnx"
         provider = (
-            backend_detail.get("provider") or meta.get("provider")
+            backend_detail.get("provider")
             or runtime_io.get("provider") or "onnxruntime-cpu"
         )
         input_size = (
@@ -1264,6 +1499,8 @@ def _person_reid_runtime_observation(
         "selectedModelKey": selected_key,
         "modelVersion": versions.get(selected_key) if selected_key else None,
         "ready": ready,
+        "runtimeState": "failed" if not ready else ("degraded" if reason else "ready"),
+        "backend": backend,
         "provider": provider,
         "inputSize": input_size,
         "embeddingDim": int(selected_embedding.size) if selected_embedding is not None else None,
@@ -1288,21 +1525,26 @@ def _vehicle_reid_runtime_observation(cfg: MtmcConfig, meta: dict, embedding) ->
     configured = dict((getattr(cfg, "selected_models", {}) or {}).get("vehicleReid") or {})
     fallback = backend == "hist-fallback"
     selected_key = "histogram-fallback" if fallback else (
-        configured.get("selectedModelKey") or "vehicle-onnx"
+        configured.get("configuredModelKey") or configured.get("selectedModelKey") or "vehicle-onnx"
     )
     reason = None
     if fallback:
         reason = str(meta.get("onnxError") or "configured vehicle ReID unavailable; using histogram fallback")
+    elif embedding is None:
+        reason = str(meta.get("error") or meta.get("onnxError") or "vehicle ReID produced no embedding")
     return {
         "selectedModelKey": selected_key,
         "modelVersion": "builtin" if fallback else (
-            meta.get("modelVersion") or meta.get("onnx") or configured.get("modelVersion")
+            meta.get("modelVersion") or meta.get("onnx")
+            or configured.get("configuredModelVersion") or configured.get("modelVersion")
         ),
         "ready": embedding is not None,
+        "runtimeState": "degraded" if fallback else ("ready" if embedding is not None else "failed"),
+        "backend": backend,
         "provider": "opencv" if fallback else (meta.get("provider") or "onnxruntime-cpu"),
         "inputSize": meta.get("inputSize"),
         "embeddingDim": int(getattr(embedding, "size", 0)) or meta.get("dim"),
-        "degraded": fallback,
+        "degraded": bool(fallback or embedding is None),
         "degradedReason": reason,
     }
 
@@ -1314,8 +1556,78 @@ def _record_vehicle_reid_runtime(session, camera_id: int, meta: dict, embedding)
     )
 
 
+def _record_plate_detection_runtime(
+    session,
+    camera_id: int,
+    *,
+    source: str | None = None,
+    error: Exception | None = None,
+) -> None:
+    fallback = not bool(session.cfg.plate_model_path) or source == "heuristic"
+    configured = _configured_runtime_detail(session.cfg, "plateDetection")
+    selected_key = (
+        "plate-roi-heuristic" if fallback
+        else configured.get("configuredModelKey") or os.path.basename(str(session.cfg.plate_model_path))
+    )
+    reason = str(error) if error is not None else (
+        "configured plate detector unavailable; fallback to heuristic ROI" if fallback else None
+    )
+    _record_runtime_model(
+        session,
+        "plateDetection",
+        camera_id,
+        _execution_runtime_observation(
+            session.cfg,
+            "plateDetection",
+            ready=error is None,
+            backend="plate-roi-heuristic" if fallback else "plate-yolo",
+            provider="opencv" if fallback else configured.get("configuredProvider") or "inference",
+            selected_model_key=selected_key,
+            degraded=fallback,
+            reason=reason,
+        ),
+    )
+
+
+def _record_plate_ocr_runtime(
+    session,
+    camera_id: int,
+    *,
+    error: Exception | None = None,
+) -> None:
+    configured = copy.deepcopy(getattr(session.cfg.ocr_fn, "_mtmc_runtime", {}) or {})
+    backend = configured.get("backend") or "paddle-ocr"
+    provider = configured.get("provider") or configured.get("configuredProvider") or "paddleocr"
+    _record_runtime_model(session, "plateOcr", camera_id, {
+        "configured": session.cfg.ocr_fn is not None,
+        "assetPresent": bool(configured.get("assetPresent", session.cfg.ocr_fn is not None)),
+        "configuredModelKey": configured.get("configuredModelKey") or "plate-ocr",
+        "configuredModelVersion": configured.get("configuredModelVersion"),
+        "configuredProvider": configured.get("configuredProvider") or "paddleocr",
+        "selectedModelKey": configured.get("selectedModelKey") or "plate-ocr",
+        "modelVersion": configured.get("modelVersion") or configured.get("configuredModelVersion"),
+        "ready": error is None,
+        "runtimeState": "ready" if error is None else "failed",
+        "backend": backend,
+        "provider": provider,
+        "inputSize": configured.get("inputSize"),
+        "embeddingDim": None,
+        "degraded": error is not None,
+        "degradedReason": str(error) if error is not None else None,
+    })
+
+
 def _record_runtime_budget_frame(
-    session, role: str, camera_id: int, *, queued: int, consumed: int, skipped: int,
+    session,
+    role: str,
+    camera_id: int,
+    *,
+    considered: int,
+    eligible: int,
+    queued: int,
+    consumed: int,
+    budgetSkipped: int,
+    samplerSkipped: int,
 ) -> None:
     _initialize_runtime_status(session)
     with _runtime_status_lock(session):
@@ -1327,14 +1639,17 @@ def _record_runtime_budget_frame(
         }[role]
         counter = budgets.setdefault(role, _runtime_budget(limit))
         counter["limitPerFrame"] = limit
-        counter["queued"] = int(counter.get("queued") or 0) + int(queued)
-        counter["consumed"] = int(counter.get("consumed") or 0) + int(consumed)
-        counter["skipped"] = int(counter.get("skipped") or 0) + int(skipped)
-        counter.setdefault("lastFrameByCamera", {})[str(camera_id)] = {
+        frame = {
+            "considered": int(considered),
+            "eligible": int(eligible),
             "queued": int(queued),
             "consumed": int(consumed),
-            "skipped": int(skipped),
+            "budgetSkipped": int(budgetSkipped),
+            "samplerSkipped": int(samplerSkipped),
         }
+        for field, value in frame.items():
+            counter[field] = int(counter.get(field) or 0) + value
+        counter.setdefault("lastFrameByCamera", {})[str(camera_id)] = frame
 
 
 def _speed_from_trail(trail, meters_per_pixel: float, fps: float) -> float | None:
@@ -1970,7 +2285,23 @@ def _finalize_tracklet_locked(session: MtmcSession, builder, *, exclude_gids: se
         now=builder.end_ts or time.time(),
         force=True,
     )
-    if builder.object_type == "person":
+    sticky_track = None
+    if prev_gid and hasattr(builder, "camera_id") and hasattr(builder, "local_track_id"):
+        sticky_gid = session.associator.peek_sticky(
+            object_type=builder.object_type,
+            camera_id=builder.camera_id,
+            local_track_id=int(builder.local_track_id),
+            now=builder.end_ts or time.time(),
+        )
+        if sticky_gid == prev_gid:
+            sticky_track = session.associator.get_track(prev_gid)
+    if sticky_track is not None:
+        # The live frame path already updated this Global. Re-associating it as
+        # force_long_term while its local binding is still active excludes its
+        # own prototype and creates a replacement ID at tracker release.
+        g = sticky_track
+        builder.assigned_global_id = g.global_id
+    elif builder.object_type == "person":
         g = _associate_tracklet(
             session,
             builder,
@@ -2231,11 +2562,20 @@ def _enforce_unique_camera_global_ids(items: list[dict]) -> list[dict]:
     return items
 
 
-def _make_local_tracker(cfg: MtmcConfig):
+def _make_local_tracker(
+    cfg: MtmcConfig,
+    *,
+    session: MtmcSession | None = None,
+    camera_id: int | None = None,
+):
     """按配置创建单路局部跟踪器；ByteTrack/BoT-SORT 不可用时回退 IoU。"""
     from services.mtmc_local_track import bytetrack_available, botsort_available, create_local_tracker
 
-    backend = (cfg.local_track_backend or "bytetrack").strip().lower()
+    requested = (
+        cfg.requested_local_track_backend or cfg.local_track_backend or "bytetrack"
+    ).strip().lower()
+    cfg.requested_local_track_backend = requested
+    backend = requested
     if backend not in ("iou", "bytetrack", "botsort"):
         log.warning("unknown local_track_backend=%s, use bytetrack", backend)
         backend = "bytetrack"
@@ -2252,15 +2592,52 @@ def _make_local_tracker(cfg: MtmcConfig):
     # 与 MTMC 采样率对齐，避免 ByteTrack 按 30FPS 预测导致低采样下轨迹永不激活
     frame_rate = max(2, int(round(sample_fps)))
     track_act = min(0.25, max(0.12, float(cfg.conf) * 0.75))
-    return create_local_tracker(
-        backend,  # type: ignore[arg-type]
-        max_age=int(cfg.local_track_max_age or 30),
-        iou_thresh=float(cfg.local_track_iou_thresh or 0.3),
-        enable_cmc=bool(cfg.enable_cmc),
-        enable_mask_cue=bool(cfg.enable_mask_cue),
-        frame_rate=frame_rate,
-        track_activation_threshold=track_act,
-    )
+    try:
+        tracker = create_local_tracker(
+            backend,  # type: ignore[arg-type]
+            max_age=int(cfg.local_track_max_age or 30),
+            iou_thresh=float(cfg.local_track_iou_thresh or 0.3),
+            enable_cmc=bool(cfg.enable_cmc),
+            enable_mask_cue=bool(cfg.enable_mask_cue),
+            frame_rate=frame_rate,
+            track_activation_threshold=track_act,
+        )
+    except Exception as error:  # noqa: BLE001
+        if session is not None and camera_id is not None:
+            _record_runtime_model(session, "localTracker", camera_id, {
+                "configured": True,
+                "assetPresent": True,
+                "configuredModelKey": requested,
+                "selectedModelKey": backend,
+                "modelVersion": None,
+                "ready": False,
+                "runtimeState": "failed",
+                "backend": backend,
+                "provider": "services.mtmc_local_track",
+                "inputSize": None,
+                "embeddingDim": None,
+                "degraded": True,
+                "degradedReason": str(error),
+            })
+        raise
+    if session is not None and camera_id is not None:
+        fallback = backend != requested
+        _record_runtime_model(session, "localTracker", camera_id, {
+            "configured": True,
+            "assetPresent": True,
+            "configuredModelKey": requested,
+            "selectedModelKey": backend,
+            "modelVersion": None,
+            "ready": True,
+            "runtimeState": "degraded" if fallback else "ready",
+            "backend": backend,
+            "provider": type(tracker).__module__,
+            "inputSize": None,
+            "embeddingDim": None,
+            "degraded": fallback,
+            "degradedReason": f"{requested} unavailable; fallback to {backend}" if fallback else None,
+        })
+    return tracker
 
 
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
@@ -2283,7 +2660,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     cam_state.last_error = None
 
     if cfg.detect_only:
-        raw_p, raw_v = _detect_person_vehicle(cfg, frame)
+        raw_p, raw_v = _detect_person_vehicle_with_runtime(session, cam_id, frame)
         items = _detect_items_from_raw(
             raw_p if cfg.enable_person else [],
             raw_v if cfg.enable_vehicle else [],
@@ -2303,9 +2680,9 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     from services.reid_gallery import l2_normalize
 
     if cam_state.tracker_person is None:
-        cam_state.tracker_person = _make_local_tracker(cfg)
+        cam_state.tracker_person = _make_local_tracker(cfg, session=session, camera_id=cam_id)
     if cam_state.tracker_vehicle is None:
-        cam_state.tracker_vehicle = _make_local_tracker(cfg)
+        cam_state.tracker_vehicle = _make_local_tracker(cfg, session=session, camera_id=cam_id)
 
     items = []
     collector = _FrameAssociationCollector(session, now)
@@ -2314,10 +2691,19 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     person_reid_left = _reid_budget_for(cfg, "person")
     vehicle_reid_left = _reid_budget_for(cfg, "vehicle")
     plate_left = max(0, int(cfg.plate_budget or 0))
-    person_budget = {"queued": 0, "consumed": 0, "skipped": 0}
-    vehicle_budget = {"queued": 0, "consumed": 0, "skipped": 0}
-    plate_budget = {"queued": 0, "consumed": 0, "skipped": 0}
-    raw_p, raw_v = _detect_person_vehicle(cfg, frame)
+    person_budget = {
+        "considered": 0, "eligible": 0, "queued": 0, "consumed": 0,
+        "budgetSkipped": 0, "samplerSkipped": 0,
+    }
+    vehicle_budget = {
+        "considered": 0, "eligible": 0, "queued": 0, "consumed": 0,
+        "budgetSkipped": 0, "samplerSkipped": 0,
+    }
+    plate_budget = {
+        "considered": 0, "eligible": 0, "queued": 0, "consumed": 0,
+        "budgetSkipped": 0, "samplerSkipped": 0,
+    }
+    raw_p, raw_v = _detect_person_vehicle_with_runtime(session, cam_id, frame)
     # “命中”表示检测器命中，必须在耗时的 ReID/车牌/关联前统计；否则首帧
     # ReID 尚未完成时页面会错误地长期显示人员 0。
     session.stats["persons"] += len(raw_p) if cfg.enable_person else 0
@@ -2365,16 +2751,20 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 now=now,
             )
             quality = frame_quality(t.bbox, t.conf, fh, fw)
-            person_budget["queued"] += 1
-            need_reid = person_reid_left > 0 and builder.should_sample_embedding(
-                now, quality, view_token=_track_view_token(t),
-            )
-            if need_reid:
-                person_budget["consumed"] += 1
-            elif person_reid_left <= 0:
-                # Preserve the scheduler's short circuit: merely observing a
-                # budget skip must not reserve this keyframe.
-                person_budget["skipped"] += 1
+            view_token = _track_view_token(t)
+            person_budget["considered"] += 1
+            sample_eligible = builder.embedding_sample_eligible(now, quality, view_token=view_token)
+            if sample_eligible:
+                person_budget["eligible"] += 1
+            need_reid = False
+            if sample_eligible and person_reid_left > 0:
+                need_reid = builder.reserve_embedding_sample(now, quality, view_token=view_token)
+                person_budget["queued"] += int(need_reid)
+                person_budget["consumed"] += int(need_reid)
+            elif sample_eligible:
+                person_budget["budgetSkipped"] += 1
+            else:
+                person_budget["samplerSkipped"] += 1
             emb, meta = None, {}
             embeddings: dict[str, np.ndarray] = {}
             c_sig = None
@@ -2585,14 +2975,20 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 now=now,
             )
             quality = frame_quality(t.bbox, t.conf, fh, fw)
-            vehicle_budget["queued"] += 1
-            need_reid = vehicle_reid_left > 0 and builder.should_sample_embedding(
-                now, quality, view_token=_track_view_token(t),
-            )
-            if need_reid:
-                vehicle_budget["consumed"] += 1
-            elif vehicle_reid_left <= 0:
-                vehicle_budget["skipped"] += 1
+            view_token = _track_view_token(t)
+            vehicle_budget["considered"] += 1
+            sample_eligible = builder.embedding_sample_eligible(now, quality, view_token=view_token)
+            if sample_eligible:
+                vehicle_budget["eligible"] += 1
+            need_reid = False
+            if sample_eligible and vehicle_reid_left > 0:
+                need_reid = builder.reserve_embedding_sample(now, quality, view_token=view_token)
+                vehicle_budget["queued"] += int(need_reid)
+                vehicle_budget["consumed"] += int(need_reid)
+            elif sample_eligible:
+                vehicle_budget["budgetSkipped"] += 1
+            else:
+                vehicle_budget["samplerSkipped"] += 1
             emb, vmeta = None, {}
             plate_text, plate_score = None, 0.0
             fuse = {
@@ -2605,36 +3001,57 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 plate_score = float(cached_plate.get("score") or 0)
             if need_reid:
                 vehicle_reid_left -= 1
-                emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
+                try:
+                    emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
+                except Exception as error:  # noqa: BLE001
+                    vmeta = {"backend": "vehicle-onnx", "error": str(error)}
+                    _record_vehicle_reid_runtime(session, cam_id, vmeta, None)
+                    raise
                 _record_vehicle_reid_runtime(session, cam_id, vmeta, emb)
                 wants_ocr = cfg.ocr_fn is not None and not plate_text
                 do_ocr = wants_ocr and plate_left > 0
+                plate_budget["considered"] += 1
                 if wants_ocr:
-                    plate_budget["queued"] += 1
+                    plate_budget["eligible"] += 1
                     if do_ocr:
-                        plate_budget["consumed"] += 1
+                        plate_budget["queued"] += 1
                     else:
-                        plate_budget["skipped"] += 1
+                        plate_budget["budgetSkipped"] += 1
+                else:
+                    plate_budget["samplerSkipped"] += 1
                 if do_ocr:
                     plate_left -= 1
                     try:
                         from services.vehicle_track import _plate_candidates, _ocr_plate
-                        for pb, _src, _q, warp in _plate_candidates(
+                        plate_candidates = list(_plate_candidates(
                             t.bbox, frame, cfg.plate_model_path, 0.2,
-                        ):
+                        ))
+                        source = plate_candidates[0][1] if plate_candidates else (
+                            "model" if cfg.plate_model_path else "heuristic"
+                        )
+                        _record_plate_detection_runtime(session, cam_id, source=source)
+                    except Exception as error:  # noqa: BLE001
+                        plate_candidates = []
+                        _record_plate_detection_runtime(session, cam_id, error=error)
+                    for pb, _src, _q, warp in plate_candidates:
+                        try:
                             ocr = _ocr_plate(cfg.ocr_fn, frame, pb, warped=warp)
-                            plate_text = ocr.get("text")
-                            plate_score = float(ocr.get("score") or 0)
-                            if plate_text:
-                                vsession.plates[t.track_id] = {
-                                    "text": plate_text, "score": plate_score, "source": "mtmc",
-                                }
-                                cam_state.plate_cache[int(t.track_id)] = {
-                                    "text": plate_text, "score": plate_score,
-                                }
-                                break
-                    except Exception:  # noqa: BLE001
-                        pass
+                            plate_budget["consumed"] += 1
+                            _record_plate_ocr_runtime(session, cam_id)
+                        except Exception as error:  # noqa: BLE001
+                            plate_budget["consumed"] += 1
+                            _record_plate_ocr_runtime(session, cam_id, error=error)
+                            break
+                        plate_text = ocr.get("text")
+                        plate_score = float(ocr.get("score") or 0)
+                        if plate_text:
+                            vsession.plates[t.track_id] = {
+                                "text": plate_text, "score": plate_score, "source": "mtmc",
+                            }
+                            cam_state.plate_cache[int(t.track_id)] = {
+                                "text": plate_text, "score": plate_score,
+                            }
+                            break
                 if not plate_text and t.track_id in vsession.plates:
                     plate_text = vsession.plates[t.track_id].get("text")
                     plate_score = float(vsession.plates[t.track_id].get("score") or 0)

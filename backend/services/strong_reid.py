@@ -187,11 +187,22 @@ def _strong_model_key(onnx_path: str) -> str:
     return f"strong-onnx:{name}"
 
 
-def _backend_status(meta: dict, error_key: str) -> dict:
+def _backend_status(
+    meta: dict,
+    error_key: str,
+    *,
+    default_backend: str,
+    default_provider: str,
+) -> dict:
     error = meta.get(error_key)
+    status = {
+        "ready": False,
+        "backend": meta.get("backend") or default_backend,
+        "provider": meta.get("provider") or default_provider,
+    }
     if error:
-        return {"ready": False, "error": str(error)}
-    return {"ready": False}
+        status["error"] = str(error)
+    return status
 
 
 def extract_person_embeddings(
@@ -205,21 +216,42 @@ def extract_person_embeddings(
     youtu, youtu_meta = extract_youtu(youtu_root, image_bgr)
     spaces: dict[str, np.ndarray] = {}
     backends = {
-        "strong": _backend_status(strong_meta, "strongError"),
-        "youtu": _backend_status(youtu_meta, "youtuError"),
+        "strong": _backend_status(
+            strong_meta,
+            "strongError",
+            default_backend="strong-onnx",
+            default_provider="onnxruntime-cpu",
+        ),
+        "youtu": _backend_status(
+            youtu_meta,
+            "youtuError",
+            default_backend="youtu-reid",
+            default_provider="unknown",
+        ),
     }
 
     if strong is not None:
         key = str(strong_meta.get("modelKey") or _strong_model_key(strong_meta.get("onnx") or "unknown.onnx"))
         spaces[key] = _l2(strong)
-        backends["strong"] = {"ready": True, "modelKey": key, "modelVersion": strong_meta.get("modelVersion"), "dim": int(spaces[key].size)}
+        backends["strong"] = {
+            "ready": True,
+            "backend": strong_meta.get("backend") or "strong-onnx",
+            "provider": strong_meta.get("provider") or "onnxruntime-cpu",
+            "modelKey": key,
+            "modelVersion": strong_meta.get("modelVersion"),
+            "inputSize": strong_meta.get("inputSize"),
+            "dim": int(spaces[key].size),
+        }
     if youtu is not None:
         key = "opencv-person-reid-youtu"
         spaces[key] = _l2(youtu)
         backends["youtu"] = {
             "ready": True,
+            "backend": youtu_meta.get("backend") or "youtu-reid",
+            "provider": youtu_meta.get("provider") or "unknown",
             "modelKey": key,
             "modelVersion": youtu_meta.get("modelVersion"),
+            "inputSize": youtu_meta.get("inputSize"),
             "dim": int(spaces[key].size),
         }
 

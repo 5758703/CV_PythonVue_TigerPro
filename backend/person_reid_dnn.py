@@ -213,6 +213,7 @@ def extract_feature(model_path: str, image_bgr: np.ndarray, prefer: str = "fp32"
         "latencyMs": round(latency, 2),
         "onnx": os.path.basename(onnx),
         "backend": f"youtu-reid-{backend}",
+        "provider": "opencv-dnn-cpu" if backend == "opencv" else "onnxruntime-cpu",
         "dim": int(feat.size),
         "inputSize": [INPUT_W, INPUT_H],
     }

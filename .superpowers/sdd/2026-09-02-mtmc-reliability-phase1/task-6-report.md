@@ -102,3 +102,85 @@ d816b92f04e02fba6bf504f5cb4cc53e7d23c36b8e91fa3e9746e556b131355d  backend/routes
 - 可观测性：未实际执行过的模型保留“配置资产是否存在”的初始状态；ReID 一旦真实推理即由按相机实际观测覆盖，避免把回退说成主模型就绪。
 - 环境边界：本机验证未加载生产 GPU/摄像头和真实模型资产，模型供应器/输入/维度的硬件实测仍需部署环境运行一帧后确认；UI 会在此前保持等待或显示资产级状态。
 - 构建警告：Vite 仍报告第三方 `@vueuse/core` PURE 注释位置及既有大 chunk 警告，不影响构建成功，且不属于本任务范围。
+
+---
+
+## 审查修复轮次 1/5
+
+### 状态与基线
+
+- 状态：`DONE_WITH_CONCERNS`
+- 审查基线：`0aa1a947c0393493995ceda165e1b81ad311cd99`（`feat: expose MTMC runtime reliability`）
+- 本轮提交主题：`fix: report truthful MTMC runtime state`
+- 范围：仅修复审查列出的 7 项 Important 问题，补充真实引擎边界、持久化链路和前端纯函数回归；没有新增产品入口或配置字段。
+
+### RED 证据
+
+生产实现前/回退实现后实际观察到：
+
+```text
+pytest backend/unittests/test_mtmc_runtime_status.py backend/unittests/test_mtmc_stream_regressions.py -q
+16 failed, 4 passed
+
+node --test src/utils/mtmcRuntimeStatus.test.js
+5 failed, 6 passed
+
+修正测试夹具自身的超时配置后，真实 _process_frame 回放：
+3 failed, 1 passed
+```
+
+此外，Youtu provider、路由构造 OCR 元数据、车辆 ReID 异常状态和分离检测器“一成一败不互相覆盖”均以单独失败用例确认 RED；最后一项失败表现为 vehicle 检测异常错误地把已成功的 person detection 标为失败。
+
+### 七项审查意见的修复映射
+
+1. 配置资产与运行就绪分离：新增 `configured`、`assetPresent`、`configuredModel*`；资产存在但尚未推理时为 `pending/probing`，检测器、ReID、OCR、车牌检测和 tracker 只有真实执行成功后才为 `ready`，异常与回退均保留原因。
+2. backend/provider 独立：每个 ReID 后端状态同时暴露实现后端和执行 provider；Youtu 保留真实 `youtu-reid-opencv`/`youtu-reid-onnxruntime` 语义，测试使用实际 extractor 元数据结构而非伪造扁平字段。
+3. 多相机模型不再“最后写入获胜”：运行态以 `byCamera` 为事实源，并输出复数键/版本/backend/provider/输入/维度；仅所有相机一致时保留顶层标量，前端对 mixed 状态逐相机展示。
+4. 预算语义完整：`considered/eligible/queued/consumed/budgetSkipped/samplerSkipped` 全链路累计；纯 eligibility 检查没有预留副作用，采样器拒绝单独计数，预算为 0 时仅对真正 eligible 的候选计 `budgetSkipped`。
+5. 长期关联 margin 可追溯：LONG_TERM 的 `AssocEvidence.extra` 写入 `bestScore/secondBestScore/matchMargin/minMatchMargin`；回归通过真实 SQLite 持久化和路由格式化验证正 margin，没有预填自证字段。
+6. 缺失拓扑策略不再伪造：前端仅在 `directed`、`missingEdgePolicy` 和 `edges` 快照完整时描述策略，否则明确显示“等待策略快照”。
+7. 四类现场回归走真实边界：确定性外部 stub 驱动实际 `_process_frame/_process_frame_locked`、`_resolve_overlay_global`、collector/claimed 互斥和 tracker release；覆盖错误复用、静态局部 ID 切换、合法 non-overlap 续接和延迟帧振荡，没有复制 `peek_sticky` 算法。
+
+自审额外发现并修复：分离的人/车检测器逐个执行时，后执行模型失败不能覆盖前一个模型已记录的成功状态；共享模型仍会对两个角色记录同一次成功或失败。
+
+### GREEN 与最终验证
+
+```text
+focused 后端：25 passed, 11 warnings in 41.02s
+前端纯函数：11 passed, 0 failed
+完整 MTMC：177 passed, 46 warnings in 142.24s
+Python py_compile：exit code 0
+git diff --check：exit code 0（仅 LF→CRLF 提示）
+```
+
+前端生产构建：
+
+```text
+npm run build
+2731 modules transformed
+built in 25.70s
+exit code 0
+```
+
+### 本轮变更文件 SHA-256
+
+```text
+0c0c0a9f6c646e821c751f69ca5e36944297e32b41e675c613ebdd1fb2e97bd4  backend/person_reid_dnn.py
+d57af7fe6636a8703aa02a489d15e6c9a9c6d05ae97feea8b93401fa302f4e87  backend/routes/mtmc.py
+85b02b402ef4f6b850230fa295a8ba933910ccf854bcf34953ee14ff8b4eb809  backend/services/mtmc_associator.py
+38d3fb1c7865ca5c78eee9371cf087e0b2b9ccb7c7b821e0ccb347b945b08a07  backend/services/mtmc_engine.py
+cc111fcf3287ac9c6bc2e7389f79edadf959dabdb35dd5727417aa5eae5c19b9  backend/services/mtmc_tracklet.py
+6b00bafeb51c3a39123da688db2cbad85f99f687f6ed1f543f0ed78b4d04ede3  backend/services/strong_reid.py
+f535e91f2619ac76faa94295f1f2152e75282e122a8339dc706377c9fb8be26e  backend/unittests/test_mtmc_reid_runtime.py
+d0b441ec83239729269f327e458cb3f27ba5d8afecea284df397496d75d1af35  backend/unittests/test_mtmc_runtime_status.py
+2c59a21f26117481dd58339b02315c599ee213ddec755d6bd91f777d11f0ad83  backend/unittests/test_mtmc_stream_regressions.py
+a6a0963a7eb69a469c6f0077fdbec5a0c10babd901b648599cd218f901740cb0  frontend/frontend_admin/src/utils/mtmcRuntimeStatus.js
+fc13627bec2feb5d3b6212612e8fadf97d22c3db1f3648d47dec319dd5c6891f  frontend/frontend_admin/src/utils/mtmcRuntimeStatus.test.js
+6f24cf13d419d3e63b96ebdd69a216f5b7fe21ffb42a700e15c8ebe698a01c18  frontend/frontend_admin/src/views/ai/mtmc/index.vue
+```
+
+### 自审与关注项
+
+- 模型硬件边界：CI 未加载生产 GPU、摄像头和真实模型资产；backend/provider/输入/维度要在部署环境完成首帧后才能得到硬件实测值，首帧前 UI 会保持等待状态。
+- 告警：完整套件的 46 条 warning 为 42 条既有 `datetime.utcnow()` 弃用提示、2 条 SQLAlchemy `Query.get()` 弃用提示和 2 条受限 `.pytest_cache` 写入提示；不影响退出码。Vite 仍有第三方 PURE 注释及既有大 chunk 警告。
+- 清理：本轮创建的 10 个 `.pytest-task6-r1-*` 临时目录均在验证绝对路径属于工作区后删除；未触碰既有且权限受限的 `.pytest_cache`。

@@ -45,22 +45,33 @@ export function runtimeModelRows(runtime = {}) {
       if (models[role]) roles.push(role)
     }
   }
-  return roles.map((role) => {
-    const status = models[role] || {}
+  const makeRow = (role, status, cameraId = null) => {
     return {
       role,
       roleLabel: ROLE_LABELS[role] || role,
-      selectedModelKey: status.selectedModelKey || '—',
+      cameraId,
+      selectedModelKey: status.selectedModelKey || status.configuredModelKey || '—',
       modelVersion: status.modelVersion || '—',
       ready: status.ready,
       degraded: status.degraded,
       degradedReason: status.degradedReason || null,
+      backend: status.backend || '—',
       provider: status.provider || '—',
       inputSize: inputSizeLabel(status.inputSize),
       embeddingDim: status.embeddingDim ?? null,
       tone: runtimeTone(status),
       statusLabel: runtimeLabel(status),
     }
+  }
+  return roles.flatMap((role) => {
+    const status = models[role] || {}
+    const byCamera = status.byCamera || {}
+    if (status.mixed === true && Object.keys(byCamera).length) {
+      return Object.entries(byCamera)
+        .sort(([left], [right]) => Number(left) - Number(right))
+        .map(([cameraId, cameraStatus]) => makeRow(role, cameraStatus || {}, cameraId))
+    }
+    return [makeRow(role, status)]
   })
 }
 
@@ -77,10 +88,32 @@ export function associationScoreParts(row = {}) {
 }
 
 export function topologyPolicyText(policy = {}) {
+  if (
+    !policy
+    || typeof policy !== 'object'
+    || !Object.prototype.hasOwnProperty.call(policy, 'directed')
+    || !Object.prototype.hasOwnProperty.call(policy, 'missingEdgePolicy')
+    || !Array.isArray(policy.edges)
+  ) return '等待策略快照'
   const direction = policy.directed ? '有向' : '无向'
   const authority = policy.authoritative ? '权威策略' : '默认时间窗'
   const missing = policy.missingEdgePolicy === 'reject' ? '缺边拒绝' : '缺边按时间窗'
   return `${direction}${authority} · ${missing} · ${(policy.edges || []).length} 条边`
+}
+
+export function runtimeBudgetRows(budgets = {}) {
+  const labels = { personReid: '人员 ReID', vehicleReid: '车辆 ReID', plateOcr: '车牌 OCR' }
+  return Object.entries(budgets).map(([role, value = {}]) => ({
+    role,
+    label: labels[role] || role,
+    limitPerFrame: value.limitPerFrame ?? 0,
+    considered: value.considered ?? 0,
+    eligible: value.eligible ?? 0,
+    queued: value.queued ?? 0,
+    consumed: value.consumed ?? 0,
+    budgetSkipped: value.budgetSkipped ?? 0,
+    samplerSkipped: value.samplerSkipped ?? 0,
+  }))
 }
 
 export function runtimeRiskSummary(runtime = {}) {
