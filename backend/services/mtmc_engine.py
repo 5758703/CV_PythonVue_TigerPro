@@ -1376,6 +1376,22 @@ def _associate_tracklet(
     return g
 
 
+def _associate_prepared_tracklets(session, prepared: list[dict]) -> dict:
+    """Submit all prepared same-frame associations as one batch and map results."""
+    if not prepared:
+        return {}
+    results = session.associator.associate_batch([
+        dict(item["association"]) for item in prepared
+    ])
+    assigned = {}
+    for item, global_track in zip(prepared, results):
+        builder = item.get("builder")
+        if builder is not None:
+            builder.assigned_global_id = global_track.global_id
+        assigned[item["key"]] = global_track
+    return assigned
+
+
 def _resolve_overlay_global(
     session: MtmcSession,
     builder,

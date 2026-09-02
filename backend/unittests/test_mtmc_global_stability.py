@@ -241,3 +241,54 @@ def test_batch_confirms_only_mutual_best_independent_of_input_order():
     reverse = run((20, 10))
     assert forward[10][1] == reverse[10][1] == AssocMode.LONG_TERM.value
     assert forward[20][1] == reverse[20][1] != AssocMode.LONG_TERM.value
+
+
+def test_engine_prepared_tracklets_submit_one_multirow_batch():
+    from types import SimpleNamespace
+
+    from services.mtmc_engine import _associate_prepared_tracklets
+
+    calls: list[int] = []
+
+    class FakeAssociator:
+        def associate_batch(self, rows):
+            rows = list(rows)
+            calls.append(len(rows))
+            return [SimpleNamespace(global_id=f"V{index}") for index, _ in enumerate(rows)]
+
+    session = SimpleNamespace(associator=FakeAssociator())
+    prepared = [
+        {"key": 10, "association": {"object_type": "vehicle", "camera_id": 1, "local_track_id": 10}},
+        {"key": 20, "association": {"object_type": "vehicle", "camera_id": 1, "local_track_id": 20}},
+    ]
+
+    assigned = _associate_prepared_tracklets(session, prepared)
+
+    assert calls == [2]
+    assert assigned[10].global_id == "V0"
+    assert assigned[20].global_id == "V1"
+
+
+def test_batch_tie_band_uses_same_target_for_prepass_and_confirmation():
+    assoc = MtmcAssociator(
+        appear_thresh=0.4,
+        confirm_thresh=0.4,
+        cross_cam_tie_band=0.04,
+        min_match_margin=0.0,
+        topology={(1, 3): (0.0, 20.0), (2, 3): (0.0, 20.0)},
+    )
+    preferred = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=_v(1.0, 0.0), local_track_id=1, now=1.0,
+    )
+    other = assoc.associate(
+        object_type="vehicle", camera_id=2, embedding=_v(0.995, 0.1), local_track_id=2, now=1.0,
+    )
+    assoc.release_local("vehicle", 1, [1], now=1.1)
+    assoc.release_local("vehicle", 2, [2], now=1.1)
+    results = assoc.associate_batch([{
+        "object_type": "vehicle", "camera_id": 3, "embedding": _v(1.0, 0.02),
+        "local_track_id": 3, "now": 3.0,
+    }])
+
+    assert results[0].global_id in {preferred.global_id, other.global_id}
+    assert results[0].global_id == assoc.last_evidence.target_global_id

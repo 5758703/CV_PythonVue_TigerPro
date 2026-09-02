@@ -971,6 +971,63 @@ class MtmcAssociator:
             "candidateGlobalId": g.global_id,
         }
 
+    def _select_long_term_target(
+        self,
+        *,
+        object_type: str,
+        camera_id: int,
+        embedding: np.ndarray | None,
+        embedding_spaces: dict[tuple[str, int, str | None], np.ndarray],
+        score_weights: dict[str, float] | None,
+        identity_key: str | None,
+        plate: str | None,
+        reid_person_id: int | None,
+        local_track_id: int | None,
+        vehicle_class: str | None,
+        color_sig: np.ndarray | None,
+        visual_key: str | None,
+        excluded: set[str],
+        now: float,
+    ) -> tuple[str | None, float, dict, list[tuple[str, float]]]:
+        best_gid = None
+        best_score = -1.0
+        best_breakdown: dict = {}
+        ranked_scores: list[tuple[str, float]] = []
+        for g in self._iter_long_term_targets(
+            object_type, embedding, excluded,
+            reid_person_id=reid_person_id, plate=plate, identity_key=identity_key,
+        ):
+            if self._hard_conflict(
+                object_type, plate=plate, identity_key=identity_key,
+                vehicle_class=vehicle_class, camera_id=camera_id, target=g,
+            ):
+                continue
+            score, breakdown = self._score_long_term(
+                g, object_type=object_type, camera_id=camera_id,
+                embedding=embedding, embedding_spaces=embedding_spaces,
+                score_weights=score_weights, identity_key=identity_key, plate=plate,
+                reid_person_id=reid_person_id, local_track_id=local_track_id,
+                vehicle_class=vehicle_class, color_sig=color_sig,
+                visual_key=visual_key, now=now,
+            )
+            if score is None:
+                continue
+            ranked_scores.append((g.global_id, float(score)))
+            cross_proto = float(breakdown.get("crossProto") or -1.0)
+            if score > best_score:
+                best_gid, best_score, best_breakdown = g.global_id, score, breakdown
+            elif (
+                best_gid is not None
+                and (best_score - score) <= self.cross_cam_tie_band
+                and self._prefer_on_tie(
+                    g, self.tracks[best_gid], camera_id,
+                    vehicle_class=vehicle_class, cross_proto_new=cross_proto,
+                    cross_proto_old=float(best_breakdown.get("crossProto") or -1.0),
+                )
+            ):
+                best_gid, best_score, best_breakdown = g.global_id, score, breakdown
+        return best_gid, float(best_score), best_breakdown, ranked_scores
+
     def associate(
         self,
         *,
@@ -1125,61 +1182,14 @@ class MtmcAssociator:
                 or plate
                 or reid_person_id
             ):
-                for g in self._iter_long_term_targets(
-                    object_type,
-                    embedding,
-                    excluded,
-                    reid_person_id=reid_person_id,
-                    plate=plate,
-                    identity_key=identity_key,
-                ):
-                    if self._hard_conflict(
-                        object_type,
-                        plate=plate,
-                        identity_key=identity_key,
-                        vehicle_class=vc,
-                        camera_id=camera_id,
-                        target=g,
-                    ):
-                        continue
-                    score, breakdown = self._score_long_term(
-                        g,
-                        object_type=object_type,
-                        camera_id=camera_id,
-                        embedding=embedding,
-                        embedding_spaces=spaces,
-                        score_weights=score_weights,
-                        identity_key=identity_key,
-                        plate=plate,
-                        reid_person_id=reid_person_id,
-                        local_track_id=int(local_track_id) if local_track_id is not None else None,
-                        vehicle_class=vc,
-                        color_sig=color_sig,
-                        visual_key=visual_key,
-                        now=now,
-                    )
-                    if score is None:
-                        continue
-                    ranked_scores.append((g.global_id, float(score)))
-                    cp = float(breakdown.get("crossProto") or -1.0)
-                    if score > best_score:
-                        best_score = score
-                        best_gid = g.global_id
-                        best_breakdown = breakdown
-                    elif (
-                        best_gid is not None
-                        and (best_score - score) <= self.cross_cam_tie_band
-                        and self._prefer_on_tie(
-                            g,
-                            self.tracks[best_gid],
-                            camera_id,
-                            vehicle_class=vc,
-                            cross_proto_new=cp,
-                            cross_proto_old=float(best_breakdown.get("crossProto") or -1.0),
-                        )
-                    ):
-                        best_gid = g.global_id
-                        best_breakdown = breakdown
+                best_gid, best_score, best_breakdown, ranked_scores = self._select_long_term_target(
+                    object_type=object_type, camera_id=camera_id, embedding=embedding,
+                    embedding_spaces=spaces, score_weights=score_weights,
+                    identity_key=identity_key, plate=plate, reid_person_id=reid_person_id,
+                    local_track_id=int(local_track_id) if local_track_id is not None else None,
+                    vehicle_class=vc, color_sig=color_sig, visual_key=visual_key,
+                    excluded=excluded, now=now,
+                )
 
             prev_gid = None
             if local_track_id is not None:
@@ -1397,43 +1407,18 @@ class MtmcAssociator:
                     row.get("model_version"),
                 )
                 excluded = set(row.get("exclude_gids") or ())
-                best: tuple[str, float] | None = None
-                for g in self._iter_long_term_targets(
-                    object_type,
-                    embedding,
-                    excluded,
+                best_gid, best_score, _breakdown, _ranked = self._select_long_term_target(
+                    object_type=object_type, camera_id=camera_id, embedding=embedding,
+                    embedding_spaces=spaces, score_weights=row.get("score_weights"),
+                    identity_key=row.get("identity_key"), plate=row.get("plate"),
                     reid_person_id=row.get("reid_person_id"),
-                    plate=row.get("plate"),
-                    identity_key=row.get("identity_key"),
-                ):
-                    if self._hard_conflict(
-                        object_type,
-                        plate=row.get("plate"),
-                        identity_key=row.get("identity_key"),
-                        vehicle_class=row.get("vehicle_class"),
-                        camera_id=camera_id,
-                        target=g,
-                    ):
-                        continue
-                    score, _breakdown = self._score_long_term(
-                        g,
-                        object_type=object_type,
-                        camera_id=camera_id,
-                        embedding=embedding,
-                        embedding_spaces=spaces,
-                        score_weights=row.get("score_weights"),
-                        identity_key=row.get("identity_key"),
-                        plate=row.get("plate"),
-                        reid_person_id=row.get("reid_person_id"),
-                        local_track_id=(int(local_track_id) if local_track_id is not None else None),
-                        vehicle_class=row.get("vehicle_class"),
-                        color_sig=row.get("color_sig"),
-                        visual_key=row.get("visual_key"),
-                        now=now,
-                    )
-                    if score is not None and (best is None or score > best[1]):
-                        best = (g.global_id, float(score))
-                scores_by_row[index] = best
+                    local_track_id=(int(local_track_id) if local_track_id is not None else None),
+                    vehicle_class=row.get("vehicle_class"), color_sig=row.get("color_sig"),
+                    visual_key=row.get("visual_key"), excluded=excluded, now=now,
+                )
+                scores_by_row[index] = (
+                    (best_gid, best_score) if best_gid is not None else None
+                )
 
         best_row_by_global: dict[str, int] = {}
         for index, candidate in scores_by_row.items():
