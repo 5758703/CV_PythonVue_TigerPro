@@ -79,20 +79,21 @@ def _preprocess(image_bgr: np.ndarray, w: int, h: int) -> np.ndarray:
 def _infer_onnx(onnx_path: str, image_bgr: np.ndarray) -> np.ndarray:
     sess = _get_ort(onnx_path)
     inp = sess.get_inputs()[0]
-    shape = inp.shape  # NCHW
-    # 兼容 OSNet(128x256) 与 CLIP(224x224)
+    shape = list(inp.shape)  # NCHW
+    if len(shape) != 4:
+        raise ValueError(f"expected NCHW input, got {shape!r}")
     try:
-        h = int(shape[2]) if isinstance(shape[2], int) else OSNET_H
-        w = int(shape[3]) if isinstance(shape[3], int) else OSNET_W
-    except Exception:  # noqa: BLE001
-        h, w = OSNET_H, OSNET_W
-    if max(h, w) >= 200:
-        h, w = CLIP_H, CLIP_W
-    else:
-        h, w = OSNET_H, OSNET_W
+        h, w = int(shape[2]), int(shape[3])
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"ONNX input has dynamic spatial dimensions: {shape!r}") from e
+    if h <= 0 or w <= 0:
+        raise ValueError(f"ONNX input has invalid spatial dimensions: {shape!r}")
     blob = _preprocess(image_bgr, w, h)
     out = sess.run([sess.get_outputs()[0].name], {inp.name: blob})[0]
-    return np.asarray(out, dtype=np.float32).reshape(-1)
+    feat = np.asarray(out, dtype=np.float32).reshape(-1)
+    if feat.size == 0:
+        raise ValueError("ONNX model returned an empty embedding")
+    return feat
 
 
 def _l2(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -131,7 +132,12 @@ def extract_strong(strong_root: str | None, image_bgr: np.ndarray) -> tuple[np.n
         return None, {"strong": False}
     try:
         feat = _infer_onnx(onnx, image_bgr)
-        return _l2(feat), {"strong": True, "onnx": os.path.basename(onnx), "dim": int(feat.size)}
+        return _l2(feat), {
+            "strong": True,
+            "onnx": os.path.basename(onnx),
+            "modelKey": _strong_model_key(onnx),
+            "dim": int(feat.size),
+        }
     except Exception as e:  # noqa: BLE001
         return None, {"strong": False, "strongError": str(e)}
 
@@ -166,6 +172,85 @@ def color_sig_cosine(a: np.ndarray | None, b: np.ndarray | None) -> float:
     return float(np.dot(_l2(a), _l2(b)))
 
 
+def _strong_model_key(onnx_path: str) -> str:
+    """Return the stable gallery/model-space key for a strong ONNX asset."""
+    name = os.path.basename(onnx_path).lower()
+    if "clip" in name:
+        return "clip-reid-person"
+    if "fastreid" in name:
+        return "fastreid-osnet"
+    if "osnet" in name:
+        return "osnet-x1-0"
+    return f"strong-onnx:{name}"
+
+
+def _backend_status(meta: dict, error_key: str) -> dict:
+    error = meta.get(error_key)
+    if error:
+        return {"ready": False, "error": str(error)}
+    return {"ready": False}
+
+
+def extract_person_embeddings(
+    image_bgr: np.ndarray,
+    *,
+    youtu_root: str | None = None,
+    strong_root: str | None = None,
+) -> tuple[dict[str, np.ndarray], dict]:
+    """Extract independent embeddings keyed by their stable model spaces."""
+    strong, strong_meta = extract_strong(strong_root, image_bgr)
+    youtu, youtu_meta = extract_youtu(youtu_root, image_bgr)
+    spaces: dict[str, np.ndarray] = {}
+    backends = {
+        "strong": _backend_status(strong_meta, "strongError"),
+        "youtu": _backend_status(youtu_meta, "youtuError"),
+    }
+
+    if strong is not None:
+        key = str(strong_meta.get("modelKey") or _strong_model_key(strong_meta.get("onnx") or "unknown.onnx"))
+        spaces[key] = _l2(strong)
+        backends["strong"] = {"ready": True, "modelKey": key, "dim": int(spaces[key].size)}
+    if youtu is not None:
+        key = "opencv-person-reid-youtu"
+        spaces[key] = _l2(youtu)
+        backends["youtu"] = {
+            "ready": True,
+            "modelKey": key,
+            "modelVersion": youtu_meta.get("modelVersion"),
+            "dim": int(spaces[key].size),
+        }
+
+    best_key = next(iter(spaces), None)
+    return spaces, {
+        **youtu_meta,
+        **strong_meta,
+        "backends": backends,
+        "bestModelKey": best_key,
+        "backend": "strong" if strong is not None else ("youtu" if youtu is not None else None),
+        "dim": int(spaces[best_key].size) if best_key else 0,
+    }
+
+
+def fuse_similarity_scores(scores, weights) -> float | None:
+    """Fuse calibrated per-space scores while renormalizing available weights."""
+    weighted_scores: list[tuple[float, float]] = []
+    weight_map = dict(weights or {})
+    for key, score in dict(scores or {}).items():
+        if score is None:
+            continue
+        try:
+            score_f, weight_f = float(score), float(weight_map.get(key))
+        except (TypeError, ValueError):
+            continue
+        if not np.isfinite(score_f) or not np.isfinite(weight_f) or weight_f <= 0:
+            continue
+        weighted_scores.append((score_f, weight_f))
+    if not weighted_scores:
+        return None
+    total_weight = sum(weight for _, weight in weighted_scores)
+    return sum(score * weight for score, weight in weighted_scores) / total_weight
+
+
 def extract_person_embedding(
     image_bgr: np.ndarray,
     *,
@@ -173,29 +258,19 @@ def extract_person_embedding(
     strong_root: str | None = None,
     fuse_weight_strong: float = 0.65,
 ) -> tuple[np.ndarray, dict]:
-    """并联强 ReID 与 Youtu：均可用则加权融合到统一维度；否则取可用者。"""
-    strong, sm = extract_strong(strong_root, image_bgr)
-    youtu, ym = extract_youtu(youtu_root, image_bgr)
-    meta = {**ym, **sm}
-
-    if strong is not None and youtu is not None:
-        dim = max(int(strong.size), int(youtu.size))
-        s = _pad_or_trim(strong, dim)
-        y = _pad_or_trim(youtu, dim)
-        w = float(np.clip(fuse_weight_strong, 0.0, 1.0))
-        fused = _l2(w * s + (1.0 - w) * y)
-        meta.update({"backend": "strong+youtu", "dim": int(fused.size), "fuseWeightStrong": w})
-        return fused, meta
-    if strong is not None:
-        meta.update({"backend": "strong", "dim": int(strong.size)})
-        return strong, meta
-    if youtu is not None:
-        meta.update({"backend": "youtu", "dim": int(youtu.size)})
-        return youtu, meta
+    """Compatibility wrapper returning the best single, unmodified space."""
+    del fuse_weight_strong
+    spaces, meta = extract_person_embeddings(
+        image_bgr, youtu_root=youtu_root, strong_root=strong_root,
+    )
+    key = meta.get("bestModelKey")
+    if key is not None:
+        return spaces[key], {**meta, "modelKey": key}
     raise RuntimeError("无可用行人 ReID 后端（强模型与 Youtu 均不可用）")
 
 
 def cosine(a: np.ndarray, b: np.ndarray) -> float:
     x, y = _l2(a), _l2(b)
-    dim = max(x.size, y.size)
-    return float(np.dot(_pad_or_trim(x, dim), _pad_or_trim(y, dim)))
+    if x.size != y.size:
+        raise ValueError("cannot compare embeddings from different dimensions/model spaces")
+    return float(np.dot(x, y))

@@ -107,6 +107,14 @@ def match_embedding(
             "score": 0.0,
             "matched": False,
         }
+    if mat.ndim != 2 or mat.shape[1] != q.size:
+        return {
+            "personId": None,
+            "facePersonId": None,
+            "name": "未知",
+            "score": 0.0,
+            "matched": False,
+        }
     scores = mat @ q
     idx = int(np.argmax(scores))
     score = float(scores[idx])
@@ -129,6 +137,8 @@ def topk_match(
     q = l2_normalize(embedding)
     person_ids, names, mat, face_person_ids = get_gallery(model_key, modality)
     if mat.size == 0 or not person_ids:
+        return []
+    if mat.ndim != 2 or mat.shape[1] != q.size:
         return []
     scores = mat @ q
     order = np.argsort(-scores)

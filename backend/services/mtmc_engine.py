@@ -818,13 +818,13 @@ def _gallery_model_keys(cfg: MtmcConfig, meta_backend: str | None = None) -> lis
     return out
 
 
-def _match_gallery(emb, model_keys: list[str], threshold: float):
+def _match_gallery(embeddings: dict[str, np.ndarray], threshold: float):
     try:
         from services.reid_gallery import match_embedding, match_embedding_faiss
     except Exception:  # noqa: BLE001
         return {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
     best = {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
-    for key in model_keys:
+    for key, emb in embeddings.items():
         try:
             row = match_embedding_faiss(emb, key, threshold=threshold)
         except Exception:  # noqa: BLE001
@@ -1471,7 +1471,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
         cam_state.detect_fps = _rolling_fps(cam_state._detect_times, now)
         return
 
-    from services.strong_reid import extract_person_embedding, color_signature
+    from services.strong_reid import extract_person_embeddings, color_signature
     from services.vehicle_reid_feat import extract_vehicle_embedding, fuse_plate_visual, infer_vehicle_class
     from services.vehicle_track import congestion_level, get_session as get_vsession
     from services.reid_gallery import l2_normalize
@@ -1535,26 +1535,34 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
             )
             need_reid = (sticky_gid is None or bool(getattr(t, "is_new", False))) and reid_left > 0
             emb, meta = None, {}
+            embeddings: dict[str, np.ndarray] = {}
             c_sig = None
             gallery = {"matched": False, "name": None, "personId": None, "score": 0.0}
             if need_reid:
                 reid_left -= 1
                 try:
-                    emb, meta = extract_person_embedding(
+                    embeddings, meta = extract_person_embeddings(
                         crop,
                         youtu_root=cfg.youtu_root,
                         strong_root=cfg.strong_reid_root,
-                        fuse_weight_strong=cfg.fuse_weight_strong,
                     )
-                    emb = l2_normalize(emb)
+                    embeddings = {key: l2_normalize(value) for key, value in embeddings.items()}
+                    model_key = meta.get("bestModelKey")
+                    if model_key in embeddings:
+                        emb = embeddings[model_key]
                     c_sig = color_signature(crop)
-                except Exception:  # noqa: BLE001
-                    emb, meta = None, {}
-                if emb is not None:
+                except Exception as e:  # noqa: BLE001
+                    emb, embeddings = None, {}
+                    meta = {"backends": {"runtime": {"ready": False, "error": str(e)}}}
+                if embeddings:
                     try:
+                        gallery_embeddings = embeddings
+                        if cfg.gallery_model_key:
+                            gallery_embeddings = {
+                                cfg.gallery_model_key: embeddings[cfg.gallery_model_key]
+                            } if cfg.gallery_model_key in embeddings else {}
                         gallery = _match_gallery(
-                            emb,
-                            _gallery_model_keys(cfg, meta.get("backend")),
+                            gallery_embeddings,
                             cfg.appear_thresh,
                         )
                     except Exception:  # noqa: BLE001
@@ -1567,7 +1575,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 embedding=emb,
                 visual_key="rider" if is_rider else None,
                 trail=list(t.trail),
-                meta={"reidBackend": meta.get("backend")},
+                meta={"reidBackend": meta.get("backend"), "reidModelKey": meta.get("bestModelKey")},
                 now=now,
             )
             agg_emb = builder.aggregate_embedding()
@@ -1611,6 +1619,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 "label": label,
                 "attrs": {
                     "reidBackend": meta.get("backend"),
+                    "reidReadiness": meta.get("backends"),
                     "cameraId": cam_id,
                     "assocMode": getattr(g, "last_assoc_mode", None) if g else None,
                     "reidSkipped": not need_reid,
