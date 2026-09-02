@@ -1250,6 +1250,43 @@ def _persist_pass(app, row: dict):
         log.debug("persist pass failed: %s", e)
 
 
+def _record_event_and_pass(
+    session: MtmcSession,
+    *,
+    event_row: dict,
+    now: float,
+    persist_event: bool = False,
+    pass_row: dict | None = None,
+) -> str | None:
+    """Canonicalize and persist frame output without racing promotion."""
+    with session._candidate_lock:
+        global_id = _canonical_gid_locked(session, event_row.get("globalId"))
+        canonical_event = {**event_row, "globalId": global_id}
+        canonical_pass = (
+            {**pass_row, "globalId": global_id} if pass_row is not None else None
+        )
+        with session._events_lock:
+            session.events.append({**canonical_event, "ts": now})
+            if len(session.events) > 500:
+                session.events = session.events[-400:]
+            if persist_event:
+                _persist_event(session.app, canonical_event)
+
+            if canonical_pass is not None:
+                pass_key = f"{global_id}:{canonical_pass['cameraId']}"
+                seen = getattr(session, "_pass_seen", None)
+                if seen is None:
+                    session._pass_seen = set()
+                    seen = session._pass_seen
+                if pass_key not in seen:
+                    seen.add(pass_key)
+                    session.passes.append({**canonical_pass, "ts": now})
+                    if len(session.passes) > 300:
+                        session.passes = session.passes[-200:]
+                    _persist_pass(session.app, canonical_pass)
+        return global_id
+
+
 def _get_tracklet_builder(
     cam_state: CamState,
     *,
@@ -1561,44 +1598,36 @@ class _FrameAssociationCollector:
                     **resolved_item,
                     "congestion": resolved_item.get("congestion"),
                 }
-                with self.session._events_lock:
-                    self.session.events.append({**row, "ts": self.now})
-                    if len(self.session.events) > 500:
-                        self.session.events = self.session.events[-400:]
                 cam_state = self.session.cams.get(int(builder.camera_id))
-                if (
+                persist_event = bool(
                     cam_state is not None
                     and self.session.cfg.persist_events
                     and self.now - float(cam_state.last_persist_at or 0) >= 1.0
-                ):
-                    _persist_event(self.session.app, row)
-                    cam_state.last_persist_at = self.now
+                )
+                pass_row = None
                 if object_type == "vehicle" and self.session.cfg.persist_events:
-                    pass_key = f"{g.global_id}:{builder.camera_id}"
-                    seen = getattr(self.session, "_pass_seen", None)
-                    if seen is None:
-                        self.session._pass_seen = set()
-                        seen = self.session._pass_seen
-                    if pass_key not in seen:
-                        seen.add(pass_key)
-                        pass_row = {
-                            "sessionId": self.session.session_id,
-                            "cameraId": builder.camera_id,
-                            "globalId": g.global_id,
-                            "identityKey": resolved_item.get("identityKey"),
-                            "plate": resolved_item.get("plate"),
-                            "plateScore": resolved_item.get("plateScore"),
-                            "visualScore": resolved_item.get("visualScore"),
-                            "fuseScore": resolved_item.get("fuseScore"),
-                            "speedKmh": resolved_item.get("speedKmh"),
-                            "congestion": resolved_item.get("congestion"),
-                            "localTrackId": builder.local_track_id,
-                        }
-                        with self.session._events_lock:
-                            self.session.passes.append({**pass_row, "ts": self.now})
-                            if len(self.session.passes) > 300:
-                                self.session.passes = self.session.passes[-200:]
-                        _persist_pass(self.session.app, pass_row)
+                    pass_row = {
+                        "sessionId": self.session.session_id,
+                        "cameraId": builder.camera_id,
+                        "globalId": g.global_id,
+                        "identityKey": resolved_item.get("identityKey"),
+                        "plate": resolved_item.get("plate"),
+                        "plateScore": resolved_item.get("plateScore"),
+                        "visualScore": resolved_item.get("visualScore"),
+                        "fuseScore": resolved_item.get("fuseScore"),
+                        "speedKmh": resolved_item.get("speedKmh"),
+                        "congestion": resolved_item.get("congestion"),
+                        "localTrackId": builder.local_track_id,
+                    }
+                resolved_item["globalId"] = _record_event_and_pass(
+                    self.session,
+                    event_row=row,
+                    pass_row=pass_row,
+                    now=self.now,
+                    persist_event=persist_event,
+                )
+                if persist_event:
+                    cam_state.last_persist_at = self.now
 
 
 def _resolve_overlay_global(
@@ -2209,12 +2238,17 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                     **item,
                     "congestion": None,
                 }
-                with session._events_lock:
-                    session.events.append({**row, "ts": now})
-                    if len(session.events) > 500:
-                        session.events = session.events[-400:]
-                if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
-                    _persist_event(session.app, row)
+                persist_event = bool(
+                    cfg.persist_events
+                    and (now - float(cam_state.last_persist_at or 0)) >= 1.0
+                )
+                item["globalId"] = _record_event_and_pass(
+                    session,
+                    event_row=row,
+                    now=now,
+                    persist_event=persist_event,
+                )
+                if persist_event:
                     cam_state.last_persist_at = now
         collector.flush("person", items)
         finalized = _finalize_removed_builders(
@@ -2412,38 +2446,34 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             items.append(item)
             if g is not None:
                 row = {"sessionId": session.session_id, "cameraId": cam_id, **item}
-                with session._events_lock:
-                    session.events.append({**row, "ts": now})
-                    if len(session.events) > 500:
-                        session.events = session.events[-400:]
-                if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
-                    _persist_event(session.app, row)
+                persist_event = bool(
+                    cfg.persist_events
+                    and (now - float(cam_state.last_persist_at or 0)) >= 1.0
+                )
+                pass_row = None
+                if persist_event:
+                    pass_row = {
+                        "sessionId": session.session_id,
+                        "cameraId": cam_id,
+                        "globalId": g.global_id,
+                        "identityKey": item.get("identityKey"),
+                        "plate": item.get("plate"),
+                        "plateScore": item.get("plateScore"),
+                        "visualScore": item.get("visualScore"),
+                        "fuseScore": item.get("fuseScore"),
+                        "speedKmh": speed,
+                        "congestion": cong,
+                        "localTrackId": t.track_id,
+                    }
+                item["globalId"] = _record_event_and_pass(
+                    session,
+                    event_row=row,
+                    pass_row=pass_row,
+                    now=now,
+                    persist_event=persist_event,
+                )
+                if persist_event:
                     cam_state.last_persist_at = now
-                    pass_key = f"{g.global_id}:{cam_id}"
-                    seen = getattr(session, "_pass_seen", None)
-                    if seen is None:
-                        session._pass_seen = set()
-                        seen = session._pass_seen
-                    if pass_key not in seen:
-                        seen.add(pass_key)
-                        pass_row = {
-                            "sessionId": session.session_id,
-                            "cameraId": cam_id,
-                            "globalId": g.global_id,
-                            "identityKey": item.get("identityKey"),
-                            "plate": item.get("plate"),
-                            "plateScore": item.get("plateScore"),
-                            "visualScore": item.get("visualScore"),
-                            "fuseScore": item.get("fuseScore"),
-                            "speedKmh": speed,
-                            "congestion": cong,
-                            "localTrackId": t.track_id,
-                        }
-                        with session._events_lock:
-                            session.passes.append({**pass_row, "ts": now})
-                            if len(session.passes) > 300:
-                                session.passes = session.passes[-200:]
-                        _persist_pass(session.app, pass_row)
         collector.flush("vehicle", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "vehicle", _pop_removed_track_ids(cam_state.tracker_vehicle),
@@ -2606,11 +2636,17 @@ def start_session(
 
 
 def _replace_live_global_id(session: MtmcSession, old_gid: str, new_gid: str) -> None:
-    """Rekey output caches after a successfully persisted promotion."""
+    """Rekey live caches while the caller holds candidate then events locks."""
     for collection in (session.events, session.passes, session.cross_events):
         for row in collection:
             if row.get("globalId") == old_gid:
                 row["globalId"] = new_gid
+    seen = getattr(session, "_pass_seen", None)
+    if seen is not None:
+        session._pass_seen = {
+            f"{new_gid}:{key.split(':', 1)[1]}" if key.startswith(f"{old_gid}:") else key
+            for key in seen
+        }
     if old_gid in session._global_last_cam:
         session._global_last_cam[new_gid] = session._global_last_cam.pop(old_gid)
     if old_gid in session._global_last_seen_ts:
@@ -2640,21 +2676,22 @@ def promote_candidate(session_id: str, global_id: str, candidate_global_id: str)
         drop = s.associator.get_track(global_id)
         if keep is None or drop is None or keep.object_type != drop.object_type:
             return {"ok": False, "message": "merge unavailable"}
-        if not resolve_candidate_pair(
-            s.app,
-            session_id=session_id,
-            global_id=global_id,
-            candidate_global_id=candidate_global_id,
-            status="promoted",
-        ):
-            return {"ok": False, "message": "persistent promotion failed"}
-        s._gid_alias[global_id] = candidate_global_id
-        g = s.associator.merge_globals(candidate_global_id, global_id)
-        if g is None:
-            return {"ok": False, "message": "in-memory merge failed"}
-        s.associator.resolve_live_candidate(global_id, candidate_global_id, "promoted")
-        _replace_live_global_id(s, global_id, candidate_global_id)
-        return {"ok": True, "globalId": g.global_id, "mergedFrom": global_id}
+        with s._events_lock:
+            if not resolve_candidate_pair(
+                s.app,
+                session_id=session_id,
+                global_id=global_id,
+                candidate_global_id=candidate_global_id,
+                status="promoted",
+            ):
+                return {"ok": False, "message": "persistent promotion failed"}
+            s._gid_alias[global_id] = candidate_global_id
+            g = s.associator.merge_globals(candidate_global_id, global_id)
+            if g is None:
+                return {"ok": False, "message": "in-memory merge failed"}
+            s.associator.resolve_live_candidate(global_id, candidate_global_id, "promoted")
+            _replace_live_global_id(s, global_id, candidate_global_id)
+            return {"ok": True, "globalId": g.global_id, "mergedFrom": global_id}
 
 
 def reject_candidate(session_id: str, global_id: str, candidate_global_id: str) -> dict:

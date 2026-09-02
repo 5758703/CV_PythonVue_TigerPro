@@ -104,6 +104,37 @@ backend/unittests/test_mtmc_evidence_consistency.py 6C2F20050E2AEE6230FA4A39AB24
   deprecation warnings from model defaults and `mtmc_persist._utc_now`; this
   task does not alter the application-wide timestamp storage convention.
 
+## Round 4/5 follow-up
+
+Frame event/pass output now has one canonical persistence boundary. It takes
+the session candidate lock, resolves the latest GID alias, then takes the
+events lock before appending the event/pass caches and performing their short
+database writes. Both deferred collector output and ordinary person/vehicle
+frame output use this boundary; pass deduplication is covered by the same
+critical section.
+
+Promotion takes the identical candidate-then-events lock order across the
+database rewrite and live cache rewrite. It also rekeys the live pass-dedup
+cache, so a promoted pass cannot be reintroduced under its retired key.
+
+The regression barrier pauses a collector immediately after
+`_record_association`, promotes the returned global, then releases event/pass
+output. Its real SQLite assertions cover both `mtmc_track_event` and
+`mtmc_vehicle_pass`, in addition to the corresponding session caches. A
+second concurrent test enforces candidate-before-events acquisition and
+checks that event, pass, and promotion persistence all execute while both
+locks are held.
+
+```text
+RED: 2 failed (old GID reintroduced after promotion; persistence boundary absent)
+GREEN: 2 passed, 9 warnings in 19.89s
+Focused: 16 passed, 35 warnings in 75.96s
+Related MTMC regression: 77 passed in 3.58s
+Final combined focused + related regression: 93 passed, 35 warnings in 80.51s
+python -m py_compile backend/services/mtmc_engine.py backend/unittests/test_mtmc_evidence_consistency.py: exit 0
+git diff --check: exit 0
+```
+
 ## Round 1/5 follow-up
 
 Added RED/GREEN coverage for global-ID rewrite across candidate pairs,

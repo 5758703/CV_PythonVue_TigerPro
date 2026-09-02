@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -324,3 +325,173 @@ def test_finalize_holds_candidate_lock_through_tracklet_persistence(monkeypatch)
         release.set()
         finalize.result(timeout=2)
         assert promote.result(timeout=2)["ok"]
+
+
+def test_promotion_between_association_and_event_write_leaves_no_old_gid(monkeypatch, candidate_db):
+    associator = MtmcAssociator(appear_thresh=0.99, confirm_thresh=0.99)
+    keep = associator.associate(
+        object_type="vehicle", camera_id=1,
+        embedding=np.asarray([1.0, 0.0]), now=1.0,
+    )
+    drop = associator.associate(
+        object_type="vehicle", camera_id=2,
+        embedding=np.asarray([0.0, 1.0]), now=2.0,
+    )
+    session = MtmcSession(
+        "event-race", MtmcConfig(camera_ids=[], persist_events=True),
+        associator, app=candidate_db,
+    )
+    session.cams[2] = mtmc_engine.CamState(camera_id=2)
+    builder = SimpleNamespace(
+        tracklet_id="tl-race", object_type="vehicle", camera_id=2,
+        local_track_id=22, assigned_global_id=drop.global_id,
+    )
+    item = {
+        "objectType": "vehicle", "globalId": drop.global_id,
+        "localTrackId": 22, "trackletId": "tl-race", "attrs": {},
+        "identityKey": None, "plate": None, "plateScore": 0.0,
+        "visualScore": 0.0, "fuseScore": 0.0, "speedKmh": 0.0,
+        "congestion": None,
+    }
+    collector = mtmc_engine._FrameAssociationCollector(session, now=10.0)
+    collector.pending["vehicle"] = [{
+        "key": 22, "builder": builder, "association": {}, "evidence": None,
+    }]
+    association_recorded = threading.Event()
+    allow_event_write = threading.Event()
+    original_record = mtmc_engine._record_association
+
+    with candidate_db.app_context():
+        db.session.add(MtmcCandidatePair(
+            session_id=session.session_id,
+            global_id=drop.global_id,
+            candidate_global_id=keep.global_id,
+            object_type="vehicle",
+        ))
+        db.session.commit()
+
+    monkeypatch.setattr(mtmc_engine, "get_session", lambda _sid: session)
+    monkeypatch.setattr(
+        mtmc_engine, "_associate_prepared_tracklets",
+        lambda *_args, **_kwargs: {22: drop},
+    )
+
+    def record_then_pause(*args, **kwargs):
+        result = original_record(*args, **kwargs)
+        association_recorded.set()
+        assert allow_event_write.wait(timeout=2)
+        return result
+
+    monkeypatch.setattr(mtmc_engine, "_record_association", record_then_pause)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        writer = pool.submit(collector.flush, "vehicle", [item])
+        assert association_recorded.wait(timeout=2)
+        try:
+            promoted = mtmc_engine.promote_candidate(
+                session.session_id, drop.global_id, keep.global_id,
+            )
+            assert promoted["ok"]
+        finally:
+            allow_event_write.set()
+        writer.result(timeout=2)
+
+    assert all(row["globalId"] != drop.global_id for row in session.events)
+    assert all(row["globalId"] != drop.global_id for row in session.passes)
+    with candidate_db.app_context():
+        assert MtmcTrackEvent.query.filter_by(
+            session_id=session.session_id, global_id=drop.global_id,
+        ).count() == 0
+        assert MtmcVehiclePass.query.filter_by(
+            session_id=session.session_id, global_id=drop.global_id,
+        ).count() == 0
+
+
+def test_event_write_and_promotion_share_candidate_then_events_lock_order(monkeypatch):
+    held = threading.local()
+    entered: list[tuple[str, str]] = []
+
+    class OrderedLock:
+        def __init__(self, name, lock):
+            self.name = name
+            self.lock = lock
+
+        def __enter__(self):
+            stack = getattr(held, "stack", [])
+            if self.name == "events":
+                assert stack and stack[-1] == "candidate"
+            self.lock.acquire()
+            stack.append(self.name)
+            held.stack = stack
+            entered.append((threading.current_thread().name, self.name))
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            stack = held.stack
+            assert stack.pop() == self.name
+            self.lock.release()
+
+    associator = MtmcAssociator(appear_thresh=0.99, confirm_thresh=0.99)
+    keep = associator.associate(
+        object_type="vehicle", camera_id=1,
+        embedding=np.asarray([1.0, 0.0]), now=1.0,
+    )
+    drop = associator.associate(
+        object_type="vehicle", camera_id=2,
+        embedding=np.asarray([0.0, 1.0]), now=2.0,
+    )
+    session = MtmcSession(
+        "lock-order", MtmcConfig(camera_ids=[], persist_events=True),
+        associator, app=object(),
+    )
+    session._candidate_lock = OrderedLock("candidate", threading.RLock())
+    session._events_lock = OrderedLock("events", threading.Lock())
+    persisted: list[str] = []
+
+    def assert_persist_lock(_app, *_args, **_kwargs):
+        assert held.stack == ["candidate", "events"]
+        persisted.append(threading.current_thread().name)
+        return True
+
+    monkeypatch.setattr(mtmc_engine, "get_session", lambda _sid: session)
+    monkeypatch.setattr("services.mtmc_persist.resolve_candidate_pair", assert_persist_lock)
+    monkeypatch.setattr(mtmc_engine, "_persist_event", assert_persist_lock)
+    monkeypatch.setattr(mtmc_engine, "_persist_pass", assert_persist_lock)
+    start = threading.Barrier(3)
+
+    def record_event_and_pass():
+        start.wait(timeout=2)
+        mtmc_engine._record_event_and_pass(
+            session,
+            event_row={
+                "sessionId": session.session_id, "cameraId": 2,
+                "objectType": "vehicle", "globalId": drop.global_id,
+            },
+            pass_row={
+                "sessionId": session.session_id, "cameraId": 2,
+                "globalId": drop.global_id,
+            },
+            now=3.0,
+            persist_event=True,
+        )
+
+    def promote():
+        start.wait(timeout=2)
+        return mtmc_engine.promote_candidate(
+            session.session_id, drop.global_id, keep.global_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        record = pool.submit(record_event_and_pass)
+        promotion = pool.submit(promote)
+        start.wait(timeout=2)
+        record.result(timeout=2)
+        assert promotion.result(timeout=2)["ok"]
+
+    assert len(persisted) == 3
+    per_thread = {}
+    for thread_name, lock_name in entered:
+        per_thread.setdefault(thread_name, []).append(lock_name)
+    assert all(names == ["candidate", "events"] for names in per_thread.values())
+    assert all(row["globalId"] == keep.global_id for row in session.events)
+    assert all(row["globalId"] == keep.global_id for row in session.passes)
