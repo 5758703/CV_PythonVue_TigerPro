@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import numpy as np
 
-from services.mtmc_associator import AssocMode, MtmcAssociator
+from services.mtmc_associator import AssocEvidence, AssocMode, MtmcAssociator
 
 
 def _v(*values: float) -> np.ndarray:
@@ -241,6 +243,59 @@ def test_batch_confirms_only_mutual_best_independent_of_input_order():
     reverse = run((20, 10))
     assert forward[10][1] == reverse[10][1] == AssocMode.LONG_TERM.value
     assert forward[20][1] == reverse[20][1] != AssocMode.LONG_TERM.value
+
+
+def test_batch_results_retain_each_row_association_evidence():
+    assoc = MtmcAssociator(
+        appear_thresh=0.5,
+        confirm_thresh=0.5,
+        candidate_thresh=0.3,
+        topology={(1, 3): (0.0, 20.0)},
+    )
+    target = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=_v(1.0, 0.0), local_track_id=1, now=1.0,
+    )
+    assoc.release_local("vehicle", 1, [1], now=1.1)
+    results = assoc.associate_batch([
+        {"object_type": "vehicle", "camera_id": 3, "embedding": _v(0.99, 0.1), "local_track_id": 10, "now": 3.0},
+        {"object_type": "vehicle", "camera_id": 3, "embedding": _v(0.9, 0.435), "local_track_id": 20, "now": 3.0},
+    ])
+
+    first, second = results
+    assert first.evidence is not None
+    assert second.evidence is not None
+    assert first.evidence.target_global_id == target.global_id
+    assert first.evidence.decision == AssocMode.LONG_TERM.value
+    assert second.evidence.decision == second.last_assoc_mode
+    assert first.evidence is not assoc.last_evidence
+
+
+def test_recorded_cross_event_uses_its_row_evidence_not_batch_last_evidence():
+    from services.mtmc_engine import MtmcConfig, MtmcSession, _record_association
+    from services.mtmc_tracklet import TrackletBuilder
+
+    session = MtmcSession("per-row-evidence", MtmcConfig(camera_ids=[1, 2], persist_events=True), MtmcAssociator())
+    global_track = session.associator.associate(
+        object_type="vehicle", camera_id=1, embedding=_v(1.0, 0.0), local_track_id=1, now=1.0,
+    )
+    row_evidence = AssocEvidence(decision="long_term", target_global_id=global_track.global_id)
+    session.associator.last_evidence = AssocEvidence(decision="new", target_global_id=global_track.global_id)
+    first = TrackletBuilder.create(
+        session_id="per-row-evidence", camera_id=1, object_type="vehicle", local_track_id=1, now=1.0,
+    )
+    second = TrackletBuilder.create(
+        session_id="per-row-evidence", camera_id=2, object_type="vehicle", local_track_id=2, now=2.0,
+    )
+
+    with patch("services.mtmc_persist.persist_global_identity"), patch(
+        "services.mtmc_persist.persist_association_edge"
+    ) as persist_edge, patch("services.mtmc_persist.persist_cross_camera_event") as persist_cross:
+        _record_association(session, first, global_track, prev_global_id=None, evidence=row_evidence)
+        _record_association(session, second, global_track, prev_global_id=None, evidence=row_evidence)
+
+    assert persist_edge.call_args.kwargs["evidence"]["decision"] == "long_term"
+    assert session.cross_events[-1]["decision"] == "long_term"
+    assert persist_cross.call_args.kwargs["decision"] == "long_term"
 
 
 def test_engine_prepared_tracklets_submit_one_multirow_batch():

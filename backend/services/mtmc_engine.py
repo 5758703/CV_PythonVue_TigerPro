@@ -1212,7 +1212,7 @@ def _get_tracklet_builder(
     return builder
 
 
-def _maybe_cross_camera_event(session: MtmcSession, builder, g, now: float):
+def _maybe_cross_camera_event(session: MtmcSession, builder, g, now: float, *, evidence=None):
     """P2：同一 Global 跨相机切换时写入轻量跨镜事件。"""
     if not session.cfg.persist_events:
         return
@@ -1220,7 +1220,7 @@ def _maybe_cross_camera_event(session: MtmcSession, builder, g, now: float):
     cur_cam = int(builder.camera_id)
     prev_cam = session._global_last_cam.get(gid)
     prev_ts = session._global_last_seen_ts.get(gid, now)
-    evidence = session.associator.last_evidence
+    evidence = evidence if evidence is not None else session.associator.last_evidence
     decision = evidence.decision if evidence else None
     if prev_cam is not None and int(prev_cam) != cur_cam:
         transit = float(now - prev_ts)
@@ -1308,7 +1308,7 @@ def _record_association(
             )
         if persist_tracklet_row:
             persist_tracklet(session.app, builder, global_id=g.global_id)
-    _maybe_cross_camera_event(session, builder, g, time.time())
+    _maybe_cross_camera_event(session, builder, g, time.time(), evidence=evidence)
 
 
 def _associate_tracklet(
@@ -1352,7 +1352,7 @@ def _associate_tracklet(
         prev_gid = None
 
     best_observation = builder.best_observation()
-    g = session.associator.associate_batch([{
+    result = session.associator.associate_batch([{
         "object_type": builder.object_type,
         "camera_id": builder.camera_id,
         "embedding": embedding,
@@ -1372,8 +1372,12 @@ def _associate_tracklet(
         "force_long_term": force,
         "observation_quality": (best_observation.quality if best_observation is not None else None),
     }])[0]
+    g = getattr(result, "global_track", result)
     builder.assigned_global_id = g.global_id
-    _record_association(session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False)
+    _record_association(
+        session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False,
+        evidence=getattr(result, "evidence", None),
+    )
     return g
 
 

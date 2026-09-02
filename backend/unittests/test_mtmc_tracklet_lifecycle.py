@@ -158,6 +158,57 @@ def test_process_frame_submits_same_type_prepared_tracks_as_one_batch():
     assert len(session.events) == 2
 
 
+def test_nonsticky_vehicle_batch_keeps_one_frame_pass_and_persistence():
+    session, cam_state = _session(person=False, vehicle=True)
+    session.cfg.vehicle_reid_budget = 1
+    session.cfg.persist_events = True
+    persisted: list[dict] = []
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], [static_vehicle()])):
+        with patch(
+            "services.vehicle_reid_feat.extract_vehicle_embedding",
+            return_value=(np.asarray([1.0, 0.0], dtype=np.float32), {"backend": "test"}),
+        ):
+            with patch("services.mtmc_engine._persist_pass", side_effect=lambda _app, row: persisted.append(row)):
+                _process_frame(session, cam_state, _frame(), {}, now=10.0)
+
+    assert len(session.passes) == len(persisted) == 1
+    assert session.passes[0]["globalId"] == cam_state.last_dets[0]["globalId"]
+
+
+def test_concurrent_cameras_keep_frame_collectors_local():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    session, first = _session(person=False, vehicle=True)
+    second = CamState(camera_id=2)
+    session.cams[2] = second
+    session.cfg.camera_ids = [1, 2]
+    session.cfg.vehicle_reid_budget = 1
+    barrier = Barrier(2)
+    batch_cameras: list[int] = []
+    original = session.associator.associate_batch
+
+    def synchronized_batch(rows):
+        rows = list(rows)
+        batch_cameras.extend(int(row["camera_id"]) for row in rows)
+        barrier.wait(timeout=2.0)
+        return original(rows)
+
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], [static_vehicle()])):
+        with patch.object(session.associator, "associate_batch", side_effect=synchronized_batch):
+            with patch(
+                "services.vehicle_reid_feat.extract_vehicle_embedding",
+                return_value=(np.asarray([1.0, 0.0], dtype=np.float32), {"backend": "test"}),
+            ):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    list(pool.map(lambda state: _process_frame(session, state, _frame(), {}, now=10.0), [first, second]))
+
+    assert not hasattr(session, "_frame_assoc_collector")
+    assert sorted(batch_cameras) == [1, 2]
+    assert first.last_dets[0]["attrs"]["cameraId"] == 1
+    assert second.last_dets[0]["attrs"]["cameraId"] == 2
+
+
 def test_unsampled_track_stays_first_after_budget_exhaustion_in_prior_frame():
     session, cam_state = _session(person=True, vehicle=False)
     session.cfg.person_reid_budget = 0
