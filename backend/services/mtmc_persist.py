@@ -227,23 +227,29 @@ def resolve_candidate_pair(
             from extensions import db
             from models.mtmc import MtmcCandidatePair, MtmcTracklet
 
-            row = (
+            rows = (
                 MtmcCandidatePair.query.filter_by(
                     session_id=session_id,
                     global_id=global_id,
                     candidate_global_id=candidate_global_id,
                     status="pending",
-                ).first()
+                ).all()
             )
-            if row is None:
+            if not rows:
                 return False
-            row.status = status
-            row.resolve_time = _utc_now()
+            resolved_at = _utc_now()
+            for row in rows:
+                row.status = status
+                row.resolve_time = resolved_at
             if status == "promoted":
                 for t in MtmcTracklet.query.filter_by(session_id=session_id, global_id=global_id).all():
                     t.global_id = candidate_global_id
             db.session.commit()
             return True
     except Exception as e:  # noqa: BLE001
+        try:
+            db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
         log.debug("resolve candidate pair failed: %s", e)
         return False

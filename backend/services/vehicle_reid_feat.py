@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import threading
 from typing import Any
 
@@ -221,6 +222,37 @@ def plate_reliable(plate: str | None, score: float | None = None) -> bool:
     return any(c.isalnum() for c in p)
 
 
+def normalize_vehicle_plate_text(text: str | None) -> str:
+    """Normalize OCR punctuation and common alphanumeric confusions per plate."""
+    plate = re.sub(r"\s+", "", (text or "").upper())
+    plate = re.sub(r"[^0-9A-Z\u4e00-\u9fff]", "", plate)
+    if len(plate) <= 2:
+        return plate
+    # Preserve the province and following letter; OCR confusions are only
+    # unambiguous in the serial portion of a Chinese vehicle plate.
+    return plate[:2] + plate[2:].translate(str.maketrans({
+        "O": "0", "D": "0", "Q": "0", "I": "1", "L": "1",
+        "B": "8", "S": "5", "Z": "2",
+    }))
+
+
+def aggregate_vehicle_plate_votes(observations) -> tuple[str | None, float]:
+    """Return the highest-confidence normalized multi-observation plate vote."""
+    votes: dict[str, list[float]] = {}
+    for observation in observations or ():
+        if isinstance(observation, dict):
+            text, score = observation.get("text"), observation.get("score")
+        else:
+            text, score = observation
+        plate = normalize_vehicle_plate_text(text)
+        if plate:
+            votes.setdefault(plate, []).append(max(0.0, float(score or 0.0)))
+    if not votes:
+        return None, 0.0
+    plate, scores = max(votes.items(), key=lambda item: (sum(item[1]), len(item[1]), item[0]))
+    return plate, sum(scores) / len(scores)
+
+
 def fuse_plate_visual(
     *,
     plate: str | None,
@@ -287,3 +319,8 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float:
     xa[: x.size] = x
     ya[: y.size] = y
     return float(np.dot(xa, ya))
+
+
+def vehicle_candidate_score(tracklet_embedding: np.ndarray, candidate_prototype: np.ndarray) -> float:
+    """Visual evidence is a tracklet-to-candidate comparison, never self-score."""
+    return cosine(tracklet_embedding, candidate_prototype)

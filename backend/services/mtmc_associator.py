@@ -1087,6 +1087,37 @@ class MtmcAssociator:
             force_candidate=force_candidate,
         ).global_track
 
+    def vehicle_candidate_prototype(
+        self,
+        *,
+        camera_id: int,
+        embedding: np.ndarray | None,
+        vehicle_class: str | None = None,
+        now: float | None = None,
+    ) -> np.ndarray | None:
+        """Return the selected existing vehicle prototype for visual evidence.
+
+        The caller must never substitute its observation embedding when no
+        target exists: that would turn a candidate score into self-similarity.
+        """
+        if embedding is None:
+            return None
+        ts = float(now if now is not None else time.time())
+        spaces, _ = _normalize_embedding_spaces(embedding, None, None, None)
+        with self._lock:
+            self._purge_expired(ts)
+            gid, _score, _breakdown, _ranked = self._select_long_term_target(
+                object_type="vehicle", camera_id=int(camera_id), embedding=embedding,
+                embedding_spaces=spaces, score_weights=None, identity_key=None,
+                plate=None, reid_person_id=None, local_track_id=None,
+                vehicle_class=vehicle_class, color_sig=None, visual_key=None,
+                excluded=set(), now=ts,
+            )
+            candidate = self.tracks.get(gid) if gid else None
+            if candidate is None or candidate.embedding is None:
+                return None
+            return np.asarray(candidate.embedding, dtype=np.float32).copy()
+
     def associate_with_evidence(
         self,
         *,
@@ -1130,6 +1161,7 @@ class MtmcAssociator:
 
         with self._lock:
             self._purge_expired(now)
+            evidence: AssocEvidence | None = None
 
             # ---- 1) 短时粘性：Kalman/IoU/ByteTrack 已保证同一 local_id ----
             is_new_local = True
@@ -1193,7 +1225,7 @@ class MtmcAssociator:
                                     skip_sticky = True
                         if not skip_sticky and now - g.last_seen <= self.local_sticky_sec:
                             self.last_mode = AssocMode.STICKY
-                            self.last_evidence = AssocEvidence(
+                            evidence = AssocEvidence(
                                 decision=AssocMode.STICKY.value,
                                 target_global_id=g.global_id,
                                 source_global_id=g.global_id,
@@ -1219,7 +1251,8 @@ class MtmcAssociator:
                                 mode=AssocMode.STICKY,
                                 update_embedding=False,
                             )
-                            return AssociationResult(g, self.last_evidence)
+                            self.last_evidence = evidence
+                            return AssociationResult(g, evidence)
                         self._local_bind.pop(bkey, None)
                         self._mark_lost_if_unbound(sticky_gid, now)
                 else:
@@ -1313,7 +1346,7 @@ class MtmcAssociator:
                     mode=AssocMode.LONG_TERM,
                     update_embedding=self._quality_qualified(observation_quality),
                 )
-                self.last_evidence = AssocEvidence(
+                evidence = AssocEvidence(
                     decision=AssocMode.LONG_TERM.value,
                     target_global_id=g.global_id,
                     source_global_id=prev_gid,
@@ -1372,7 +1405,7 @@ class MtmcAssociator:
                     "matchMargin": match_margin,
                     "ts": now,
                 })
-                self.last_evidence = AssocEvidence(
+                evidence = AssocEvidence(
                     decision=AssocMode.CANDIDATE.value,
                     target_global_id=g.global_id,
                     source_global_id=prev_gid,
@@ -1423,7 +1456,7 @@ class MtmcAssociator:
                     g, embedding, observation_spaces=spaces,
                     observation_quality=observation_quality,
                 )
-                self.last_evidence = AssocEvidence(
+                evidence = AssocEvidence(
                     decision=AssocMode.NEW.value,
                     target_global_id=g.global_id,
                     source_global_id=prev_gid,
@@ -1438,7 +1471,8 @@ class MtmcAssociator:
                 if bkey not in self._local_bind_at:
                     self._local_bind_at[bkey] = now
                 self._local_bind[bkey] = g.global_id
-            return AssociationResult(g, self.last_evidence)
+            self.last_evidence = evidence
+            return AssociationResult(g, evidence)
 
     def associate_batch(self, observations: Iterable[dict]) -> list[AssociationResult]:
         """Associate one same-frame batch with deterministic mutual-best gating.

@@ -417,6 +417,11 @@ def stop_session(session_id: str) -> bool:
         return False
     s._stop.set()
     s.running = False
+    current = threading.current_thread()
+    for worker in list(getattr(s, "_threads", ())):
+        if worker is current:
+            continue
+        worker.join(timeout=5.0)
     for cam_state in list(s.cams.values()):
         _flush_camera_tracklets(s, cam_state)
     upload_dir = getattr(s, "upload_dir", None)
@@ -1548,6 +1553,16 @@ def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | Non
             break
     emb = builder.aggregate_embedding(association_model_key)
     identity = builder.aggregate_identity()
+    if builder.object_type == "vehicle":
+        from services.vehicle_reid_feat import aggregate_vehicle_plate_votes, fuse_plate_visual
+
+        plate, plate_score = aggregate_vehicle_plate_votes(
+            (observation.plate, observation.plate_score)
+            for observation in builder.observations
+        )
+        identity.update(fuse_plate_visual(
+            plate=plate, plate_score=plate_score, emb_a=emb,
+        ))
     prev_gid = builder.assigned_global_id
     ex = set(exclude_gids or ())
     kwargs = dict(
@@ -2191,11 +2206,19 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                     plate_text = vsession.plates[t.track_id].get("text")
                     plate_score = float(vsession.plates[t.track_id].get("score") or 0)
 
+                candidate_prototype = session.associator.vehicle_candidate_prototype(
+                    camera_id=cam_id,
+                    embedding=emb,
+                    vehicle_class=infer_vehicle_class(
+                        getattr(t, "class_name", None), t.bbox, frame_h=fh, frame_w=fw,
+                    ),
+                    now=now,
+                )
                 fuse = fuse_plate_visual(
                     plate=plate_text,
                     plate_score=plate_score,
                     emb_a=emb,
-                    emb_b=emb,
+                    emb_b=candidate_prototype,
                 )
             elif t.track_id in vsession.plates:
                 plate_text = vsession.plates[t.track_id].get("text")
