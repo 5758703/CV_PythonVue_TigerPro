@@ -64,3 +64,34 @@ backend/unittests/test_mtmc_evidence_consistency.py 6C2F20050E2AEE6230FA4A39AB24
 - Tests pass, but SQLite/SQLAlchemy emits existing `datetime.utcnow()`
   deprecation warnings from model defaults and `mtmc_persist._utc_now`; this
   task does not alter the application-wide timestamp storage convention.
+
+## Round 1/5 follow-up
+
+Added RED/GREEN coverage for global-ID rewrite across candidate pairs,
+tracklets, track events, association-edge source/target fields, cross-camera
+events, vehicle passes and vehicle global identities.  Promotion now performs
+these changes in the resolver's single database commit, and rolls back on any
+exception.
+
+The engine validates the two live globals under a session candidate lock,
+persists the decision first, then merges in-memory tracks and rekeys live
+event/pass/camera caches. A failed persistence result leaves associator tracks
+and live candidate rows unchanged. Rejection now removes the live candidate
+relation and promotes its local global to an independent confirmed track only
+after persistence succeeds.
+
+Shutdown has a session finalization lock and once flag. It will not flush
+builders or delete upload data until every non-self worker has exited after the
+join timeout; concurrent successful callers observe exactly one finalization.
+
+```text
+RED: 4 failed, 6 passed (required failure modes observed)
+GREEN: pytest backend/unittests/test_mtmc_evidence_consistency.py -q -p no:cacheprovider
+10 passed, 26 warnings in 58.20s
+
+pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_p2.py backend/unittests/test_mtmc_tracklet.py backend/unittests/test_mtmc_tracklet_lifecycle.py -q -p no:cacheprovider
+77 passed in 3.58s
+
+git diff --check
+exit 0
+```

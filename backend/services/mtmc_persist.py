@@ -225,7 +225,11 @@ def resolve_candidate_pair(
     try:
         with app.app_context():
             from extensions import db
-            from models.mtmc import MtmcCandidatePair, MtmcTracklet
+            from models.mtmc import (
+                MtmcAssociationEdge, MtmcCandidatePair, MtmcCrossCameraEvent,
+                MtmcGlobalPerson, MtmcGlobalVehicle, MtmcTrackEvent,
+                MtmcTracklet, MtmcVehiclePass,
+            )
 
             rows = (
                 MtmcCandidatePair.query.filter_by(
@@ -242,8 +246,40 @@ def resolve_candidate_pair(
                 row.status = status
                 row.resolve_time = resolved_at
             if status == "promoted":
-                for t in MtmcTracklet.query.filter_by(session_id=session_id, global_id=global_id).all():
-                    t.global_id = candidate_global_id
+                def replace_global(persisted_rows, *fields):
+                    for persisted_row in persisted_rows:
+                        for field in fields:
+                            if getattr(persisted_row, field) == global_id:
+                                setattr(persisted_row, field, candidate_global_id)
+
+                replace_global(MtmcCandidatePair.query.filter_by(session_id=session_id).all(), "global_id", "candidate_global_id")
+                replace_global(MtmcTracklet.query.filter_by(session_id=session_id).all(), "global_id")
+                replace_global(MtmcTrackEvent.query.filter_by(session_id=session_id).all(), "global_id")
+                replace_global(MtmcAssociationEdge.query.filter_by(session_id=session_id).all(), "source_global_id", "target_global_id")
+                replace_global(MtmcCrossCameraEvent.query.filter_by(session_id=session_id).all(), "global_id")
+                replace_global(MtmcVehiclePass.query.filter_by(session_id=session_id).all(), "global_id")
+
+                old_person = MtmcGlobalPerson.query.filter_by(global_id=global_id).first()
+                keep_person = MtmcGlobalPerson.query.filter_by(global_id=candidate_global_id).first()
+                if old_person is not None:
+                    if keep_person is None:
+                        old_person.global_id = candidate_global_id
+                    else:
+                        for field in ("reid_person_id", "face_person_id", "display_name"):
+                            if not getattr(keep_person, field) and getattr(old_person, field):
+                                setattr(keep_person, field, getattr(old_person, field))
+                        db.session.delete(old_person)
+
+                old_vehicle = MtmcGlobalVehicle.query.filter_by(global_id=global_id).first()
+                keep_vehicle = MtmcGlobalVehicle.query.filter_by(global_id=candidate_global_id).first()
+                if old_vehicle is not None:
+                    if keep_vehicle is None:
+                        old_vehicle.global_id = candidate_global_id
+                    else:
+                        for field in ("plate", "visual_key", "identity_key"):
+                            if not getattr(keep_vehicle, field) and getattr(old_vehicle, field):
+                                setattr(keep_vehicle, field, getattr(old_vehicle, field))
+                        db.session.delete(old_vehicle)
             db.session.commit()
             return True
     except Exception as e:  # noqa: BLE001

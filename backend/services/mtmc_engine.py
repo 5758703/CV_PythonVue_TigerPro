@@ -320,6 +320,9 @@ class MtmcSession:
         self.running = False
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._candidate_lock = threading.RLock()
+        self._finalization_lock = threading.Lock()
+        self._stop_finalized = False
         self.cams: dict[int, CamState] = {}
         self.events: list[dict] = []
         self.passes: list[dict] = []
@@ -415,23 +418,37 @@ def stop_session(session_id: str) -> bool:
         s = _sessions.get(session_id)
     if not s:
         return False
-    s._stop.set()
-    s.running = False
-    current = threading.current_thread()
-    for worker in list(getattr(s, "_threads", ())):
-        if worker is current:
-            continue
-        worker.join(timeout=5.0)
-    for cam_state in list(s.cams.values()):
-        _flush_camera_tracklets(s, cam_state)
-    upload_dir = getattr(s, "upload_dir", None)
-    if upload_dir and os.path.isdir(upload_dir):
-        try:
-            import shutil
-            shutil.rmtree(upload_dir, ignore_errors=True)
-        except Exception as e:  # noqa: BLE001
-            log.debug("cleanup mtmc upload dir failed: %s", e)
-    return True
+    finalization_lock = getattr(s, "_finalization_lock", None)
+    if finalization_lock is None:
+        finalization_lock = threading.Lock()
+        s._finalization_lock = finalization_lock
+        s._stop_finalized = False
+    with finalization_lock:
+        if getattr(s, "_stop_finalized", False):
+            return True
+        s._stop.set()
+        s.running = False
+        current = threading.current_thread()
+        workers = list(getattr(s, "_threads", ()))
+        # A worker cannot wait for itself.  Its finally block flushes its
+        # camera; an external caller must perform upload cleanup later.
+        if any(worker is current for worker in workers):
+            return False
+        for worker in workers:
+            worker.join(timeout=5.0)
+        if any(callable(getattr(worker, "is_alive", None)) and worker.is_alive() for worker in workers):
+            return False
+        for cam_state in list(s.cams.values()):
+            _flush_camera_tracklets(s, cam_state)
+        upload_dir = getattr(s, "upload_dir", None)
+        if upload_dir and os.path.isdir(upload_dir):
+            try:
+                import shutil
+                shutil.rmtree(upload_dir, ignore_errors=True)
+            except Exception as e:  # noqa: BLE001
+                log.debug("cleanup mtmc upload dir failed: %s", e)
+        s._stop_finalized = True
+        return True
 
 
 def _resolve_cam_source(camera_row, upload_folder: str) -> str:
@@ -2502,37 +2519,71 @@ def start_session(
     return session
 
 
+def _replace_live_global_id(session: MtmcSession, old_gid: str, new_gid: str) -> None:
+    """Rekey output caches after a successfully persisted promotion."""
+    for collection in (session.events, session.passes, session.cross_events):
+        for row in collection:
+            if row.get("globalId") == old_gid:
+                row["globalId"] = new_gid
+    if old_gid in session._global_last_cam:
+        session._global_last_cam[new_gid] = session._global_last_cam.pop(old_gid)
+    if old_gid in session._global_last_seen_ts:
+        session._global_last_seen_ts[new_gid] = session._global_last_seen_ts.pop(old_gid)
+    for cam_state in session.cams.values():
+        with cam_state.state_lock:
+            for row in cam_state.last_dets:
+                if row.get("globalId") == old_gid:
+                    row["globalId"] = new_gid
+            updated = {}
+            for key, row in cam_state.session_dets.items():
+                if row.get("globalId") == old_gid:
+                    row["globalId"] = new_gid
+                    key = key.replace(f"global:{old_gid}", f"global:{new_gid}")
+                updated[key] = row
+            cam_state.session_dets = updated
+
+
 def promote_candidate(session_id: str, global_id: str, candidate_global_id: str) -> dict:
-    """P2：候选晋升 — 将 tentative global 合并进候选 Global。"""
     s = get_session(session_id)
     if not s:
-        return {"ok": False, "message": "会话不存在"}
-    g = s.associator.merge_globals(candidate_global_id, global_id)
-    if g is None:
-        return {"ok": False, "message": "合并失败"}
+        return {"ok": False, "message": "session not found"}
     from services.mtmc_persist import resolve_candidate_pair
 
-    resolve_candidate_pair(
-        s.app,
-        session_id=session_id,
-        global_id=global_id,
-        candidate_global_id=candidate_global_id,
-        status="promoted",
-    )
-    return {"ok": True, "globalId": g.global_id, "mergedFrom": global_id}
+    with s._candidate_lock:
+        keep = s.associator.get_track(candidate_global_id)
+        drop = s.associator.get_track(global_id)
+        if keep is None or drop is None or keep.object_type != drop.object_type:
+            return {"ok": False, "message": "merge unavailable"}
+        if not resolve_candidate_pair(
+            s.app,
+            session_id=session_id,
+            global_id=global_id,
+            candidate_global_id=candidate_global_id,
+            status="promoted",
+        ):
+            return {"ok": False, "message": "persistent promotion failed"}
+        g = s.associator.merge_globals(candidate_global_id, global_id)
+        if g is None:
+            return {"ok": False, "message": "in-memory merge failed"}
+        s.associator.resolve_live_candidate(global_id, candidate_global_id, "promoted")
+        _replace_live_global_id(s, global_id, candidate_global_id)
+        return {"ok": True, "globalId": g.global_id, "mergedFrom": global_id}
 
 
 def reject_candidate(session_id: str, global_id: str, candidate_global_id: str) -> dict:
     s = get_session(session_id)
     if not s:
-        return {"ok": False, "message": "会话不存在"}
+        return {"ok": False, "message": "session not found"}
     from services.mtmc_persist import resolve_candidate_pair
 
-    ok = resolve_candidate_pair(
-        s.app,
-        session_id=session_id,
-        global_id=global_id,
-        candidate_global_id=candidate_global_id,
-        status="rejected",
-    )
-    return {"ok": ok, "globalId": global_id, "candidateGlobalId": candidate_global_id}
+    with s._candidate_lock:
+        ok = resolve_candidate_pair(
+            s.app,
+            session_id=session_id,
+            global_id=global_id,
+            candidate_global_id=candidate_global_id,
+            status="rejected",
+        )
+        if ok:
+            s.associator.resolve_live_candidate(global_id, candidate_global_id, "rejected")
+        return {"ok": ok, "globalId": global_id, "candidateGlobalId": candidate_global_id}

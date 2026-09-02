@@ -1617,6 +1617,24 @@ class MtmcAssociator:
             )
             return keep
 
+    def resolve_live_candidate(self, global_id: str, candidate_global_id: str, status: str) -> None:
+        """Make the in-memory candidate state agree with its persisted decision."""
+        with self._lock:
+            self._candidates = [
+                row for row in self._candidates
+                if not (
+                    row.get("globalId") == global_id
+                    and row.get("candidateGlobalId") == candidate_global_id
+                )
+            ]
+            if status == "rejected":
+                candidate = self.tracks.get(global_id)
+                if candidate is not None:
+                    candidate.candidate = False
+                    candidate.confirmed = True
+                    candidate.last_assoc_mode = AssocMode.NEW.value
+                    self._gallery_upsert(candidate)
+
     def release_local(
         self,
         object_type: str,
