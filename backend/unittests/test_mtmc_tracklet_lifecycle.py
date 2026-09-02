@@ -131,6 +131,33 @@ def test_vehicle_reid_budget_remains_available_in_crowded_person_frame():
     assert vehicle_calls == [True]
 
 
+def test_process_frame_submits_same_type_prepared_tracks_as_one_batch():
+    session, cam_state = _session(person=False, vehicle=True)
+    session.cfg.vehicle_reid_budget = 2
+    vehicles = [
+        static_vehicle(),
+        {**static_vehicle(), "bbox": [20.0, 20.0, 90.0, 70.0]},
+    ]
+    calls: list[int] = []
+    original = session.associator.associate_batch
+
+    def spy(rows):
+        rows = list(rows)
+        calls.append(len(rows))
+        return original(rows)
+
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], vehicles)):
+        with patch.object(session.associator, "associate_batch", side_effect=spy):
+            with patch(
+                "services.vehicle_reid_feat.extract_vehicle_embedding",
+                return_value=(np.asarray([1.0, 0.0], dtype=np.float32), {"backend": "test"}),
+            ):
+                _process_frame(session, cam_state, _frame(), {}, now=10.0)
+
+    assert calls == [2]
+    assert len(session.events) == 2
+
+
 def test_unsampled_track_stays_first_after_budget_exhaustion_in_prior_frame():
     session, cam_state = _session(person=True, vehicle=False)
     session.cfg.person_reid_budget = 0

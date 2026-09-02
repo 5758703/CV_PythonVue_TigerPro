@@ -1392,6 +1392,79 @@ def _associate_prepared_tracklets(session, prepared: list[dict]) -> dict:
     return assigned
 
 
+class _FrameAssociationCollector:
+    """Collect non-sticky same-frame observations before mutating MTMC state."""
+
+    def __init__(self, session, now: float):
+        self.session = session
+        self.now = now
+        self.pending: dict[str, list[dict]] = {"person": [], "vehicle": []}
+
+    def enqueue(self, builder, associate_kwargs: dict) -> None:
+        best = builder.best_observation()
+        self.pending[builder.object_type].append({
+            "key": int(builder.local_track_id),
+            "builder": builder,
+            "association": {
+                "object_type": builder.object_type,
+                "camera_id": builder.camera_id,
+                "local_track_id": int(builder.local_track_id),
+                "exclude_gids": set(),
+                "now": self.now,
+                "observation_quality": best.quality if best is not None else None,
+                **associate_kwargs,
+            },
+        })
+
+    def flush(self, object_type: str, items: list[dict]) -> None:
+        prepared = self.pending[object_type]
+        self.pending[object_type] = []
+        assigned = _associate_prepared_tracklets(self.session, prepared)
+        for record in prepared:
+            builder = record["builder"]
+            g = assigned.get(record["key"])
+            if g is None:
+                continue
+            _record_association(self.session, builder, g, prev_global_id=None, persist_tracklet_row=False)
+            resolved_item = None
+            for item in items:
+                if (
+                    item.get("objectType") == object_type
+                    and int(item.get("localTrackId") or -1) == int(builder.local_track_id)
+                ):
+                    item["globalId"] = g.global_id
+                    item.setdefault("attrs", {})["assocMode"] = g.last_assoc_mode
+                    if object_type == "person":
+                        item["reidPersonId"] = g.reid_person_id
+                        item["displayName"] = g.display_name or item.get("displayName") or "匿名"
+                        item["label"] = f"{g.global_id}|{item['displayName']}"
+                    else:
+                        item["plate"] = g.plate or item.get("plate")
+                        item["identityKey"] = g.identity_key or item.get("identityKey")
+                        item["label"] = f"{g.global_id}|{item.get('plate') or '无牌'}"
+                    resolved_item = item
+                    break
+            if resolved_item is not None:
+                row = {
+                    "sessionId": self.session.session_id,
+                    "cameraId": builder.camera_id,
+                    **resolved_item,
+                    "congestion": resolved_item.get("congestion"),
+                }
+                with self.session._events_lock:
+                    self.session.events.append({**row, "ts": self.now})
+                    if len(self.session.events) > 500:
+                        self.session.events = self.session.events[-400:]
+                cam_state = self.session.cams.get(int(builder.camera_id))
+                if (
+                    cam_state is not None
+                    and self.session.cfg.persist_events
+                    and self.now - float(cam_state.last_persist_at or 0) >= 1.0
+                ):
+                    _persist_event(self.session.app, row)
+                    cam_state.last_persist_at = self.now
+
+
 def _resolve_overlay_global(
     session: MtmcSession,
     builder,
@@ -1418,6 +1491,10 @@ def _resolve_overlay_global(
         builder.assigned_global_id = None
     elif builder.assigned_global_id and builder.assigned_global_id in claimed:
         builder.assigned_global_id = None
+    collector = getattr(session, "_frame_assoc_collector", None)
+    if collector is not None:
+        collector.enqueue(builder, associate_kwargs)
+        return None
     return _associate_tracklet(
         session,
         builder,
@@ -1779,6 +1856,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
         cam_state.tracker_vehicle = _make_local_tracker(cfg)
 
     items = []
+    session._frame_assoc_collector = _FrameAssociationCollector(session, now)
     claimed_person: set[str] = set()
     claimed_vehicle: set[str] = set()
     person_reid_left = _reid_budget_for(cfg, "person")
@@ -1985,6 +2063,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
                     _persist_event(session.app, row)
                     cam_state.last_persist_at = now
+        session._frame_assoc_collector.flush("person", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "person", _pop_removed_track_ids(cam_state.tracker_person),
             now=now, timeout_sec=cfg.lost_revive_sec,
@@ -2203,12 +2282,14 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                             if len(session.passes) > 300:
                                 session.passes = session.passes[-200:]
                         _persist_pass(session.app, pass_row)
+        session._frame_assoc_collector.flush("vehicle", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "vehicle", _pop_removed_track_ids(cam_state.tracker_vehicle),
             now=now, timeout_sec=cfg.lost_revive_sec,
         )
         _release_finalized_locals(session, cam_state, "vehicle", finalized)
 
+    del session._frame_assoc_collector
     _enforce_unique_camera_global_ids(items)
     _record_session_dets(cam_state, items, now)
     _publish_overlay(cam_state, frame, items, cam_state.congestion)
