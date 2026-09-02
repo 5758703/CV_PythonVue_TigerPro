@@ -1062,6 +1062,56 @@ class MtmcAssociator:
         observation_quality: float | None = None,
         force_candidate: bool = False,
     ) -> GlobalTrack:
+        """Compatibility API returning only the associated GlobalTrack."""
+        return self.associate_with_evidence(
+            object_type=object_type,
+            camera_id=camera_id,
+            embedding=embedding,
+            embedding_spaces=embedding_spaces,
+            association_model_key=association_model_key,
+            model_version=model_version,
+            score_weights=score_weights,
+            identity_key=identity_key,
+            plate=plate,
+            reid_person_id=reid_person_id,
+            face_person_id=face_person_id,
+            display_name=display_name,
+            visual_key=visual_key,
+            vehicle_class=vehicle_class,
+            color_sig=color_sig,
+            local_track_id=local_track_id,
+            exclude_gids=exclude_gids,
+            now=now,
+            force_long_term=force_long_term,
+            observation_quality=observation_quality,
+            force_candidate=force_candidate,
+        ).global_track
+
+    def associate_with_evidence(
+        self,
+        *,
+        object_type: str,
+        camera_id: int,
+        embedding: np.ndarray | None = None,
+        embedding_spaces: dict[str, np.ndarray] | None = None,
+        association_model_key: str | None = None,
+        model_version: str | None = None,
+        score_weights: dict[str, float] | None = None,
+        identity_key: str | None = None,
+        plate: str | None = None,
+        reid_person_id: int | None = None,
+        face_person_id: int | None = None,
+        display_name: str | None = None,
+        visual_key: str | None = None,
+        vehicle_class: str | None = None,
+        color_sig: np.ndarray | None = None,
+        local_track_id: int | None = None,
+        exclude_gids: Iterable[str] | None = None,
+        now: float | None = None,
+        force_long_term: bool = False,
+        observation_quality: float | None = None,
+        force_candidate: bool = False,
+    ) -> AssociationResult:
         """
         McByte++ 路径：
         1) 有粘性 → STICKY（不搜外观）
@@ -1169,7 +1219,7 @@ class MtmcAssociator:
                                 mode=AssocMode.STICKY,
                                 update_embedding=False,
                             )
-                            return g
+                            return AssociationResult(g, self.last_evidence)
                         self._local_bind.pop(bkey, None)
                         self._mark_lost_if_unbound(sticky_gid, now)
                 else:
@@ -1388,7 +1438,7 @@ class MtmcAssociator:
                 if bkey not in self._local_bind_at:
                     self._local_bind_at[bkey] = now
                 self._local_bind[bkey] = g.global_id
-            return g
+            return AssociationResult(g, self.last_evidence)
 
     def associate_batch(self, observations: Iterable[dict]) -> list[AssociationResult]:
         """Associate one same-frame batch with deterministic mutual-best gating.
@@ -1465,9 +1515,8 @@ class MtmcAssociator:
             excluded = set(row.pop("exclude_gids", ()) or ()) | claimed
             row["exclude_gids"] = excluded
             row["force_candidate"] = index not in mutual
-            result = self.associate(**row)
-            evidence = self.last_evidence
-            results[index] = AssociationResult(result, evidence)
+            result = self.associate_with_evidence(**row)
+            results[index] = result
             if index in mutual and result.last_assoc_mode == AssocMode.LONG_TERM.value:
                 claimed.add(result.global_id)
         return [results[index] for index in range(len(rows))]

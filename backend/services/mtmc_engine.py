@@ -1220,7 +1220,6 @@ def _maybe_cross_camera_event(session: MtmcSession, builder, g, now: float, *, e
     cur_cam = int(builder.camera_id)
     prev_cam = session._global_last_cam.get(gid)
     prev_ts = session._global_last_seen_ts.get(gid, now)
-    evidence = evidence if evidence is not None else session.associator.last_evidence
     decision = evidence.decision if evidence else None
     if prev_cam is not None and int(prev_cam) != cur_cam:
         transit = float(now - prev_ts)
@@ -1275,7 +1274,6 @@ def _record_association(
         persist_tracklet,
     )
 
-    evidence = evidence if evidence is not None else session.associator.last_evidence
     decision = evidence.decision if evidence else "NEW"
     if prev_global_id and prev_global_id != g.global_id:
         decision = "REFINE"

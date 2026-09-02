@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import numpy as np
@@ -270,6 +272,64 @@ def test_batch_results_retain_each_row_association_evidence():
     assert first.evidence is not assoc.last_evidence
 
 
+def test_batch_captures_row_evidence_before_concurrent_association_overwrites_summary(monkeypatch):
+    assoc = MtmcAssociator()
+    inner_lock = assoc._lock
+    row_lock_released = threading.Barrier(2, timeout=5.0)
+    summary_overwritten = threading.Barrier(2, timeout=5.0)
+
+    class GateLock:
+        def __init__(self):
+            self.target_thread_id = None
+            self.pause_next_exit = False
+
+        def __enter__(self):
+            inner_lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            inner_lock.release()
+            if (
+                threading.get_ident() == self.target_thread_id
+                and self.pause_next_exit
+            ):
+                self.pause_next_exit = False
+                row_lock_released.wait()
+                summary_overwritten.wait()
+
+    gate_lock = GateLock()
+    original_new_gid = assoc._new_gid
+
+    def pause_when_row_association_releases_lock(object_type):
+        if threading.get_ident() == gate_lock.target_thread_id:
+            gate_lock.pause_next_exit = True
+        return original_new_gid(object_type)
+
+    monkeypatch.setattr(assoc, "_lock", gate_lock)
+    monkeypatch.setattr(assoc, "_new_gid", pause_when_row_association_releases_lock)
+
+    def run_batch():
+        gate_lock.target_thread_id = threading.get_ident()
+        return assoc.associate_batch([{
+            "object_type": "vehicle", "camera_id": 1,
+            "local_track_id": 101, "now": 1.0,
+        }])[0]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        batch_future = pool.submit(run_batch)
+        row_lock_released.wait()
+        competing = assoc.associate(
+            object_type="vehicle", camera_id=2,
+            local_track_id=202, now=2.0,
+        )
+        summary_overwritten.wait()
+        result = batch_future.result(timeout=5.0)
+
+    assert result.global_id != competing.global_id
+    assert assoc.last_evidence.target_global_id == competing.global_id
+    assert result.evidence.target_global_id == result.global_id
+
+
 def test_recorded_cross_event_uses_its_row_evidence_not_batch_last_evidence():
     from services.mtmc_engine import MtmcConfig, MtmcSession, _record_association
     from services.mtmc_tracklet import TrackletBuilder
@@ -296,6 +356,31 @@ def test_recorded_cross_event_uses_its_row_evidence_not_batch_last_evidence():
     assert persist_edge.call_args.kwargs["evidence"]["decision"] == "long_term"
     assert session.cross_events[-1]["decision"] == "long_term"
     assert persist_cross.call_args.kwargs["decision"] == "long_term"
+
+
+def test_engine_does_not_use_compatibility_last_evidence_when_row_evidence_is_missing():
+    from services.mtmc_engine import MtmcConfig, MtmcSession, _record_association
+    from services.mtmc_tracklet import TrackletBuilder
+
+    session = MtmcSession("no-evidence-fallback", MtmcConfig(camera_ids=[1], persist_events=True), MtmcAssociator())
+    global_track = session.associator.associate(
+        object_type="vehicle", camera_id=1, local_track_id=1, now=1.0,
+    )
+    session.associator.last_evidence = AssocEvidence(
+        decision="candidate", target_global_id="wrong-shared-summary",
+    )
+    builder = TrackletBuilder.create(
+        session_id=session.session_id, camera_id=1, object_type="vehicle",
+        local_track_id=1, now=1.0,
+    )
+
+    with patch("services.mtmc_persist.persist_global_identity"), patch(
+        "services.mtmc_persist.persist_association_edge"
+    ) as persist_edge:
+        _record_association(session, builder, global_track, prev_global_id=None)
+
+    assert persist_edge.call_args.kwargs["decision"] == "NEW"
+    assert persist_edge.call_args.kwargs["evidence"] == {}
 
 
 def test_engine_prepared_tracklets_submit_one_multirow_batch():
