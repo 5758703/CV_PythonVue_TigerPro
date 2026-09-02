@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -326,6 +327,7 @@ class MtmcSession:
             "errors": 0,
         }
         self.runtime_status: dict[str, dict] = {}
+        self.runtime_status_lock = threading.Lock()
         self.cross_events: list[dict] = []
         self._global_last_cam: dict[str, int] = {}
         self._global_last_seen_ts: dict[str, float] = {}
@@ -341,6 +343,8 @@ class MtmcSession:
         return f"Cam #{cam_id}"
 
     def to_dict(self) -> dict:
+        with self.runtime_status_lock:
+            runtime_snapshot = copy.deepcopy(self.runtime_status)
         return {
             "sessionId": self.session_id,
             "running": self.running,
@@ -362,7 +366,7 @@ class MtmcSession:
             "crossEvents": self.cross_events[-50:],
             "createdAt": self.created_at,
             "stats": dict(self.stats),
-            "runtime": dict(self.runtime_status),
+            "runtime": runtime_snapshot,
             "globals": self.associator.snapshot(),
             "recentEvents": self.events[-50:],
             "recentPasses": self.passes[-50:],
@@ -856,10 +860,15 @@ def _match_gallery(
     score_weights: dict[str, float] | None = None,
     model_versions_by_space: dict[str, str | None] | None = None,
 ):
+    errors_by_model_key: dict[str, list[str]] = {}
     try:
         from services.reid_gallery import match_embedding, match_embedding_faiss
-    except Exception:  # noqa: BLE001
-        return {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "matched": False, "name": "未知", "personId": None, "score": 0.0,
+            "modelKey": None, "ready": False, "degraded": True,
+            "errorsByModelKey": {"runtime": [str(exc)]},
+        }
     from services.strong_reid import fuse_similarity_scores
 
     rows_by_person: dict[tuple, dict] = {}
@@ -870,13 +879,15 @@ def _match_gallery(
                 row = match_embedding_faiss(emb, key, threshold=threshold)
             else:
                 row = match_embedding_faiss(emb, key, threshold=threshold, model_version=version)
-        except Exception:  # noqa: BLE001
+        except Exception as faiss_error:  # noqa: BLE001
+            errors_by_model_key.setdefault(key, []).append(str(faiss_error))
             try:
                 if version is None:
                     row = match_embedding(emb, key, threshold=threshold)
                 else:
                     row = match_embedding(emb, key, threshold=threshold, model_version=version)
-            except Exception:  # noqa: BLE001
+            except Exception as gallery_error:  # noqa: BLE001
+                errors_by_model_key.setdefault(key, []).append(str(gallery_error))
                 continue
         person_key = (
             row.get("candidatePersonId", row.get("personId")),
@@ -904,30 +915,75 @@ def _match_gallery(
             "modelKey": max(scores, key=scores.get),
             "scoreByModelKey": dict(scores),
         }
+    failed_spaces = sum(len(errors) >= 2 for errors in errors_by_model_key.values())
+    best.update({
+        "ready": len(embeddings) > failed_spaces,
+        "degraded": bool(errors_by_model_key),
+        "errorsByModelKey": errors_by_model_key,
+    })
     return best
 
 
-def _record_gallery_failure(session, meta: dict, error: Exception) -> None:
+def _runtime_status_lock(session):
+    lock = getattr(session, "runtime_status_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        session.runtime_status_lock = lock
+    return lock
+
+
+def _record_gallery_failure(
+    session, meta: dict, error: Exception, *, camera_id=None, errors_by_space=None,
+) -> None:
     detail = {"ready": False, "degraded": True, "error": str(error)}
+    if errors_by_space:
+        detail["errorsByModelKey"] = copy.deepcopy(errors_by_space)
     meta["gallery"] = detail
-    runtime = getattr(session, "runtime_status", None)
-    if runtime is None:
-        runtime = {}
-        session.runtime_status = runtime
-    previous = dict(runtime.get("gallery") or {})
-    runtime["gallery"] = {**detail, "errorCount": int(previous.get("errorCount") or 0) + 1}
+    with _runtime_status_lock(session):
+        runtime = getattr(session, "runtime_status", None)
+        if runtime is None:
+            runtime = {}
+            session.runtime_status = runtime
+        previous = dict(runtime.get("gallery") or {})
+        errors_by_camera = dict(previous.get("errorsByCamera") or {})
+        errors_by_runtime_space = copy.deepcopy(previous.get("errorsBySpace") or {})
+        if camera_id is not None:
+            errors_by_camera[str(camera_id)] = str(error)
+            if errors_by_space:
+                errors_by_runtime_space[str(camera_id)] = copy.deepcopy(errors_by_space)
+        runtime["gallery"] = {
+            **detail,
+            "errorCount": int(previous.get("errorCount") or 0) + 1,
+            **({"errorsByCamera": errors_by_camera} if errors_by_camera else {}),
+            **({"errorsBySpace": errors_by_runtime_space} if errors_by_runtime_space else {}),
+        }
     log.warning("mtmc_gallery_degraded error=%s", error)
 
 
-def _record_gallery_ready(session, meta: dict) -> None:
+def _record_gallery_ready(session, meta: dict, *, camera_id=None) -> None:
     detail = {"ready": True, "degraded": False, "error": None}
     meta["gallery"] = detail
-    runtime = getattr(session, "runtime_status", None)
-    if runtime is None:
-        runtime = {}
-        session.runtime_status = runtime
-    previous = dict(runtime.get("gallery") or {})
-    runtime["gallery"] = {**detail, "errorCount": int(previous.get("errorCount") or 0)}
+    with _runtime_status_lock(session):
+        runtime = getattr(session, "runtime_status", None)
+        if runtime is None:
+            runtime = {}
+            session.runtime_status = runtime
+        previous = dict(runtime.get("gallery") or {})
+        errors_by_camera = dict(previous.get("errorsByCamera") or {})
+        errors_by_runtime_space = copy.deepcopy(previous.get("errorsBySpace") or {})
+        if camera_id is not None:
+            errors_by_camera.pop(str(camera_id), None)
+            errors_by_runtime_space.pop(str(camera_id), None)
+        error_count = int(previous.get("errorCount") or 0)
+        degraded = bool(errors_by_camera)
+        runtime["gallery"] = {
+            "ready": True,
+            "degraded": degraded,
+            "error": previous.get("error") if degraded else None,
+            "errorCount": error_count,
+            **({"errorsByCamera": errors_by_camera} if errors_by_camera else {}),
+            **({"errorsBySpace": errors_by_runtime_space} if errors_by_runtime_space else {}),
+        }
 
 
 def _speed_from_trail(trail, meters_per_pixel: float, fps: float) -> float | None:
@@ -1677,9 +1733,20 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                                 if key in gallery_embeddings
                             },
                         )
-                        _record_gallery_ready(session, meta)
+                        gallery_errors = gallery.get("errorsByModelKey") or {}
+                        if gallery_errors:
+                            error = RuntimeError("; ".join(
+                                f"{key}: {', '.join(errors)}"
+                                for key, errors in gallery_errors.items()
+                            ))
+                            _record_gallery_failure(
+                                session, meta, error, camera_id=cam_id,
+                                errors_by_space=gallery_errors,
+                            )
+                        else:
+                            _record_gallery_ready(session, meta, camera_id=cam_id)
                     except Exception as e:  # noqa: BLE001
-                        _record_gallery_failure(session, meta, e)
+                        _record_gallery_failure(session, meta, e, camera_id=cam_id)
             builder.add_observation(
                 bbox=t.bbox,
                 conf=t.conf,

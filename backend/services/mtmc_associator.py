@@ -153,13 +153,25 @@ class MtmcAssociator:
     """跨摄像头全局关联（McByte++：短时粘性 / 长时选择性 ReID）。"""
 
     @staticmethod
-    def _fuse_space_scores(scores: dict[tuple[str, int, str | None], float], weights: dict | None) -> float | None:
-        """Fuse scores while retaining the complete model-space identity."""
+    def _space_score_weights(
+        scores: dict[tuple[str, int, str | None], float], weights: dict | None,
+    ) -> dict[tuple[str, int, str | None], float]:
+        """Split each configured model-family weight across its live versions."""
         raw_weights = dict(weights or {})
-        space_weights = {
-            space: raw_weights.get(space, raw_weights.get(space[0], 1.0))
+        family_counts: dict[str, int] = {}
+        for model_key, _dim, _version in scores:
+            family_counts[model_key] = family_counts.get(model_key, 0) + 1
+        return {
+            space: float(raw_weights[space]) if space in raw_weights else (
+                float(raw_weights.get(space[0], 1.0)) / family_counts[space[0]]
+            )
             for space in scores
         }
+
+    @staticmethod
+    def _fuse_space_scores(scores: dict[tuple[str, int, str | None], float], weights: dict | None) -> float | None:
+        """Fuse scores while retaining the complete model-space identity."""
+        space_weights = MtmcAssociator._space_score_weights(scores, weights)
         return fuse_similarity_scores(scores, space_weights)
 
     def __init__(

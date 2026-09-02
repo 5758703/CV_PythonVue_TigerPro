@@ -411,3 +411,148 @@ def test_recognize_and_search_forward_extracted_onnx_version(monkeypatch):
     assert recognized["detections"][0]["personId"] == 1
     assert searched["matches"][0]["personId"] == 1
     assert calls == [("match", "person_reid_v7.onnx"), ("topk", "person_reid_v7.onnx")]
+
+
+def test_gallery_match_reports_partial_backend_errors(monkeypatch):
+    def faiss(_emb, key, threshold, model_version=None):
+        if key == "broken":
+            raise RuntimeError("faiss broken")
+        return {"candidatePersonId": 1, "candidateName": "Ada", "score": 0.9}
+
+    def plain(_emb, key, threshold, model_version=None):
+        raise RuntimeError("sql broken")
+
+    monkeypatch.setattr(reid_gallery, "match_embedding_faiss", faiss)
+    monkeypatch.setattr(reid_gallery, "match_embedding", plain)
+    result = _match_gallery({"good": np.ones(2), "broken": np.ones(2)}, 0.5)
+    assert result["matched"] is True
+    assert result["degraded"] is True
+    assert result["errorsByModelKey"]["broken"] == ["faiss broken", "sql broken"]
+
+
+def test_gallery_match_reports_total_backend_failure(monkeypatch):
+    monkeypatch.setattr(
+        reid_gallery, "match_embedding_faiss",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("faiss unavailable")),
+    )
+    monkeypatch.setattr(
+        reid_gallery, "match_embedding",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("sql unavailable")),
+    )
+
+    result = _match_gallery({"osnet-x1-0": np.ones(2)}, 0.5)
+
+    assert result["ready"] is False
+    assert result["degraded"] is True
+    assert result["errorsByModelKey"]["osnet-x1-0"] == ["faiss unavailable", "sql unavailable"]
+
+
+def test_model_family_weight_is_split_across_versions():
+    spaces = {
+        ("osnet-x1-0", 2, "v1"): 0.9,
+        ("osnet-x1-0", 2, "v2"): 0.7,
+        ("opencv-person-reid-youtu", 3, "y1"): 0.4,
+    }
+    weights = MtmcAssociator._space_score_weights(spaces, {
+        "osnet-x1-0": 0.65, "opencv-person-reid-youtu": 0.35,
+    })
+    assert weights == {
+        ("osnet-x1-0", 2, "v1"): pytest.approx(0.325),
+        ("osnet-x1-0", 2, "v2"): pytest.approx(0.325),
+        ("opencv-person-reid-youtu", 3, "y1"): pytest.approx(0.35),
+    }
+
+
+def test_runtime_gallery_success_does_not_erase_other_camera_failure():
+    import threading
+
+    class Session:
+        runtime_status = {}
+        runtime_status_lock = threading.Lock()
+
+    session = Session()
+    session.runtime_status = {}
+    barrier = threading.Barrier(2)
+
+    def fail_camera_one():
+        barrier.wait()
+        mtmc_engine._record_gallery_failure(
+            session, {}, RuntimeError("cam1"), camera_id=1,
+            errors_by_space={"osnet": ["faiss broken", "sql broken"]},
+        )
+
+    def pass_camera_two():
+        barrier.wait()
+        mtmc_engine._record_gallery_ready(session, {}, camera_id=2)
+
+    threads = [threading.Thread(target=fail_camera_one), threading.Thread(target=pass_camera_two)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert session.runtime_status["gallery"]["errorCount"] == 1
+    assert session.runtime_status["gallery"]["errorsByCamera"]["1"] == "cam1"
+    assert session.runtime_status["gallery"]["errorsBySpace"]["1"] == {
+        "osnet": ["faiss broken", "sql broken"],
+    }
+    assert session.runtime_status["gallery"]["degraded"] is True
+
+
+def test_runtime_status_snapshot_is_detached_from_concurrent_state():
+    class Associator:
+        @staticmethod
+        def list_candidates():
+            return []
+
+        @staticmethod
+        def snapshot():
+            return []
+
+    session = mtmc_engine.MtmcSession("s1", MtmcConfig(camera_ids=[]), Associator())
+    session.runtime_status["gallery"] = {"errorsByCamera": {"1": "broken"}}
+
+    snapshot = session.to_dict()["runtime"]
+    session.runtime_status["gallery"]["errorsByCamera"]["2"] = "later"
+
+    assert snapshot == {"gallery": {"errorsByCamera": {"1": "broken"}}}
+
+
+def test_video_search_forwards_exact_extracted_model_version(monkeypatch):
+    import inference
+    import person_reid_dnn
+
+    frame = np.zeros((8, 4, 3), dtype=np.uint8)
+
+    class Capture:
+        def __init__(self, _path):
+            self.frames = [frame]
+
+        def isOpened(self):
+            return True
+
+        def get(self, _prop):
+            return 1.0
+
+        def read(self):
+            return (True, self.frames.pop(0)) if self.frames else (False, None)
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(inference, "_decode_bgr", lambda _raw: frame)
+    monkeypatch.setattr(inference.cv2, "VideoCapture", Capture)
+    monkeypatch.setattr(inference, "search_reid_gallery", lambda *_args, **_kwargs: {"matches": []})
+    monkeypatch.setattr(
+        person_reid_dnn, "extract_feature",
+        lambda _root, _crop: (np.array([1.0, 0.0]), {"onnx": "person_reid_v9.onnx"}),
+    )
+    versions = []
+    monkeypatch.setattr(
+        reid_gallery, "match_embedding",
+        lambda _emb, _key, threshold, model_version=None: versions.append(model_version) or {"matched": False},
+    )
+
+    inference.search_reid_in_video("root", "youtu", b"query", "video.mp4", max_frames=1)
+
+    assert versions == ["person_reid_v9.onnx"]

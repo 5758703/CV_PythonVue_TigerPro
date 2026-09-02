@@ -243,3 +243,68 @@ pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q
 - The regression uses inference service entry points because importing the
   Flask route stack requires the optional `flask_sqlalchemy` dependency that is
   unavailable in this execution environment.
+
+## Resumed-audit fix pass 2
+
+### RED / GREEN evidence
+
+The inherited test draft was preserved and completed before production edits.
+Its first focused run produced the three expected failures; after adding total
+failure, detached-snapshot and video-version coverage, the full RED run was:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider --basetemp .pytest-task1-pass2-red-full
+30 passed, 5 failed
+```
+
+The five failures covered partial/total Gallery error reporting, model-family
+weight splitting, cross-camera runtime aggregation and locked deep snapshots.
+The exact-version video regression already passed, proving that service path
+was implemented correctly. A further concurrent structured-error assertion was
+then observed RED before its minimal production change:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py::test_runtime_gallery_success_does_not_erase_other_camera_failure -q -p no:cacheprovider --basetemp .pytest-task1-concurrent-red
+1 failed
+```
+
+Final GREEN evidence:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider --basetemp .pytest-task1-pass2-green2
+35 passed in 0.50s
+
+pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q -p no:cacheprovider --basetemp .pytest-task1-pass2-regression
+61 passed in 3.79s
+
+git diff --check
+clean
+```
+
+### Finding resolution
+
+1. `_match_gallery` now reports per-space FAISS and ordinary Gallery failures,
+   distinguishes partial availability from total failure, and the frame caller
+   exposes structured errors on item metadata and session runtime state.
+2. Association model-family weights are divided across all live full
+   `(model_key, dimension, version)` spaces, preventing multiple Strong model
+   versions from amplifying the configured Strong family share.
+3. Runtime Gallery aggregation is lock-protected, retains cumulative error
+   counts and active structured errors per camera/model space, and a successful
+   camera cannot overwrite another camera's failure. `to_dict()` takes a
+   lock-protected deep snapshot.
+4. `search_reid_in_video` has an exact resolved-version forwarding regression;
+   the previously added recognize/search service tests continue to cover
+   versioned Gallery hits.
+
+### Changed files
+
+- `backend/services/mtmc_associator.py`
+- `backend/services/mtmc_engine.py`
+- `backend/unittests/test_mtmc_reid_runtime.py`
+
+### Concerns
+
+- A database-backed enrollment-to-recognition integration test still cannot run
+  in this environment because the optional Flask-SQLAlchemy stack is absent.
+  The service boundary is covered with exact version assertions instead.
