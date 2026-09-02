@@ -7,7 +7,7 @@ import threading
 import numpy as np
 
 _lock = threading.Lock()
-# (model_key, modality, dim) -> (person_ids, names, matrix, face_person_ids)
+# (model_key, modality, dim, model_version) -> gallery payload
 _gallery_cache: dict = {}
 log = logging.getLogger(__name__)
 
@@ -32,25 +32,29 @@ def l2_normalize(vec: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     return v / n
 
 
-def invalidate_gallery(model_key: str | None = None, modality: str | None = None, dim: int | None = None):
+def invalidate_gallery(model_key: str | None = None, modality: str | None = None, dim: int | None = None,
+                       model_version: str | None = None):
     with _lock:
         if model_key is None and modality is None:
             _gallery_cache.clear()
         else:
             keys = list(_gallery_cache.keys())
             for k in keys:
-                mk, md, cached_dim = k
+                mk, md, cached_dim, cached_version = k
                 if model_key is not None and mk != model_key:
                     continue
                 if modality is not None and md != modality:
                     continue
                 if dim is not None and cached_dim != int(dim):
                     continue
+                if model_version is not None and cached_version != model_version:
+                    continue
                 _gallery_cache.pop(k, None)
-    invalidate_faiss(model_key, modality)
+    invalidate_faiss(model_key, modality, dim, model_version)
 
 
-def _load_gallery(model_key: str, modality: str = "appearance", dim: int | None = None):
+def _load_gallery(model_key: str, modality: str = "appearance", dim: int | None = None,
+                  model_version: str | None = None):
     from models import ReidEmbedding, ReidPerson
 
     rows = (
@@ -63,6 +67,12 @@ def _load_gallery(model_key: str, modality: str = "appearance", dim: int | None 
     )
     if dim is not None:
         rows = rows.filter(ReidEmbedding.dim == int(dim))
+    # Legacy NULL rows are an isolated space. This avoids silently comparing a
+    # query produced by a known asset revision against stale vectors.
+    if model_version is None:
+        rows = rows.filter(ReidEmbedding.model_version.is_(None))
+    else:
+        rows = rows.filter(ReidEmbedding.model_version == str(model_version))
     rows = rows.all()
     if not rows:
         return [], [], np.zeros((0, 0), dtype=np.float32), []
@@ -92,13 +102,14 @@ def _load_gallery(model_key: str, modality: str = "appearance", dim: int | None 
     return person_ids, names, mat, face_person_ids
 
 
-def get_gallery(model_key: str, modality: str = "appearance", dim: int | None = None):
-    key = (model_key, modality, int(dim) if dim is not None else None)
+def get_gallery(model_key: str, modality: str = "appearance", dim: int | None = None,
+                model_version: str | None = None):
+    key = (model_key, modality, int(dim) if dim is not None else None, model_version)
     with _lock:
         cached = _gallery_cache.get(key)
         if cached is not None:
             return cached
-        data = _load_gallery(model_key, modality, dim)
+        data = _load_gallery(model_key, modality, dim, model_version)
         _gallery_cache[key] = data
         return data
 
@@ -108,9 +119,12 @@ def match_embedding(
     model_key: str,
     threshold: float = 0.45,
     modality: str = "appearance",
+    model_version: str | None = None,
 ) -> dict:
     q = l2_normalize(embedding)
-    person_ids, names, mat, face_person_ids = get_gallery(model_key, modality, dim=int(q.size))
+    person_ids, names, mat, face_person_ids = get_gallery(
+        model_key, modality, dim=int(q.size), model_version=model_version,
+    )
     if mat.size == 0 or not person_ids:
         return {
             "personId": None,
@@ -148,9 +162,12 @@ def topk_match(
     model_key: str,
     topk: int = 5,
     modality: str = "appearance",
+    model_version: str | None = None,
 ) -> list[dict]:
     q = l2_normalize(embedding)
-    person_ids, names, mat, face_person_ids = get_gallery(model_key, modality, dim=int(q.size))
+    person_ids, names, mat, face_person_ids = get_gallery(
+        model_key, modality, dim=int(q.size), model_version=model_version,
+    )
     if mat.size == 0 or not person_ids:
         return []
     if mat.ndim != 2 or mat.shape[1] != q.size:
@@ -193,25 +210,31 @@ def _import_faiss():
     return faiss
 
 
-def invalidate_faiss(model_key: str | None = None, modality: str | None = None, dim: int | None = None):
+def invalidate_faiss(model_key: str | None = None, modality: str | None = None, dim: int | None = None,
+                     model_version: str | None = None):
     with _lock:
         if model_key is None and modality is None:
             _faiss_cache.clear()
             return
         for k in list(_faiss_cache.keys()):
-            mk, md, cached_dim = k
+            mk, md, cached_dim, cached_version = k
             if model_key is not None and mk != model_key:
                 continue
             if modality is not None and md != modality:
                 continue
             if dim is not None and cached_dim != int(dim):
                 continue
+            if model_version is not None and cached_version != model_version:
+                continue
             _faiss_cache.pop(k, None)
 
 
-def _build_faiss_index(model_key: str, modality: str = "appearance", dim: int | None = None):
+def _build_faiss_index(model_key: str, modality: str = "appearance", dim: int | None = None,
+                       model_version: str | None = None):
     faiss = _import_faiss()
-    person_ids, names, mat, face_person_ids = get_gallery(model_key, modality, dim=dim)
+    person_ids, names, mat, face_person_ids = get_gallery(
+        model_key, modality, dim=dim, model_version=model_version,
+    )
     if mat.size == 0 or not person_ids:
         dim = 512
         index = faiss.IndexFlatIP(dim)
@@ -239,15 +262,18 @@ def match_embedding_faiss(
     model_key: str,
     threshold: float = 0.45,
     modality: str = "appearance",
+    model_version: str | None = None,
 ) -> dict:
     """FAISS Top-1 匹配；维度不符或 faiss 不可用时回退矩阵乘法。"""
     q = l2_normalize(embedding)
-    key = (model_key, modality, int(q.size))
+    key = (model_key, modality, int(q.size), model_version)
     try:
         with _lock:
             cached = _faiss_cache.get(key)
             if cached is None:
-                cached = _build_faiss_index(model_key, modality, dim=int(q.size))
+                cached = _build_faiss_index(
+                    model_key, modality, dim=int(q.size), model_version=model_version,
+                )
                 _faiss_cache[key] = cached
         index = cached["index"]
         person_ids = cached["person_ids"]
@@ -261,7 +287,9 @@ def match_embedding_faiss(
             }
         dim = int(cached["dim"])
         if q.size != dim:
-            return match_embedding(embedding, model_key, threshold=threshold, modality=modality)
+            return match_embedding(
+                embedding, model_key, threshold=threshold, modality=modality, model_version=model_version,
+            )
         scores, idxs = index.search(q.reshape(1, -1).astype(np.float32), 1)
         idx = int(idxs[0][0])
         score = float(scores[0][0])
@@ -277,4 +305,6 @@ def match_embedding_faiss(
             "matched": matched,
         }
     except RuntimeError:
-        return match_embedding(embedding, model_key, threshold=threshold, modality=modality)
+        return match_embedding(
+            embedding, model_key, threshold=threshold, modality=modality, model_version=model_version,
+        )

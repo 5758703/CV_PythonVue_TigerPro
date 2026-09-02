@@ -147,3 +147,57 @@ pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q
 ### Review-fix commit
 
 `748cc41eda00035d6769c4d7c089093a3597db91 fix: finalize MTMC ReID score fusion`
+
+## Blocker-resolution pass
+
+### RED / GREEN evidence
+
+The three remaining P1 areas were captured by seven failing assertions before
+production changes:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider --basetemp .pytest-task1-red
+15 passed, 7 failed
+```
+
+After the fixes:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider --basetemp .pytest-task1-green2
+22 passed in 0.79s
+
+pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q -p no:cacheprovider --basetemp .pytest-task1-regression
+61 passed in 6.38s
+```
+
+### Finding resolution
+
+1. `_match_gallery` now iterates identity/group pairs and returns the identity
+   belonging to the winning fused-score group. A regression uses conflicting
+   Strong and Youtu Top-1 identities.
+2. `fuseWeightStrong` preserves explicit zero, defaults only for `None`, and is
+   bounded to `[0, 1]` through one shared parser used by the route and runtime.
+3. Registered gallery vectors now persist `model_version`. SQL selection,
+   in-memory cache, FAISS index/cache, direct lookup, and MTMC fusion all carry
+   `(model_key, dim, model_version)`. Legacy NULL-version rows form an isolated
+   versionless space; an explicitly versioned query never reads them.
+4. Existing databases receive the nullable `reid_embedding.model_version`
+   column through the project's lightweight migration mechanism. New
+   registrations use the actual resolved ONNX filename when available.
+
+### Changed files
+
+- `backend/app.py`
+- `backend/models/reid.py`
+- `backend/routes/mtmc.py`
+- `backend/routes/reid.py`
+- `backend/services/mtmc_engine.py`
+- `backend/services/reid_gallery.py`
+- `backend/services/strong_reid.py`
+- `backend/unittests/test_mtmc_reid_runtime.py`
+
+### Concerns
+
+- Existing legacy registration rows remain intentionally unmatched by an
+  explicitly versioned runtime query until they are re-enrolled. This is a
+  deliberate fail-closed policy preventing cross-version prototype mixing.

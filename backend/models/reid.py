@@ -56,6 +56,9 @@ class ReidEmbedding(db.Model):
         index=True,
     )
     model_key = db.Column(db.String(128), nullable=False, index=True)
+    # Exact inference asset revision. NULL marks legacy rows and only matches a
+    # versionless query; explicit versions are never mixed with legacy vectors.
+    model_version = db.Column(db.String(255), nullable=True, index=True)
     # 模态：appearance=全身外观（Youtu ReID）；预留 face 等扩展
     modality = db.Column(db.String(32), nullable=False, default="appearance", index=True)
     dim = db.Column(db.Integer, default=768)
@@ -68,6 +71,7 @@ class ReidEmbedding(db.Model):
             "id": self.id,
             "personId": self.person_id,
             "modelKey": self.model_key,
+            "modelVersion": self.model_version,
             "modality": self.modality,
             "dim": self.dim,
             "sourcePath": self.source_path,

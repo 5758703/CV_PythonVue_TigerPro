@@ -121,7 +121,9 @@ def extract_youtu(youtu_root: str | None, image_bgr: np.ndarray) -> tuple[np.nda
     try:
         from person_reid_dnn import extract_feature
         feat, meta = extract_feature(youtu_root, image_bgr)
-        return _l2(feat), dict(meta or {})
+        meta = dict(meta or {})
+        meta.setdefault("modelVersion", meta.get("onnx"))
+        return _l2(feat), meta
     except Exception as e:  # noqa: BLE001
         return None, {"youtuError": str(e)}
 

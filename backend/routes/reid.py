@@ -294,6 +294,7 @@ def enroll(pid):
     row = ReidEmbedding(
         person_id=p.id,
         model_key=m.model_key,
+        model_version=(_meta.get("modelVersion") or _meta.get("onnx") or m.version or "").strip() or None,
         modality=MODALITY_APPEARANCE,
         dim=int(emb_vec.size),
         vector=pack_embedding(emb_vec),

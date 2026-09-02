@@ -190,7 +190,7 @@ def test_gallery_cache_and_query_are_dimension_scoped(monkeypatch):
     """Changing a same-key query's dimension must select a separate gallery cache entry."""
     calls = []
 
-    def fake_load(model_key, modality, dim):
+    def fake_load(model_key, modality, dim, model_version=None):
         calls.append((model_key, modality, dim))
         return [], [], np.zeros((0, dim), dtype=np.float32), []
 
@@ -287,3 +287,66 @@ def test_single_available_backend_weight_is_always_one(fuse_weight_strong, avail
     )
 
     assert weights == {available_space: expected_weight}
+
+
+def test_gallery_fusion_returns_the_actual_winning_identity(monkeypatch):
+    """Different per-space Top-1 identities must return the winning score group."""
+    calls = []
+
+    def fake_match(_embedding, model_key, threshold, model_version=None):
+        calls.append((model_key, model_version))
+        if model_key == "osnet-x1-0":
+            return {"candidatePersonId": 101, "candidateName": "Winner", "score": 0.9, "matched": True}
+        return {"candidatePersonId": 202, "candidateName": "Other", "score": 0.7, "matched": True}
+
+    monkeypatch.setattr(reid_gallery, "match_embedding_faiss", fake_match)
+    result = _match_gallery(
+        {"osnet-x1-0": np.array([1.0, 0.0]), "opencv-person-reid-youtu": np.array([0.0, 1.0])},
+        threshold=0.5,
+        model_versions_by_space={"osnet-x1-0": "osnet-v1", "opencv-person-reid-youtu": "youtu-v2"},
+    )
+
+    assert result["personId"] == 101
+    assert result["name"] == "Winner"
+    assert calls == [("osnet-x1-0", "osnet-v1"), ("opencv-person-reid-youtu", "youtu-v2")]
+
+
+@pytest.mark.parametrize("raw, expected", [(None, 0.65), (0, 0.0), (-2, 0.0), (3, 1.0)])
+def test_fuse_weight_preserves_explicit_zero_and_is_bounded(raw, expected):
+    assert mtmc_engine.normalize_fuse_weight_strong(raw) == expected
+
+
+def test_gallery_cache_is_model_version_scoped(monkeypatch):
+    calls = []
+
+    def fake_load(model_key, modality, dim, model_version):
+        calls.append((model_key, modality, dim, model_version))
+        return [], [], np.zeros((0, dim), dtype=np.float32), []
+
+    monkeypatch.setattr(reid_gallery, "_load_gallery", fake_load)
+    reid_gallery.invalidate_gallery()
+    reid_gallery.get_gallery("clip-reid-person", dim=2, model_version="v1")
+    reid_gallery.get_gallery("clip-reid-person", dim=2, model_version="v2")
+    reid_gallery.get_gallery("clip-reid-person", dim=2, model_version=None)
+
+    assert calls == [
+        ("clip-reid-person", "appearance", 2, "v1"),
+        ("clip-reid-person", "appearance", 2, "v2"),
+        ("clip-reid-person", "appearance", 2, None),
+    ]
+
+
+def test_gallery_match_forwards_explicit_model_version(monkeypatch):
+    calls = []
+
+    def fake_gallery(model_key, modality, dim, model_version):
+        calls.append((model_key, modality, dim, model_version))
+        return [1], ["Ada"], np.array([[1.0, 0.0]], dtype=np.float32), [None]
+
+    monkeypatch.setattr(reid_gallery, "get_gallery", fake_gallery)
+    result = reid_gallery.match_embedding(
+        np.array([1.0, 0.0]), "clip-reid-person", model_version="weights-v7", threshold=0.5,
+    )
+
+    assert result["personId"] == 1
+    assert calls == [("clip-reid-person", "appearance", 2, "weights-v7")]

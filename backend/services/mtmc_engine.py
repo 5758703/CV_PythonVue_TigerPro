@@ -818,6 +818,15 @@ def _gallery_model_keys(cfg: MtmcConfig, meta_backend: str | None = None) -> lis
     return out
 
 
+def normalize_fuse_weight_strong(value, default: float = 0.65) -> float:
+    """Preserve an explicit zero while keeping the public configuration bounded."""
+    raw = default if value is None else value
+    try:
+        return float(np.clip(float(raw), 0.0, 1.0))
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _reid_score_weights(cfg: MtmcConfig, embeddings: dict[str, np.ndarray]) -> dict[str, float]:
     """Map the configured Strong/Youtu split onto the spaces actually available."""
     strong_keys = [key for key in embeddings if key != "opencv-person-reid-youtu"]
@@ -825,7 +834,7 @@ def _reid_score_weights(cfg: MtmcConfig, embeddings: dict[str, np.ndarray]) -> d
     weights: dict[str, float] = {}
     if len(embeddings) == 1:
         return {next(iter(embeddings)): 1.0}
-    strong_weight = float(np.clip(float(cfg.fuse_weight_strong), 0.0, 1.0))
+    strong_weight = normalize_fuse_weight_strong(cfg.fuse_weight_strong)
     if strong_keys:
         per_strong = strong_weight / len(strong_keys)
         weights.update({key: per_strong for key in strong_keys})
@@ -840,6 +849,7 @@ def _match_gallery(
     threshold: float,
     *,
     score_weights: dict[str, float] | None = None,
+    model_versions_by_space: dict[str, str | None] | None = None,
 ):
     try:
         from services.reid_gallery import match_embedding, match_embedding_faiss
@@ -849,11 +859,18 @@ def _match_gallery(
 
     rows_by_person: dict[tuple, dict] = {}
     for key, emb in embeddings.items():
+        version = (model_versions_by_space or {}).get(key)
         try:
-            row = match_embedding_faiss(emb, key, threshold=threshold)
+            if version is None:
+                row = match_embedding_faiss(emb, key, threshold=threshold)
+            else:
+                row = match_embedding_faiss(emb, key, threshold=threshold, model_version=version)
         except Exception:  # noqa: BLE001
             try:
-                row = match_embedding(emb, key, threshold=threshold)
+                if version is None:
+                    row = match_embedding(emb, key, threshold=threshold)
+                else:
+                    row = match_embedding(emb, key, threshold=threshold, model_version=version)
             except Exception:  # noqa: BLE001
                 continue
         person_key = (
@@ -866,7 +883,7 @@ def _match_gallery(
         grouped = rows_by_person.setdefault(person_key, {"row": row, "scores": {}})
         grouped["scores"][key] = float(row.get("score") or 0.0)
     best = {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
-    for grouped in rows_by_person.values():
+    for person_key, grouped in rows_by_person.items():
         scores = grouped["scores"]
         fused = fuse_similarity_scores(scores, score_weights or {key: 1.0 for key in scores})
         if fused is None or fused < float(threshold) or fused <= float(best.get("score") or 0):
@@ -1627,6 +1644,10 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                             gallery_embeddings,
                             cfg.appear_thresh,
                             score_weights=_reid_score_weights(cfg, gallery_embeddings),
+                            model_versions_by_space={
+                                key: value for key, value in (meta.get("modelVersionsBySpace") or {}).items()
+                                if key in gallery_embeddings
+                            },
                         )
                     except Exception:  # noqa: BLE001
                         pass

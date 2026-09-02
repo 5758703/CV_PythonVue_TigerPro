@@ -95,7 +95,7 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         use_faiss_gallery=_form_bool(data.get("useFaissGallery"), True),
         gallery_model_key=(data.get("galleryModelKey") or "").strip() or None,
         time_window_sec=float(data.get("timeWindowSec") or 90),
-        fuse_weight_strong=float(data.get("fuseWeightStrong") or 0.65),
+        fuse_weight_strong=mtmc_engine.normalize_fuse_weight_strong(data.get("fuseWeightStrong")),
         width=int(data.get("width") or 960),
         fps=int(data.get("fps") or 10),
         persist_events=_form_bool(data.get("persistEvents"), False),

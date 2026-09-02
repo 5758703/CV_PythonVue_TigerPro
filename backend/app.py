@@ -80,6 +80,9 @@ def _migrate(db):
         ("task", "ADD COLUMN task VARCHAR(64) DEFAULT 'object-detection'"),
         ("library", "ADD COLUMN library VARCHAR(32) DEFAULT 'ultralytics'"),
     ])
+    add_columns("reid_embedding", [
+        ("model_version", "ADD COLUMN model_version VARCHAR(255) NULL"),
+    ])
     add_columns("training_dataset", [
         ("source_path", "ADD COLUMN source_path VARCHAR(500) NULL"),
     ])
