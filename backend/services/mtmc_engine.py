@@ -182,6 +182,8 @@ class CamState:
     # 当前帧会随采样清空；会话结果按目标保留并持续更新，供每路卡片展示。
     session_dets: dict = field(default_factory=dict)
     state_lock: Any = field(default_factory=threading.RLock, repr=False)
+    lifecycle_lock: Any = field(default_factory=threading.RLock, repr=False)
+    builders_flushed: bool = False
     congestion: dict = field(default_factory=dict)
     person_builders: dict = field(default_factory=dict)
     vehicle_builders: dict = field(default_factory=dict)
@@ -415,6 +417,8 @@ def stop_session(session_id: str) -> bool:
         return False
     s._stop.set()
     s.running = False
+    for cam_state in list(s.cams.values()):
+        _flush_camera_tracklets(s, cam_state)
     upload_dir = getattr(s, "upload_dir", None)
     if upload_dir and os.path.isdir(upload_dir):
         try:
@@ -1452,14 +1456,38 @@ def _finalize_removed_builders(
             int(tid) for tid, builder in pool.items()
             if float(now) - float(builder.end_ts or now) >= float(timeout_sec)
         )
+    finalized: set[int] = set()
     for tid in stale:
         builder = pool.pop(tid, None)
         if builder is None or not builder.observations:
             continue
         try:
             _finalize_tracklet(session, builder, exclude_gids=set())
+            finalized.add(int(tid))
         except Exception as e:  # noqa: BLE001
             log.debug("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
+    return finalized
+
+
+def _release_finalized_locals(session: MtmcSession, cam_state: CamState, object_type: str, local_ids: set[int]) -> None:
+    if local_ids:
+        session.associator.release_local(object_type, cam_state.camera_id, local_ids)
+
+
+def _flush_camera_tracklets(session: MtmcSession, cam_state: CamState) -> None:
+    """Finalize a camera tail once, serialized with frame processing and shutdown."""
+    with cam_state.lifecycle_lock:
+        if cam_state.builders_flushed:
+            return
+        for object_type, pool in (
+            ("person", cam_state.person_builders),
+            ("vehicle", cam_state.vehicle_builders),
+        ):
+            finalized = _finalize_removed_builders(
+                session, cam_state, object_type, set(pool),
+            )
+            _release_finalized_locals(session, cam_state, object_type, finalized)
+        cam_state.builders_flushed = True
 
 
 def _pop_removed_track_ids(tracker) -> set[int]:
@@ -1499,7 +1527,7 @@ def _sort_tracks_for_reid(
             observation.embedding is not None or observation.embedding_spaces
             for observation in builder.observations
         ))
-        unsampled_new = bool(getattr(track, "is_new", False)) and not has_embedding
+        unsampled_new = not has_embedding
         near_removal = int(getattr(track, "time_since_update", 0) or 0) >= max(1, int(session.cfg.local_track_max_age) - 1)
         candidate = int(track.track_id) in candidate_ids
         bbox = getattr(track, "bbox", [])
@@ -1677,6 +1705,13 @@ def _make_local_tracker(cfg: MtmcConfig):
 
 
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
+    with cam_state.lifecycle_lock:
+        if session._stop.is_set() and cam_state.builders_flushed:
+            return
+        return _process_frame_locked(session, cam_state, frame, hub_meta, now=now)
+
+
+def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
     cfg = session.cfg
     cam_id = cam_state.camera_id
     now = float(now if now is not None else time.time())
@@ -1920,10 +1955,11 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
                     _persist_event(session.app, row)
                     cam_state.last_persist_at = now
-        _finalize_removed_builders(
+        finalized = _finalize_removed_builders(
             session, cam_state, "person", _pop_removed_track_ids(cam_state.tracker_person),
             now=now, timeout_sec=cfg.lost_revive_sec,
         )
+        _release_finalized_locals(session, cam_state, "person", finalized)
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
@@ -2137,10 +2173,11 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                             if len(session.passes) > 300:
                                 session.passes = session.passes[-200:]
                         _persist_pass(session.app, pass_row)
-        _finalize_removed_builders(
+        finalized = _finalize_removed_builders(
             session, cam_state, "vehicle", _pop_removed_track_ids(cam_state.tracker_vehicle),
             now=now, timeout_sec=cfg.lost_revive_sec,
         )
+        _release_finalized_locals(session, cam_state, "vehicle", finalized)
 
     _enforce_unique_camera_global_ids(items)
     _record_session_dets(cam_state, items, now)
@@ -2148,6 +2185,14 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
 
 
 def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
+    cam_state = session.cams[int(camera_row.id)]
+    try:
+        _cam_worker_run(session, camera_row, upload_folder)
+    finally:
+        _flush_camera_tracklets(session, cam_state)
+
+
+def _cam_worker_run(session: MtmcSession, camera_row, upload_folder: str):
     from services.camera_stream import ensure_shared_hub
 
     cam_id = int(camera_row.id)

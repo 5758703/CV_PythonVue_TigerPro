@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
 from services.mtmc_associator import MtmcAssociator
+from services import mtmc_engine
 from services.mtmc_engine import CamState, MtmcConfig, MtmcSession, _process_frame
 from services.mtmc_local_track import LocalTracker
 from services.mtmc_tracklet import TrackletBuilder
@@ -72,6 +74,24 @@ def test_tracklet_finalizes_after_tracker_removal():
     assert 1 not in cam_state.vehicle_builders
 
 
+def test_finalized_tracklet_releases_its_associator_local_binding():
+    session, cam_state = _session(max_age=1)
+    session.cfg.vehicle_reid_budget = 1
+    emb = np.asarray([1.0, 0.0], dtype=np.float32)
+    with patch("services.mtmc_engine._detect_person_vehicle", side_effect=[([], [static_vehicle(7)]), ([], []), ([], [])]):
+        with patch("services.vehicle_reid_feat.extract_vehicle_embedding", return_value=(emb, {"backend": "test"})):
+            _process_frame(session, cam_state, _frame(), {}, now=10.0)
+            assert session.associator.peek_sticky(
+                object_type="vehicle", camera_id=1, local_track_id=1, now=10.0,
+            ) is not None
+            _process_frame(session, cam_state, _frame(), {}, now=10.25)
+            _process_frame(session, cam_state, _frame(), {}, now=10.5)
+
+    assert session.associator.peek_sticky(
+        object_type="vehicle", camera_id=1, local_track_id=1, now=10.5,
+    ) is None
+
+
 def test_keyframe_sampler_collects_spaced_quality_and_view_improvements():
     builder = TrackletBuilder.create(
         session_id="s", camera_id=1, object_type="vehicle", local_track_id=7, now=1.0,
@@ -109,6 +129,76 @@ def test_vehicle_reid_budget_remains_available_in_crowded_person_frame():
             _process_frame(session, cam_state, _frame(), {}, now=10.0)
 
     assert vehicle_calls == [True]
+
+
+def test_unsampled_track_stays_first_after_budget_exhaustion_in_prior_frame():
+    session, cam_state = _session(person=True, vehicle=False)
+    session.cfg.person_reid_budget = 0
+    existing = {
+        "bbox": [10.0, 10.0, 45.0, 105.0], "confidence": 0.7, "classId": 0, "className": "person",
+    }
+    new_high_quality = {
+        "bbox": [120.0, 10.0, 190.0, 110.0], "confidence": 0.99, "classId": 0, "className": "person",
+    }
+    meta = {
+        "backend": "test", "bestModelKey": "model", "associationModelKey": "model",
+        "modelVersionsBySpace": {"model": "v1"}, "availableModelSpaces": ["model"],
+        "backends": {"test": {"ready": True}},
+    }
+    with patch("services.mtmc_engine._detect_person_vehicle", side_effect=[([existing], []), ([existing, new_high_quality], [])]):
+        _process_frame(session, cam_state, _frame(), {}, now=10.0)
+        session.cfg.person_reid_budget = 1
+        with patch(
+            "services.strong_reid.extract_person_embeddings",
+            return_value=({"model": np.asarray([1.0, 0.0], dtype=np.float32)}, meta),
+        ):
+            _process_frame(session, cam_state, _frame(), {}, now=10.25)
+
+    assert cam_state.person_builders[1].observations[-1].embedding is not None
+    assert cam_state.person_builders[2].observations[-1].embedding is None
+
+
+def test_stop_session_flushes_each_builder_once_and_persists_tail_tracklets():
+    session, cam_state = _session(person=True, vehicle=True)
+    session.cfg.persist_events = True
+    for object_type, local_id in (("person", 7), ("vehicle", 8)):
+        builder = TrackletBuilder.create(
+            session_id=session.session_id, camera_id=1, object_type=object_type, local_track_id=local_id, now=10.0,
+        )
+        builder.add_observation(
+            bbox=[20, 20, 180, 100], conf=0.9, frame_h=120, frame_w=200,
+            embedding=np.asarray([1.0, 0.0], dtype=np.float32), now=10.0,
+        )
+        (cam_state.person_builders if object_type == "person" else cam_state.vehicle_builders)[local_id] = builder
+    persisted: list[str] = []
+    mtmc_engine._sessions[session.session_id] = session
+    try:
+        with patch("services.mtmc_persist.persist_tracklet", side_effect=lambda _app, builder, **_kw: persisted.append(builder.tracklet_id)):
+            assert mtmc_engine.stop_session(session.session_id)
+            assert mtmc_engine.stop_session(session.session_id)
+    finally:
+        mtmc_engine._sessions.pop(session.session_id, None)
+
+    assert not cam_state.person_builders
+    assert not cam_state.vehicle_builders
+    assert len(persisted) == 2
+
+
+def test_source_resolution_error_flushes_pending_tracklets():
+    session, cam_state = _session()
+    builder = TrackletBuilder.create(
+        session_id=session.session_id, camera_id=1, object_type="vehicle", local_track_id=7, now=10.0,
+    )
+    builder.add_observation(
+        bbox=[20, 20, 180, 100], conf=0.9, frame_h=120, frame_w=200,
+        embedding=np.asarray([1.0, 0.0], dtype=np.float32), now=10.0,
+    )
+    cam_state.vehicle_builders[7] = builder
+    camera = SimpleNamespace(id=1, source_type="file")
+    with patch("services.mtmc_engine._resolve_cam_source", side_effect=RuntimeError("missing source")):
+        mtmc_engine._cam_worker(session, camera, "uploads")
+
+    assert not cam_state.vehicle_builders
 
 
 def test_configured_gallery_space_missing_is_structured_and_degraded():
