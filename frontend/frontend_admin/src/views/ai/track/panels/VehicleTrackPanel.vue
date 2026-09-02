@@ -170,7 +170,7 @@
             </el-form-item>
             <el-form-item v-if="mode === 'local' || mode === 'network'" class="alert-action-item">
               <div class="alert-action-row">
-                <el-button v-if="!livePreviewing" type="primary" :icon="VideoCamera" :disabled="!canOpenLivePreview" @click="openLivePreview">打开预览</el-button>
+                <el-button v-if="!livePreviewing" type="primary" :icon="VideoCamera" :loading="previewOpening" :disabled="!canOpenLivePreview || previewOpening" @click="openLivePreview">打开预览</el-button>
                 <el-button v-else-if="!liveRunning" type="primary" :icon="VideoPlay" :disabled="!canStartLive" @click="liveStart">开始分析</el-button>
                 <el-button v-else type="danger" :icon="SwitchButton" @click="liveStop">停止</el-button>
                 <el-button v-if="livePreviewing && !liveRunning" :icon="SwitchButton" @click="liveStop">关闭预览</el-button>
@@ -365,7 +365,7 @@
           <el-card shadow="never">
             <div class="section-title">
               实时画面
-              <el-button v-if="!livePreviewing" type="primary" size="small" :icon="VideoCamera" :disabled="!canOpenLivePreview" @click="openLivePreview">打开预览</el-button>
+              <el-button v-if="!livePreviewing" type="primary" size="small" :icon="VideoCamera" :loading="previewOpening" :disabled="!canOpenLivePreview || previewOpening" @click="openLivePreview">打开预览</el-button>
               <el-button v-else-if="!liveRunning" type="primary" size="small" :icon="VideoPlay" :disabled="!canStartLive" @click="liveStart">开始分析</el-button>
               <el-button v-else type="danger" size="small" :icon="SwitchButton" @click="liveStop">停止</el-button>
               <el-button v-if="livePreviewing && !liveRunning" size="small" :icon="SwitchButton" @click="liveStop">关闭预览</el-button>
@@ -435,6 +435,7 @@ import {
 import { modelApi, vehicleApi, alertApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
 import { pickRecommendedModel } from '../../../../utils/trackModelRecommendation'
+import { createLivePreviewLifecycle } from '../../../../utils/livePreviewLifecycle'
 
 const ALERT_SOURCE_KEY = 'vehicle-camera'
 
@@ -598,6 +599,7 @@ const camVideo = ref(null)
 const streamImg = ref(null)
 const camCanvas = ref(null)
 const livePreviewing = ref(false)
+const previewOpening = ref(false)
 const liveRunning = ref(false)
 const liveDets = ref([])
 const camFps = ref(0)
@@ -622,6 +624,10 @@ let frameCount = 0
 let fpsTimer = null
 let loopTimer = null
 let streamReady = false
+const previewLifecycle = createLivePreviewLifecycle({
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (id) => cancelAnimationFrame(id),
+})
 
 const emptyCross = () => ({ in: 0, out: 0, person: { in: 0, out: 0 }, vehicle: { in: 0, out: 0 } })
 const toCssColor = (raw, fallback = '#2196f3') => (raw ? String(raw) : fallback)
@@ -1294,53 +1300,92 @@ const getFrameSource = () => {
 }
 
 const openLivePreview = async () => {
-  if (!canOpenLivePreview.value || livePreviewing.value) return
+  if (!canOpenLivePreview.value || livePreviewing.value || previewOpening.value) return
+  const openToken = previewLifecycle.beginOpen()
+  previewOpening.value = true
   activeTab.value = 'results'
   streamReady = false
   await nextTick()
+  if (!previewLifecycle.isCurrent(openToken)) return
 
   if (mode.value === 'network') {
     const img = streamImg.value
-    if (!img) return
+    if (!img) {
+      if (previewLifecycle.isCurrent(openToken)) previewOpening.value = false
+      return
+    }
     img.removeAttribute('crossorigin')
     img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
     try {
       await waitForImgReady(img)
+      if (!previewLifecycle.isCurrent(openToken)) return
       streamReady = true
     } catch (_) {
+      if (!previewLifecycle.isCurrent(openToken)) return
       ElMessage.error('无法连接网络摄像头')
       img.removeAttribute('src')
       return
+    } finally {
+      if (previewLifecycle.isCurrent(openToken)) previewOpening.value = false
     }
     setupCapCanvas(img.naturalWidth, img.naturalHeight)
     livePreviewing.value = true
-    redrawLiveCanvas()
+    previewLifecycle.startLoop(openToken, redrawLiveCanvas)
     return
   }
 
+  let openedStream = null
   try {
     const constraints = {
       video: deviceId.value ? { deviceId: { exact: deviceId.value } } : true,
       audio: false,
     }
-    camStream = await navigator.mediaDevices.getUserMedia(constraints)
+    openedStream = await navigator.mediaDevices.getUserMedia(constraints)
   } catch (_) {
+    if (!previewLifecycle.isCurrent(openToken)) return
     ElMessage.error('无法访问摄像头')
+    previewOpening.value = false
+    return
+  }
+  if (!previewLifecycle.isCurrent(openToken)) {
+    openedStream.getTracks().forEach((track) => track.stop())
     return
   }
   await nextTick()
   if (!camVideo.value) {
-    camStream.getTracks().forEach((t) => t.stop())
-    camStream = null
+    openedStream.getTracks().forEach((track) => track.stop())
     ElMessage.error('实时画面未就绪，请重试')
+    previewOpening.value = false
     return
   }
+  camStream = openedStream
   camVideo.value.srcObject = camStream
-  await camVideo.value.play()
+  try {
+    await camVideo.value.play()
+  } catch (_) {
+    if (previewLifecycle.isCurrent(openToken)) ElMessage.error('摄像头画面播放失败')
+    camStream.getTracks().forEach((track) => track.stop())
+    camStream = null
+    if (previewLifecycle.isCurrent(openToken)) previewOpening.value = false
+    return
+  }
+  if (!previewLifecycle.isCurrent(openToken)) {
+    openedStream.getTracks().forEach((track) => track.stop())
+    if (camStream === openedStream) camStream = null
+    if (camVideo.value?.srcObject === openedStream) camVideo.value.srcObject = null
+    return
+  }
   await enumCams()
+  if (!previewLifecycle.isCurrent(openToken)) {
+    openedStream.getTracks().forEach((track) => track.stop())
+    if (camStream === openedStream) camStream = null
+    if (camVideo.value?.srcObject === openedStream) camVideo.value.srcObject = null
+    return
+  }
   setupCapCanvas(camVideo.value.videoWidth, camVideo.value.videoHeight)
   livePreviewing.value = true
-  redrawLiveCanvas()
+  previewOpening.value = false
+  previewLifecycle.startLoop(openToken, redrawLiveCanvas)
 }
 
 const liveStart = () => {
@@ -1364,6 +1409,7 @@ const liveStart = () => {
   camFirst = true
   camBusy = false
   frameCount = 0
+  previewLifecycle.stopLoop()
   liveRunning.value = true
   fpsTimer = setInterval(() => { camFps.value = frameCount; frameCount = 0 }, 1000)
   scheduleLoop(mode.value === 'network' ? 80 : 0)
@@ -1788,6 +1834,8 @@ const liveLoop = () => {
 }
 
 const liveStop = async () => {
+  previewLifecycle.invalidate()
+  previewOpening.value = false
   liveRunning.value = false
   livePreviewing.value = false
   if (loopTimer) { clearTimeout(loopTimer); loopTimer = null }
