@@ -145,11 +145,8 @@ def _detect_plate_boxes(plate_model_path: str, img_bgr, conf: float = 0.25) -> l
     ok, buf = cv2.imencode(".jpg", img_bgr)
     if not ok:
         return []
-    try:
-        res = detect_image(plate_model_path, buf.tobytes(), conf=conf, draw=False)
-        return res.get("detections") or []
-    except Exception:  # noqa: BLE001
-        return []
+    res = detect_image(plate_model_path, buf.tobytes(), conf=conf, draw=False)
+    return res.get("detections") or []
 
 
 def _expand_bbox(bbox, w: int, h: int, *, pad_ratio: float = 0.25, pad_px: int = 6, min_size: tuple[int, int] = (50, 18)):
@@ -216,11 +213,8 @@ def _locate_plates_in_roi(plate_model_path: str, roi_bgr, conf: float = 0.25) ->
     from inference import _get_model, _yolo_predict_kwargs
 
     out: list[dict] = []
-    try:
-        model = _get_model(plate_model_path)
-        r = model.predict(roi_bgr, **_yolo_predict_kwargs(conf=conf))[0]
-    except Exception:  # noqa: BLE001
-        return out
+    model = _get_model(plate_model_path)
+    r = model.predict(roi_bgr, **_yolo_predict_kwargs(conf=conf))[0]
 
     # Pose：keypoints 4 点
     if getattr(r, "keypoints", None) is not None and r.keypoints is not None and r.keypoints.xy is not None:
@@ -444,24 +438,21 @@ def _ocr_plate(ocr_fn: Callable[[bytes], dict] | None, img_bgr, bbox, warped: np
         if not ok:
             continue
         try:
-            try:
-                res = ocr_fn(buf.tobytes(), rec_only=True) or {}
-            except TypeError:
-                res = ocr_fn(buf.tobytes()) or {}
-            lines = res.get("lines") or []
-            text = _fix_plate_ocr_chars(_normalize_plate_text(res.get("text") or ""))
-            score = 0.0
-            if lines:
-                text2, score = _merge_ocr_lines(lines)
-                text = _fix_plate_ocr_chars(_normalize_plate_text(text2 or text))
-            elif text:
-                score = float(res.get("score") or 0.4)
-            fmt = _plate_format_score(text)
-            rank = fmt * 0.65 + min(1.0, score) * 0.35
-            if text and rank >= float(best_out.get("rank") or -1):
-                best_out = {"text": text, "score": score, "lines": lines, "rank": rank}
-        except Exception:  # noqa: BLE001
-            continue
+            res = ocr_fn(buf.tobytes(), rec_only=True) or {}
+        except TypeError:
+            res = ocr_fn(buf.tobytes()) or {}
+        lines = res.get("lines") or []
+        text = _fix_plate_ocr_chars(_normalize_plate_text(res.get("text") or ""))
+        score = 0.0
+        if lines:
+            text2, score = _merge_ocr_lines(lines)
+            text = _fix_plate_ocr_chars(_normalize_plate_text(text2 or text))
+        elif text:
+            score = float(res.get("score") or 0.4)
+        fmt = _plate_format_score(text)
+        rank = fmt * 0.65 + min(1.0, score) * 0.35
+        if text and rank >= float(best_out.get("rank") or -1):
+            best_out = {"text": text, "score": score, "lines": lines, "rank": rank}
     return {k: best_out[k] for k in ("text", "score", "lines")}
 
 

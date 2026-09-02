@@ -184,3 +184,80 @@ fc13627bec2feb5d3b6212612e8fadf97d22c3db1f3648d47dec319dd5c6891f  frontend/front
 - 模型硬件边界：CI 未加载生产 GPU、摄像头和真实模型资产；backend/provider/输入/维度要在部署环境完成首帧后才能得到硬件实测值，首帧前 UI 会保持等待状态。
 - 告警：完整套件的 46 条 warning 为 42 条既有 `datetime.utcnow()` 弃用提示、2 条 SQLAlchemy `Query.get()` 弃用提示和 2 条受限 `.pytest_cache` 写入提示；不影响退出码。Vite 仍有第三方 PURE 注释及既有大 chunk 警告。
 - 清理：本轮创建的 10 个 `.pytest-task6-r1-*` 临时目录均在验证绝对路径属于工作区后删除；未触碰既有且权限受限的 `.pytest_cache`。
+
+---
+
+## 审查修复轮次 2/5
+
+### 状态与基线
+
+- 状态：`DONE_WITH_CONCERNS`
+- 审查基线：`b4cffb66784d8ef6c08be07d769ca349b0d1ceef`（`fix: report truthful MTMC runtime state`）
+- 本轮提交主题：`fix: surface MTMC execution failures`
+- 范围：只处理本轮 6 项 Important；没有新增外部 API、数据库字段或模型配置入口。
+
+### RED 证据
+
+每项在生产代码修改前独立观察到预期失败：
+
+```text
+真实 plate detector / OCR callable 与 legacy detector helper：3 failed
+tracker 构造、首次 update、update 异常：3 failed
+仅 Youtu 尝试失败的 backend 归因：1 failed
+同模型跨相机执行状态不一致：1 failed
+车辆 ReID 异常路径预算快照：1 failed
+前端 plateOcr/localTracker 可见性：1 failed, 12 passed
+```
+
+失败原因分别是：plate/OCR helper 把推理异常转换为空结果；tracker 构造即写 ready 且 update 没有观察点；无 active person ReID 错落入 strong 默认分支；mixed 签名不比较执行健康；车辆 ReID 异常在帧末预算写入前退出；前端角色白名单漏项。
+
+### 六项修复映射
+
+1. `vehicle_track` 的 plate detection 与 OCR helper 不再吞掉推理异常。MTMC engine 在真实 `_plate_candidates`/`_ocr_plate` 边界捕获异常，分别记录 `plateDetection` 或 `plateOcr` failed/degraded；测试使用会真实抛错的 predictor/ocr callable。
+2. `localTracker` 构造只记录 `ready=null/runtimeState=pending`，包括回退后的实际 backend；`_tracks_or_raw` 在第一次真实 `update()` 成功后写 ready，update 异常先写 failed/degraded 再按既有帧处理策略向上抛出，由 worker 记录错误并处理下一帧。
+3. 前端运行态角色加入 `plateOcr`（“车牌 OCR”）和 `localTracker`（“本地跟踪器”）；两者进入模型卡片、风险摘要和 `runtimeOverallTone` 的既有统一计算，失败会显示并令总状态为 danger。
+4. person ReID 只按 `activeBackend` 选择顶层 backend/provider；仅 Youtu 尝试失败且无 active 时，顶层字段保持空，`backendReadiness.youtu` 保留实际尝试的 `youtu-reid-opencv/opencv-dnn-cpu` 与 Youtu 错误，不再伪装为 strong。
+5. 多相机 mixed 判定新增 `ready/runtimeState/degraded/degradedReason/backendReadiness`，并把 `None` 也作为事实差异；相同模型在两个相机一成一败时 `mixed=true`，前端展开为逐相机成功/失败行。
+6. 车辆 ReID eligibility、采样预留及 queued/consumed 在推理前完成；推理异常的 `finally` 路径立即持久化本帧预算，避免 early exit 留下全零快照。`consumed` 表示已发起并消耗预算的推理尝试，因此失败尝试仍计入。
+
+### GREEN 与最终验证
+
+```text
+plate/OCR focused：3 passed
+tracker focused：3 passed
+Youtu-only focused：1 passed
+mixed-health focused：1 passed
+vehicle ReID exception budget：1 passed
+MTMC runtime/ReID/真实流 focused：66 passed, 11 warnings
+vehicle plate/speed：64 passed, 2 warnings
+前端纯函数：13 passed, 0 failed
+完整 MTMC：183 passed, 46 warnings in 151.37s
+Python py_compile：exit code 0
+git diff --check：exit code 0（仅 LF→CRLF 提示）
+```
+
+前端生产构建：
+
+```text
+npm run build
+2731 modules transformed
+built in 26.36s
+exit code 0
+```
+
+### 本轮变更文件 SHA-256
+
+```text
+fc5d47893db1fdc77b0df7a68143ec0a89ec75f2dd9ed59d474d5c903ce6a90a  backend/services/mtmc_engine.py
+0c7c964a08a64935c1c1364aac66b944796559b9084280dcaa2553228ac9c66a  backend/services/vehicle_track.py
+233daf69ecfa0094b9ad23bef90e03567e3a1c1f2226f0332068a3c815d010f8  backend/unittests/test_mtmc_runtime_status.py
+e619c4029a6c048410634dc60203ddd532bedf974a95cfdb82065df4f81bf424  frontend/frontend_admin/src/utils/mtmcRuntimeStatus.js
+884b1e999f2b59086a1f190ab3e2427bc43562b50fd5bbd08f4ac298d1f1e348  frontend/frontend_admin/src/utils/mtmcRuntimeStatus.test.js
+```
+
+### 自审与关注项
+
+- plate/OCR 异常不再伪装成“无候选/空文本”；MTMC 仍会继续当前帧的其余安全路径。非 MTMC 的 vehicle track 调用会收到 helper 异常并交由其既有上层策略处理，相关 vehicle zone/speed 64 项回归通过。
+- tracker update 异常仍按既有策略终止当前帧并由静态图、文件或流 worker 捕获；本轮只保证异常前先写真实 runtime 状态，没有静默改成 raw fallback。
+- 完整套件 46 条 warning 仍为 42 条既有 `datetime.utcnow()`、2 条 SQLAlchemy `Query.get()` 和 2 条受限 `.pytest_cache` 写入提示；Vite 仍有第三方 PURE 注释及既有大 chunk 警告。
+- 本轮创建的 3 个残留 `.pytest-task6-r2-*` 目录已在确认绝对路径属于工作区后删除；单项 pytest 的临时目录由 pytest 自行清理。

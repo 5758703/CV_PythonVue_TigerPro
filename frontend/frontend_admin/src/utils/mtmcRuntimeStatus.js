@@ -6,6 +6,8 @@ const ROLE_LABELS = {
   personReidFallback: '人员 ReID（回退）',
   vehicleReid: '车辆 ReID',
   plateDetection: '车牌检测',
+  plateOcr: '车牌 OCR',
+  localTracker: '本地跟踪器',
 }
 
 const valueOr = (primary, fallback) => primary == null ? fallback : primary
@@ -37,7 +39,8 @@ function inputSizeLabel(value) {
 export function runtimeModelRows(runtime = {}) {
   const models = runtime.models || {}
   const preferredRoles = [
-    'personDetection', 'vehicleDetection', 'personReid', 'vehicleReid', 'plateDetection',
+    'personDetection', 'vehicleDetection', 'personReid', 'vehicleReid',
+    'plateDetection', 'plateOcr', 'localTracker',
   ]
   const roles = preferredRoles.filter((role) => models[role])
   if (!models.personReid) {

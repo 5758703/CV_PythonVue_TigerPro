@@ -121,6 +121,62 @@ test('mixed camera models render independent truthful rows', () => {
   ])
 })
 
+test('same model with different camera health renders ready and failed rows', () => {
+  const rows = helpers.runtimeModelRows?.({
+    models: {
+      vehicleReid: {
+        mixed: true,
+        selectedModelKey: 'vehicle-reid-v1',
+        byCamera: {
+          1: {
+            selectedModelKey: 'vehicle-reid-v1', modelVersion: 'vehicle.onnx',
+            backend: 'vehicle-onnx', provider: 'onnxruntime-cpu',
+            ready: true, runtimeState: 'ready', degraded: false,
+          },
+          2: {
+            selectedModelKey: 'vehicle-reid-v1', modelVersion: 'vehicle.onnx',
+            backend: 'vehicle-onnx', provider: 'onnxruntime-cpu',
+            ready: false, runtimeState: 'failed', degraded: true,
+            degradedReason: 'camera 2 ORT crash',
+          },
+        },
+      },
+    },
+  })
+
+  assert.deepEqual(rows.map(({ cameraId, selectedModelKey, tone, statusLabel }) => ({
+    cameraId, selectedModelKey, tone, statusLabel,
+  })), [
+    { cameraId: '1', selectedModelKey: 'vehicle-reid-v1', tone: 'success', statusLabel: '就绪' },
+    { cameraId: '2', selectedModelKey: 'vehicle-reid-v1', tone: 'danger', statusLabel: '降级' },
+  ])
+})
+
+test('plate OCR and local tracker failures are visible with Chinese labels and affect risks', () => {
+  const runtime = {
+    models: {
+      plateOcr: {
+        selectedModelKey: 'plate-ocr', ready: false, runtimeState: 'failed',
+        degraded: true, degradedReason: 'OCR callable crash',
+      },
+      localTracker: {
+        selectedModelKey: 'bytetrack', ready: false, runtimeState: 'failed',
+        degraded: true, degradedReason: 'tracker update crash',
+      },
+    },
+  }
+
+  const rows = helpers.runtimeModelRows?.(runtime)
+  assert.deepEqual(rows.map(({ role, roleLabel, tone }) => ({ role, roleLabel, tone })), [
+    { role: 'plateOcr', roleLabel: '车牌 OCR', tone: 'danger' },
+    { role: 'localTracker', roleLabel: '本地跟踪器', tone: 'danger' },
+  ])
+  assert.equal(
+    helpers.runtimeRiskSummary?.(runtime),
+    '车牌 OCR：OCR callable crash；本地跟踪器：tracker update crash',
+  )
+})
+
 test('association breakdown keeps final association score distinct from event score', () => {
   const scores = helpers.associationScoreParts?.({
     appearanceScore: 0.72,

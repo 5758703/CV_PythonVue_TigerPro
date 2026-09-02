@@ -12,7 +12,7 @@ from extensions import db
 from models.ai_model import AiModel
 from models.mtmc import MtmcAssociationEdge
 from routes import mtmc as mtmc_routes
-from services import mtmc_engine, strong_reid
+from services import mtmc_engine, strong_reid, vehicle_track
 from services.mtmc_associator import MtmcAssociator
 from services.mtmc_engine import CamState, MtmcConfig, MtmcSession, _process_frame
 from services.mtmc_local_track import Tracklet
@@ -197,21 +197,66 @@ def test_separate_detector_failure_does_not_erase_successful_model_runtime():
     assert "vehicle CUDA OOM" in models["vehicleDetection"]["degradedReason"]
 
 
-def test_tracker_fallback_reports_requested_and_actual_backend(monkeypatch):
+def test_tracker_fallback_construction_stays_pending_until_first_update(monkeypatch):
     cfg = MtmcConfig(camera_ids=[1], enable_person=False, enable_vehicle=False, local_track_backend="bytetrack")
-    session, cam_state = _runtime_session(cfg)
+    session, _cam_state = _runtime_session(cfg)
     monkeypatch.setattr("services.mtmc_local_track.bytetrack_available", lambda: False)
 
-    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], [])):
-        with patch("services.mtmc_engine._publish_overlay"):
-            _process_frame(session, cam_state, _frame(), {}, now=10.0)
+    mtmc_engine._make_local_tracker(cfg, session=session, camera_id=1)
 
     actual = session.to_dict()["runtime"]["models"]["localTracker"]
     assert actual["configuredModelKey"] == "bytetrack"
     assert actual["selectedModelKey"] == "iou"
-    assert actual["ready"] is True
+    assert actual["ready"] is None
+    assert actual["runtimeState"] == "pending"
     assert actual["degraded"] is True
     assert "fallback" in actual["degradedReason"]
+
+
+def test_tracker_becomes_ready_only_after_real_update_success():
+    cfg = MtmcConfig(
+        camera_ids=[1], enable_person=True, enable_vehicle=False,
+        det_person_path="person.pt", local_track_backend="iou", sample_fps=100,
+    )
+    session, cam_state = _runtime_session(cfg)
+    tracker = mtmc_engine._make_local_tracker(cfg, session=session, camera_id=1)
+    cam_state.tracker_person = tracker
+    cam_state.tracker_vehicle = _RawFallbackTracker()
+    assert session.to_dict()["runtime"]["models"]["localTracker"]["ready"] is None
+
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([_person()], [])):
+        with patch("services.mtmc_engine._publish_overlay"):
+            _process_frame(session, cam_state, _frame(), {}, now=10.0)
+
+    actual = session.to_dict()["runtime"]["models"]["localTracker"]
+    assert actual["ready"] is True
+    assert actual["runtimeState"] == "ready"
+    assert actual["byCamera"]["1"]["ready"] is True
+
+
+def test_tracker_update_failure_replaces_pending_with_failed_runtime(monkeypatch):
+    cfg = MtmcConfig(
+        camera_ids=[1], enable_person=True, enable_vehicle=False,
+        det_person_path="person.pt", local_track_backend="iou", sample_fps=100,
+    )
+    session, cam_state = _runtime_session(cfg)
+    tracker = mtmc_engine._make_local_tracker(cfg, session=session, camera_id=1)
+    cam_state.tracker_person = tracker
+    cam_state.tracker_vehicle = _RawFallbackTracker()
+
+    def fail_update(_raw, frame=None):
+        raise RuntimeError("tracker update crash")
+
+    monkeypatch.setattr(tracker, "update", fail_update)
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([_person()], [])):
+        with pytest.raises(RuntimeError, match="tracker update crash"):
+            _process_frame(session, cam_state, _frame(), {}, now=10.0)
+
+    actual = session.to_dict()["runtime"]["models"]["localTracker"]
+    assert actual["ready"] is False
+    assert actual["runtimeState"] == "failed"
+    assert actual["degraded"] is True
+    assert "tracker update crash" in actual["degradedReason"]
 
 
 def test_session_runtime_exposes_effective_thresholds_and_directed_topology():
@@ -396,6 +441,43 @@ def test_youtu_extractor_reports_its_actual_execution_provider(monkeypatch):
     assert meta["provider"] == "opencv-dnn-cpu"
 
 
+def test_youtu_only_failure_does_not_masquerade_as_strong_backend(monkeypatch):
+    monkeypatch.setattr(
+        strong_reid,
+        "extract_youtu",
+        lambda *_args: (
+            None,
+            {
+                "youtuError": "Youtu OpenCV inference crash",
+                "backend": "youtu-reid-opencv",
+                "provider": "opencv-dnn-cpu",
+            },
+        ),
+    )
+
+    embeddings, meta = strong_reid.extract_person_embeddings(
+        _frame(), youtu_root="youtu", strong_root=None,
+    )
+    actual = mtmc_engine._person_reid_runtime_observation(
+        MtmcConfig(camera_ids=[1], youtu_root="youtu", strong_reid_root=None),
+        meta,
+        embeddings,
+    )
+
+    assert meta["activeBackend"] is None
+    assert actual["selectedModelKey"] is None
+    assert actual["backend"] is None
+    assert actual["provider"] is None
+    assert actual["ready"] is False
+    assert actual["degradedReason"] == "youtu: Youtu OpenCV inference crash"
+    assert actual["backendReadiness"]["youtu"] == {
+        "ready": False,
+        "backend": "youtu-reid-opencv",
+        "provider": "opencv-dnn-cpu",
+        "error": "Youtu OpenCV inference crash",
+    }
+
+
 def test_multi_camera_runtime_never_pairs_last_camera_metadata_with_mixed_models():
     session = MtmcSession("mixed-runtime", MtmcConfig(camera_ids=[1, 2]), MtmcAssociator())
     first = {
@@ -437,6 +519,40 @@ def test_multi_camera_runtime_never_pairs_last_camera_metadata_with_mixed_models
     assert actual["selectedModelKeys"] == ["opencv-person-reid-youtu", "osnet-x1-0"]
     assert actual["providers"] == ["onnxruntime-cuda", "opencv-dnn-cpu"]
     assert actual["byCamera"] == {"1": first, "2": second}
+
+
+def test_same_model_with_different_camera_execution_outcomes_is_mixed():
+    session = MtmcSession("mixed-health", MtmcConfig(camera_ids=[1, 2]), MtmcAssociator())
+    ready = {
+        "selectedModelKey": "vehicle-reid-v1",
+        "modelVersion": "vehicle.onnx",
+        "ready": True,
+        "runtimeState": "ready",
+        "backend": "vehicle-onnx",
+        "provider": "onnxruntime-cpu",
+        "inputSize": [256, 384],
+        "embeddingDim": 1024,
+        "degraded": False,
+        "degradedReason": None,
+    }
+    failed = {
+        **ready,
+        "ready": False,
+        "runtimeState": "failed",
+        "degraded": True,
+        "degradedReason": "camera 2 ORT crash",
+    }
+
+    mtmc_engine._record_runtime_model(session, "vehicleReid", 1, ready)
+    mtmc_engine._record_runtime_model(session, "vehicleReid", 2, failed)
+    actual = session.to_dict()["runtime"]["models"]["vehicleReid"]
+
+    assert actual["mixed"] is True
+    assert actual["ready"] is False
+    assert actual["runtimeState"] == "failed"
+    assert actual["degraded"] is True
+    assert actual["degradedReason"] == "camera 2 ORT crash"
+    assert actual["byCamera"] == {"1": ready, "2": failed}
 
 
 def test_budget_zero_counts_only_eligible_tracks_without_reserving_sampler():
@@ -643,15 +759,33 @@ def test_vehicle_reid_exception_records_failed_runtime_before_propagating():
     assert actual["ready"] is False
     assert actual["runtimeState"] == "failed"
     assert "vehicle ORT crash" in actual["degradedReason"]
+    budget = session.to_dict()["runtime"]["budgets"]["vehicleReid"]
+    assert budget["considered"] == 1
+    assert budget["eligible"] == 1
+    assert budget["queued"] == 1
+    assert budget["consumed"] == 1
+    assert budget["budgetSkipped"] == 0
+    assert budget["samplerSkipped"] == 0
+    assert budget["lastFrameByCamera"]["1"] == {
+        "considered": 1,
+        "eligible": 1,
+        "queued": 1,
+        "consumed": 1,
+        "budgetSkipped": 0,
+        "samplerSkipped": 0,
+    }
+    assert cam_state.vehicle_builders[8].last_embedding_sample_at == 10.0
 
 
-def test_plate_ocr_exception_is_not_silently_reported_ready():
+def test_plate_ocr_real_callable_failure_is_not_silently_reported_ready():
+    def failing_ocr(_value, **_kwargs):
+        raise RuntimeError("OCR callable crash")
+
     cfg = MtmcConfig(
         camera_ids=[1], enable_person=False, enable_vehicle=True,
         det_vehicle_path="vehicle.pt", vehicle_reid_root="vehicle-reid",
-        plate_model_path="plate.pt", ocr_fn=lambda _value: {},
+        plate_model_path=None, ocr_fn=failing_ocr,
         vehicle_reid_budget=1, plate_budget=1, sample_fps=100,
-        selected_models={"plateDetection": _configured_model("plate-det", "plate-v1")},
     )
     session, cam_state = _runtime_session(cfg)
     cam_state.tracker_person = _RawFallbackTracker()
@@ -662,18 +796,51 @@ def test_plate_ocr_exception_is_not_silently_reported_ready():
             np.asarray([1.0, 0.0], dtype=np.float32),
             {"backend": "vehicle-onnx", "onnx": "vehicle.onnx", "dim": 2},
         )):
-            with patch("services.vehicle_track._plate_candidates", return_value=[(
-                [50.0, 70.0, 145.0, 100.0], "plate-model", 0.9, None,
-            )]):
-                with patch("services.vehicle_track._ocr_plate", side_effect=RuntimeError("OCR crash")):
-                    with patch("services.mtmc_engine._publish_overlay"):
-                        _process_frame(session, cam_state, _frame(), {}, now=10.0)
+            with patch("services.mtmc_engine._publish_overlay"):
+                _process_frame(session, cam_state, _frame(), {}, now=10.0)
 
     models = session.to_dict()["runtime"]["models"]
     assert models["plateDetection"]["ready"] is True
     assert models["plateOcr"]["ready"] is False
     assert models["plateOcr"]["runtimeState"] == "failed"
-    assert "OCR crash" in models["plateOcr"]["degradedReason"]
+    assert "OCR callable crash" in models["plateOcr"]["degradedReason"]
+
+
+def test_plate_detector_real_predict_failure_is_recorded_by_engine(monkeypatch):
+    class FailingPlateModel:
+        def predict(self, *_args, **_kwargs):
+            raise RuntimeError("plate predictor crash")
+
+    cfg = MtmcConfig(
+        camera_ids=[1], enable_person=False, enable_vehicle=True,
+        det_vehicle_path="vehicle.pt", vehicle_reid_root="vehicle-reid",
+        plate_model_path="plate.pt", ocr_fn=lambda _value, **_kwargs: {},
+        vehicle_reid_budget=1, plate_budget=1, sample_fps=100,
+        selected_models={"plateDetection": _configured_model("plate-det", "plate-v1")},
+    )
+    session, cam_state = _runtime_session(cfg)
+    cam_state.tracker_person = _RawFallbackTracker()
+    cam_state.tracker_vehicle = _OneVehicleTracker()
+    monkeypatch.setattr("inference._get_model", lambda _path: FailingPlateModel())
+
+    with patch("services.mtmc_engine._detect_person_vehicle", return_value=([], [_vehicle()])):
+        with patch("services.vehicle_reid_feat.extract_vehicle_embedding", return_value=(
+            np.asarray([1.0, 0.0], dtype=np.float32),
+            {"backend": "vehicle-onnx", "onnx": "vehicle.onnx", "dim": 2},
+        )):
+            with patch("services.mtmc_engine._publish_overlay"):
+                _process_frame(session, cam_state, _frame(), {}, now=10.0)
+
+    actual = session.to_dict()["runtime"]["models"]["plateDetection"]
+    assert actual["ready"] is False
+    assert actual["runtimeState"] == "failed"
+    assert "plate predictor crash" in actual["degradedReason"]
+
+
+def test_legacy_plate_detector_helper_propagates_inference_failure():
+    with patch("services.vehicle_track.detect_image", side_effect=RuntimeError("detect helper crash")):
+        with pytest.raises(RuntimeError, match="detect helper crash"):
+            vehicle_track._detect_plate_boxes("plate.pt", _frame())
 
 
 def test_plate_heuristic_fallback_is_explicitly_degraded():

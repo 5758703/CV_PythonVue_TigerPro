@@ -999,11 +999,26 @@ def _detect_items_from_raw(raw_p: list[dict], raw_v: list[dict]) -> list[dict]:
     return items
 
 
-def _tracks_or_raw(tracker, raw: list[dict], frame, *, id_base: int = 800001):
+def _tracks_or_raw(
+    tracker,
+    raw: list[dict],
+    frame,
+    *,
+    id_base: int = 800001,
+    session=None,
+    camera_id: int | None = None,
+):
     """跟踪器空结果时仍用原始检测框出叠加，避免画面无框。"""
     from services.mtmc_local_track import Tracklet
 
-    tracks = tracker.update(raw, frame=frame) if tracker is not None else []
+    try:
+        tracks = tracker.update(raw, frame=frame) if tracker is not None else []
+    except Exception as error:  # noqa: BLE001
+        if session is not None and camera_id is not None and tracker is not None:
+            _record_local_tracker_runtime(session, camera_id, tracker, error=error)
+        raise
+    if session is not None and camera_id is not None and tracker is not None:
+        _record_local_tracker_runtime(session, camera_id, tracker)
     if tracks or not raw:
         return list(tracks)
     extras = []
@@ -1303,8 +1318,7 @@ def _record_runtime_model(session, role: str, camera_id: int, observation: dict)
         merged["degradedReason"] = "; ".join(reasons) or None
         merged["runtimeState"] = (
             "failed" if merged["ready"] is False
-            else "degraded" if merged["degraded"]
-            else "ready" if merged["ready"] is True
+            else ("degraded" if merged["degraded"] else "ready") if merged["ready"] is True
             else "pending"
         )
 
@@ -1318,6 +1332,15 @@ def _record_runtime_model(session, role: str, camera_id: int, observation: dict)
             for row in camera_rows:
                 value = row.get(field)
                 if value is None or any(value == seen for seen in values):
+                    continue
+                values.append(copy.deepcopy(value))
+            return values
+
+        def distinct_values(field):
+            values = []
+            for row in camera_rows:
+                value = row.get(field)
+                if any(value == seen for seen in values):
                     continue
                 values.append(copy.deepcopy(value))
             return values
@@ -1340,10 +1363,13 @@ def _record_runtime_model(session, role: str, camera_id: int, observation: dict)
         merged["providers"] = unique_values("provider")
         merged["inputSizes"] = unique_values("inputSize")
         merged["embeddingDims"] = unique_values("embeddingDim")
-        signatures = unique_values("selectedModelKey")
-        merged["mixed"] = len(signatures) > 1 or any(
-            len(unique_values(field)) > 1
-            for field in ("modelVersion", "backend", "provider", "inputSize", "embeddingDim")
+        merged["mixed"] = any(
+            len(distinct_values(field)) > 1
+            for field in (
+                "selectedModelKey", "modelVersion", "backend", "provider",
+                "inputSize", "embeddingDim", "ready", "runtimeState",
+                "degraded", "degradedReason", "backendReadiness",
+            )
         )
         merged["byCamera"] = by_camera
         models[role] = merged
@@ -1477,11 +1503,11 @@ def _person_reid_runtime_observation(
         expected.append("youtu")
     reason = _runtime_error_reason(backends, expected)
     selected_embedding = embeddings.get(selected_key) if selected_key else None
-    if selected_key == "opencv-person-reid-youtu":
+    if active_backend == "youtu":
         backend = backend_detail.get("backend") or "youtu-reid"
         provider = backend_detail.get("provider") or "unknown"
         input_size = backend_detail.get("inputSize") or meta.get("inputSize")
-    else:
+    elif active_backend == "strong":
         runtime_io = _strong_runtime_io(cfg.strong_reid_root)
         backend = backend_detail.get("backend") or "strong-onnx"
         provider = (
@@ -1492,6 +1518,10 @@ def _person_reid_runtime_observation(
             backend_detail.get("inputSize") or meta.get("strongInputSize")
             or runtime_io.get("inputSize")
         )
+    else:
+        backend = None
+        provider = None
+        input_size = None
     ready = bool(selected_key and selected_embedding is not None)
     if not ready and reason is None:
         reason = "no person ReID model space produced an embedding"
@@ -2620,24 +2650,62 @@ def _make_local_tracker(
                 "degradedReason": str(error),
             })
         raise
+    fallback = backend != requested
+    tracker._mtmc_runtime = {
+        "configured": True,
+        "assetPresent": True,
+        "configuredModelKey": requested,
+        "selectedModelKey": backend,
+        "modelVersion": None,
+        "ready": None,
+        "runtimeState": "pending",
+        "backend": backend,
+        "provider": type(tracker).__module__,
+        "inputSize": None,
+        "embeddingDim": None,
+        "degraded": fallback,
+        "degradedReason": f"{requested} unavailable; fallback to {backend}" if fallback else None,
+    }
     if session is not None and camera_id is not None:
-        fallback = backend != requested
-        _record_runtime_model(session, "localTracker", camera_id, {
+        _record_runtime_model(
+            session, "localTracker", camera_id, copy.deepcopy(tracker._mtmc_runtime),
+        )
+    return tracker
+
+
+def _record_local_tracker_runtime(
+    session: MtmcSession,
+    camera_id: int,
+    tracker,
+    *,
+    error: Exception | None = None,
+) -> None:
+    observation = copy.deepcopy(getattr(tracker, "_mtmc_runtime", {}) or {})
+    if not observation:
+        observation = {
             "configured": True,
             "assetPresent": True,
-            "configuredModelKey": requested,
-            "selectedModelKey": backend,
+            "configuredModelKey": type(tracker).__name__,
+            "selectedModelKey": type(tracker).__name__,
             "modelVersion": None,
-            "ready": True,
-            "runtimeState": "degraded" if fallback else "ready",
-            "backend": backend,
+            "backend": type(tracker).__name__,
             "provider": type(tracker).__module__,
             "inputSize": None,
             "embeddingDim": None,
-            "degraded": fallback,
-            "degradedReason": f"{requested} unavailable; fallback to {backend}" if fallback else None,
-        })
-    return tracker
+        }
+    fallback_reason = observation.get("degradedReason")
+    observation.update({
+        "ready": error is None,
+        "runtimeState": "failed" if error is not None else (
+            "degraded" if fallback_reason else "ready"
+        ),
+        "degraded": bool(fallback_reason or error is not None),
+        "degradedReason": (
+            "; ".join(value for value in (fallback_reason, str(error) if error else None) if value)
+            or None
+        ),
+    })
+    _record_runtime_model(session, "localTracker", camera_id, observation)
 
 
 def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: dict, now: float | None = None):
@@ -2718,7 +2786,10 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     _publish_overlay(cam_state, frame, preliminary, cam_state.congestion)
     # ---- 人员 ----
     if cfg.enable_person and cfg.det_person_path:
-        tracks = _tracks_or_raw(cam_state.tracker_person, raw_p, frame, id_base=800001)
+        tracks = _tracks_or_raw(
+            cam_state.tracker_person, raw_p, frame, id_base=800001,
+            session=session, camera_id=cam_id,
+        )
         tracks = _sort_tracks_for_reid(session, cam_state, "person", tracks, frame_h=fh, frame_w=fw)
         for t in tracks:
             crop = _crop(frame, t.bbox)
@@ -2932,7 +3003,10 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
-        tracks_v = _tracks_or_raw(cam_state.tracker_vehicle, raw_v, frame, id_base=810001)
+        tracks_v = _tracks_or_raw(
+            cam_state.tracker_vehicle, raw_v, frame, id_base=810001,
+            session=session, camera_id=cam_id,
+        )
         tracks_v = supplement_orphan_vehicle_dets(
             tracks_v, raw_v, frame_w=fw, frame_h=fh,
         )
@@ -3001,12 +3075,22 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 plate_score = float(cached_plate.get("score") or 0)
             if need_reid:
                 vehicle_reid_left -= 1
+                vehicle_reid_failed = False
                 try:
                     emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
                 except Exception as error:  # noqa: BLE001
+                    vehicle_reid_failed = True
                     vmeta = {"backend": "vehicle-onnx", "error": str(error)}
                     _record_vehicle_reid_runtime(session, cam_id, vmeta, None)
                     raise
+                finally:
+                    if vehicle_reid_failed:
+                        # Eligibility and reservation happened before inference;
+                        # persist those consumed-attempt counters even when the
+                        # frame exits early through the worker's error policy.
+                        _record_runtime_budget_frame(
+                            session, "vehicleReid", cam_id, **vehicle_budget,
+                        )
                 _record_vehicle_reid_runtime(session, cam_id, vmeta, emb)
                 wants_ocr = cfg.ocr_fn is not None and not plate_text
                 do_ocr = wants_ocr and plate_left > 0
