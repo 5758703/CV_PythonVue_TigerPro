@@ -286,6 +286,7 @@ def add_topology():
         min_transit_sec=float(data.get("minTransitSec") or 0),
         max_transit_sec=float(data.get("maxTransitSec") or 120),
         weight=float(data.get("weight") or 1),
+        edge_type=str(data.get("edgeType") or "non_overlap").strip().lower(),
         remark=(data.get("remark") or "").strip() or None,
     )
     db.session.add(row)
@@ -354,7 +355,7 @@ def start_session():
     if err:
         return jsonify(code=400, message=err), 400
 
-    edges = [e.to_dict() for e in CameraTopology.query.filter_by(status="0").all()]
+    edges = mtmc_engine.load_database_topology()
     session = mtmc_engine.start_session(
         cfg,
         cameras=cams,

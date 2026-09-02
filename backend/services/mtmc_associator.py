@@ -149,6 +149,16 @@ class AssocEvidence:
         return d
 
 
+@dataclass(frozen=True)
+class TopologyRule:
+    """Immutable policy for one directed camera transition."""
+
+    min_sec: float
+    max_sec: float
+    weight: float = 1.0
+    edge_type: str = "non_overlap"
+
+
 class MtmcAssociator:
     """跨摄像头全局关联（McByte++：短时粘性 / 长时选择性 ReID）。"""
 
@@ -180,7 +190,7 @@ class MtmcAssociator:
         appear_thresh: float = 0.48,
         vehicle_appear_thresh: float | None = None,
         time_window_sec: float = 90.0,
-        topology: dict[tuple[int, int], tuple[float, float]] | None = None,
+        topology: dict[tuple[int, int], TopologyRule | tuple[float, float] | dict] | None = None,
         same_cam_reuse: bool = True,
         # 同镜上 Global 视为「仍占用」的最短间隔（同帧互斥）
         same_cam_min_gap: float = 0.45,
@@ -216,7 +226,11 @@ class MtmcAssociator:
             same_cam_appear_thresh if same_cam_appear_thresh is not None else min(0.72, appear_thresh + 0.2)
         )
         self.time_window_sec = float(time_window_sec)
-        self.topology = topology or {}
+        self.topology = {
+            (int(a), int(b)): self._coerce_topology_rule(rule)
+            for (a, b), rule in (topology or {}).items()
+        }
+        self._topology_loaded = topology is not None
         self.same_cam_reuse = bool(same_cam_reuse)
         self.same_cam_min_gap = float(same_cam_min_gap)
         self.lost_revive_sec = float(lost_revive_sec)
@@ -437,19 +451,42 @@ class MtmcAssociator:
         with self._lock:
             return self.tracks.get(global_id)
 
+    @staticmethod
+    def _coerce_topology_rule(value: TopologyRule | tuple[float, float] | dict) -> TopologyRule:
+        if isinstance(value, TopologyRule):
+            return value
+        if isinstance(value, dict):
+            weight = value.get("weight")
+            return TopologyRule(
+                min_sec=float(value.get("minTransitSec") or value.get("min_sec") or 0),
+                max_sec=float(value.get("maxTransitSec") or value.get("max_sec") or 0),
+                weight=float(1 if weight is None else weight),
+                edge_type=str(value.get("edgeType") or value.get("edge_type") or "non_overlap").strip().lower(),
+            )
+        min_sec, max_sec = value
+        min_sec = float(min_sec)
+        return TopologyRule(
+            min_sec,
+            float(max_sec),
+            edge_type="overlap" if min_sec == 0 else "non_overlap",
+        )
+
     def set_topology(self, edges: list[dict]):
-        topo = {}
+        topo: dict[tuple[int, int], TopologyRule] = {}
         for e in edges or []:
             a = int(e.get("fromCameraId") or e.get("from_camera_id") or 0)
             b = int(e.get("toCameraId") or e.get("to_camera_id") or 0)
             if a and b:
-                topo[(a, b)] = (
-                    float(e.get("minTransitSec") or e.get("min_transit_sec") or 0),
-                    float(e.get("maxTransitSec") or e.get("max_transit_sec") or self.time_window_sec),
+                weight = e.get("weight")
+                topo[(a, b)] = TopologyRule(
+                    min_sec=float(e.get("minTransitSec") or e.get("min_transit_sec") or 0),
+                    max_sec=float(e.get("maxTransitSec") or e.get("max_transit_sec") or self.time_window_sec),
+                    weight=float(1 if weight is None else weight),
+                    edge_type=str(e.get("edgeType") or e.get("edge_type") or "non_overlap").strip().lower(),
                 )
-                topo[(b, a)] = topo[(a, b)]
         with self._lock:
             self.topology = topo
+            self._topology_loaded = True
 
     def _new_gid(self, object_type: str) -> str:
         self._seq += 1
@@ -462,29 +499,39 @@ class MtmcAssociator:
         if prev_cam == cur_cam:
             return 1.0 if dt <= self.time_window_sec else 0.0
         key = (int(prev_cam), int(cur_cam))
-        if key in self.topology:
-            lo, hi = self.topology[key]
-            if dt < lo or dt > hi:
+        rule = self.topology.get(key)
+        if rule is not None:
+            rule = self._coerce_topology_rule(rule)
+            if (
+                dt < rule.min_sec or dt > rule.max_sec
+                or (rule.edge_type != "overlap" and dt <= 0)
+            ):
                 return 0.0
-            mid = (lo + hi) * 0.5
-            span = max(hi - lo, 1e-6)
+            if rule.edge_type == "overlap":
+                return float(max(0.0, 1.0 - dt / max(rule.max_sec, 1e-6)))
+            mid = (rule.min_sec + rule.max_sec) * 0.5
+            span = max(rule.max_sec - rule.min_sec, 1e-6)
             return float(max(0.0, 1.0 - abs(dt - mid) / span))
-        if dt > self.time_window_sec:
-            return 0.0
-        return 0.55
+        if not self._topology_loaded:
+            return 1.0 if dt <= self.time_window_sec else 0.0
+        return 0.0
 
     def _topology_ok(self, prev_cam: int | None, cur_cam: int, dt: float) -> float:
         if prev_cam is None or prev_cam == cur_cam:
             return 1.0 if dt <= self.time_window_sec else 0.0
         key = (int(prev_cam), int(cur_cam))
-        if key in self.topology:
-            lo, hi = self.topology[key]
-            if dt < lo or dt > hi:
-                return 0.0
-            return 1.0
-        if dt > self.time_window_sec:
+        rule = self.topology.get(key)
+        if rule is None:
+            if not self._topology_loaded:
+                return 1.0 if dt <= self.time_window_sec else 0.0
             return 0.0
-        return 0.55
+        rule = self._coerce_topology_rule(rule)
+        if (
+            dt < rule.min_sec or dt > rule.max_sec
+            or (rule.edge_type != "overlap" and dt <= 0)
+        ):
+            return 0.0
+        return max(0.0, rule.weight)
 
     def _bind_key(self, object_type: str, camera_id: int, local_track_id: int) -> tuple[str, int, int]:
         return (object_type, int(camera_id), int(local_track_id))
@@ -816,7 +863,7 @@ class MtmcAssociator:
             if not same_cam
             else 1.0
         )
-        final = float(score * topo_w * recency_w * xcam_boost)
+        final = float(score * topo_w * time_w * recency_w * xcam_boost)
         return final, {
             "reid": reid_raw,
             "reidByModelKey": per_space_scores or None,
@@ -1040,11 +1087,7 @@ class MtmcAssociator:
 
             tier = "new"
             candidate_gid = best_gid
-            tier_score = (
-                best_breakdown.get("reid")
-                if best_breakdown.get("reid") is not None
-                else best_score
-            )
+            tier_score = best_score
             # 行人：final 含颜色/时序加成，用作确认分；避免弱外观永远卡在 candidate
             if object_type == "person" and best_score is not None and best_score >= 0:
                 tier_score = max(float(tier_score or -1), float(best_score))

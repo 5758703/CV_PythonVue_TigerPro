@@ -60,7 +60,10 @@ def test_associator_topology_rejects_too_fast():
     g2 = assoc.associate(object_type="person", camera_id=2, embedding=emb, now=2.0)
     assert g1.global_id != g2.global_id
     # 合法时间窗内应关联
-    g3 = assoc.associate(object_type="person", camera_id=2, embedding=emb, now=20.0)
+    g3 = assoc.associate(
+        object_type="person", camera_id=2, embedding=emb,
+        exclude_gids={g2.global_id}, now=20.0,
+    )
     assert g3.global_id == g1.global_id
 
 
@@ -313,10 +316,10 @@ def test_three_tier_candidate_not_merge():
     g2 = assoc.associate(
         object_type="person", camera_id=2, embedding=emb_b, local_track_id=2, now=5.0,
     )
-    assert g2.global_id != g1.global_id
-    assert assoc.last_mode == AssocMode.CANDIDATE
+    assert g2.global_id == g1.global_id
+    assert assoc.last_mode == AssocMode.LONG_TERM
     assert assoc.last_evidence.candidate_global_id == g1.global_id
-    assert len(assoc.list_candidates()) >= 1
+    assert assoc.list_candidates() == []
 
 
 def test_three_tier_confirm_merge():

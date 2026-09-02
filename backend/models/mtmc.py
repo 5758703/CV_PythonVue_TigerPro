@@ -16,6 +16,7 @@ class CameraTopology(db.Model):
     min_transit_sec = db.Column(db.Float, default=0.0)
     max_transit_sec = db.Column(db.Float, default=120.0)
     weight = db.Column(db.Float, default=1.0)
+    edge_type = db.Column(db.String(32), default="non_overlap")
     remark = db.Column(db.String(255))
     status = db.Column(db.String(1), default="0")
     create_time = db.Column(db.DateTime, default=datetime.utcnow)
@@ -28,6 +29,7 @@ class CameraTopology(db.Model):
             "minTransitSec": self.min_transit_sec,
             "maxTransitSec": self.max_transit_sec,
             "weight": self.weight,
+            "edgeType": self.edge_type or "non_overlap",
             "remark": self.remark,
             "status": self.status,
             "createTime": self.create_time.isoformat() if self.create_time else None,

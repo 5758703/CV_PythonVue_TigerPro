@@ -475,6 +475,7 @@ def _auto_topology_edges(cam_ids: list[int]) -> list[dict]:
                 "minTransitSec": 0,
                 "maxTransitSec": 120,
                 "weight": 1,
+                "edgeType": "overlap",
             })
             edges.append({
                 "fromCameraId": int(b),
@@ -482,8 +483,19 @@ def _auto_topology_edges(cam_ids: list[int]) -> list[dict]:
                 "minTransitSec": 0,
                 "maxTransitSec": 120,
                 "weight": 1,
+                "edgeType": "overlap",
             })
     return edges
+
+
+def load_database_topology() -> list[dict]:
+    """Return enabled topology rows in the API's wire format."""
+    from models.mtmc import CameraTopology
+
+    return [
+        row.to_dict()
+        for row in CameraTopology.query.filter_by(status="0").order_by(CameraTopology.id.asc()).all()
+    ]
 
 
 def get_overlay_jpeg(session_id: str, camera_id: int) -> bytes | None:
@@ -2299,7 +2311,7 @@ def start_session(
         use_faiss_gallery=bool(cfg.use_faiss_gallery),
         gallery_model_key=cfg.gallery_model_key,
     )
-    if topology_edges:
+    if topology_edges is not None:
         associator.set_topology(topology_edges)
     session = MtmcSession(sid, cfg, associator, app=app)
     session.source_mode = "upload" if video_sources else "camera"

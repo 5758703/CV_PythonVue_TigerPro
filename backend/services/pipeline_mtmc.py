@@ -11,6 +11,13 @@ from services.pipeline_schema import _parse_camera_ids, make_event_envelope
 log = logging.getLogger(__name__)
 
 
+def load_database_topology() -> list[dict]:
+    """Use the same persisted topology loader as API-started sessions."""
+    from services.mtmc_engine import load_database_topology as load_topology
+
+    return load_topology()
+
+
 def build_mtmc_config_from_node(cfg: dict):
     """复用 routes.mtmc 的模型挑选逻辑，从 DAG 节点 config 构建 MtmcConfig。"""
     from routes.mtmc import _parse_session_params, _validate_mtmc_config
@@ -55,11 +62,14 @@ def start_or_attach_mtmc(app, cfg: dict, *, upload_folder: str):
         if missing:
             raise ValueError(f"摄像头不存在或已停用: {missing}")
 
+    with app.app_context():
+        topology_edges = load_database_topology()
     session = mtmc_engine.start_session(
         mtmc_cfg,
         cameras=cams,
         upload_folder=upload_folder,
         app=app,
+        topology_edges=topology_edges,
     )
     return session, own
 
