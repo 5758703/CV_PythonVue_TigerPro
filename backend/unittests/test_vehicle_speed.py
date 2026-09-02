@@ -39,6 +39,23 @@ def _det(track_id, bbox):
     }
 
 
+class _FakeImageBox:
+    cls = np.asarray([2])
+    conf = np.asarray([0.9])
+    xyxy = np.asarray([[10, 20, 60, 80]])
+
+
+class _FakeImageModel:
+    names = {2: "car"}
+
+    def predict(self, _frame, **_kwargs):
+        return [type("Result", (), {"names": self.names, "boxes": [_FakeImageBox()]})()]
+
+
+def _failing_plate_ocr(_value, **_kwargs):
+    raise RuntimeError("non-MTMC OCR crash")
+
+
 def _double_line_sample(session, track_id, x, timestamp, **overrides):
     frame = np.zeros((100, 200, 3), dtype=np.uint8)
     options = {
@@ -691,6 +708,71 @@ def test_track_frame_double_line_parameters_are_scaled_and_clamped(monkeypatch):
     assert captured["speed_max_kmh"] == 30.0
 
 
+def test_vehicle_image_plate_ocr_failure_keeps_vehicle_and_returns_200(monkeypatch):
+    """Optional plate OCR must not turn a successful image detection into HTTP 500."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    monkeypatch.setattr(
+        vehicle_route,
+        "_resolve_models",
+        lambda: ({"detect_path": "fake.pt", "plate_path": None, "ocr_fn": _failing_plate_ocr}, None),
+    )
+    monkeypatch.setattr(inference, "_get_model", lambda _path: _FakeImageModel())
+    ok, encoded = cv2.imencode(".jpg", np.zeros((100, 200, 3), dtype=np.uint8))
+    assert ok
+
+    response = app.test_client().post(
+        "/api/ai/vehicle/detect-image",
+        data={"file": (io.BytesIO(encoded.tobytes()), "frame.jpg")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.json["data"]["count"] == 1
+    assert response.json["data"]["detections"][0]["plate"] is None
+
+
+def test_vehicle_track_frame_plate_ocr_failure_keeps_vehicle_and_returns_200(monkeypatch):
+    """Optional plate OCR must stay isolated from the live single-frame route."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    app = Flask(__name__)
+    app.register_blueprint(vehicle_route.vehicle_bp)
+    monkeypatch.setattr(
+        vehicle_route,
+        "_resolve_models",
+        lambda: ({"detect_path": "fake.pt", "plate_path": None, "ocr_fn": _failing_plate_ocr}, None),
+    )
+    monkeypatch.setattr(vehicle_route, "_resolve_track_classes", lambda **_kwargs: ([2], None))
+    monkeypatch.setattr(
+        inference,
+        "track_frame",
+        lambda *_args, **_kwargs: {"detections": [_det(7, [10, 20, 60, 80])]},
+    )
+    ok, encoded = cv2.imencode(".jpg", np.zeros((100, 200, 3), dtype=np.uint8))
+    assert ok
+
+    response = app.test_client().post(
+        "/api/ai/vehicle/track-frame",
+        data={
+            "file": (io.BytesIO(encoded.tobytes()), "frame.jpg"),
+            "sessionId": "ocr-failure-frame",
+            "reset": "1",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    assert response.json["data"]["detections"][0]["trackId"] == 7
+    assert response.json["data"]["detections"][0]["plate"] is None
+
+
 @pytest.mark.parametrize(
     "invalid_line",
     [
@@ -981,6 +1063,50 @@ def test_vehicle_video_speed_uses_media_timeline(monkeypatch, tmp_path):
     first = _run_fake_vehicle_worker(vehicle_route, monkeypatch, tmp_path, monotonic_values=[1, 100, 900])
     second = _run_fake_vehicle_worker(vehicle_route, monkeypatch, tmp_path, monotonic_values=[5, 6, 7])
     assert first == second == [7.2, 7.2]
+
+
+def test_vehicle_video_plate_ocr_failure_does_not_stop_later_frames(monkeypatch, tmp_path):
+    """An optional per-track OCR failure must not fail the whole offline video job."""
+    import cv2
+    import inference
+
+    vehicle_route = _load_vehicle_route(monkeypatch)
+    frames = [np.zeros((100, 200, 3), dtype=np.uint8) for _ in range(2)]
+    writes = []
+    job_id = "ocr-failure-video"
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _path: _FakeCapture(frames, fps=25.0))
+    monkeypatch.setattr(inference, "_get_model", lambda _path: _FakeVehicleModel())
+    monkeypatch.setattr(inference, "_open_h264", lambda _dst, _fps, w, h: (_FakeWriter(), w, h))
+    monkeypatch.setattr(inference, "_write_bgr", lambda *_args: writes.append(True))
+    monkeypatch.setattr(inference, "_video_alert_ctx", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(inference, "_video_alert_stats", lambda _ctx: {})
+    monkeypatch.setattr(vehicle_track, "draw_vehicle_hud", lambda frame, _enriched, **_kwargs: frame)
+    monkeypatch.setitem(
+        vehicle_route._video_jobs,
+        job_id,
+        {"status": "running", "processed": 0, "total": 0, "stats": None, "error": None},
+    )
+
+    vehicle_route._vehicle_worker(job_id, {
+        "detect_path": "fake.pt",
+        "src_path": str(tmp_path / "input.mp4"),
+        "dst_path": str(tmp_path / "output.mp4"),
+        "out_name": "output.mp4",
+        "conf": 0.25,
+        "imgsz": 640,
+        "line": None,
+        "session_id": "ocr-failure-video-session",
+        "plate_path": None,
+        "ocr_fn": _failing_plate_ocr,
+        "enable_ocr": True,
+        "enable_speed": False,
+        "enable_trail": False,
+        "ocr_cooldown_sec": 0.0,
+    })
+
+    assert vehicle_route._video_jobs[job_id]["status"] == "done"
+    assert vehicle_route._video_jobs[job_id]["stats"]["frames"] == 2
+    assert len(writes) == 2
 
 
 @pytest.mark.parametrize(

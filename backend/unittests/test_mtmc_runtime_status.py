@@ -521,6 +521,76 @@ def test_multi_camera_runtime_never_pairs_last_camera_metadata_with_mixed_models
     assert actual["byCamera"] == {"1": first, "2": second}
 
 
+def test_multi_camera_runtime_removes_stale_common_backend_capabilities():
+    session = MtmcSession("mixed-capabilities", MtmcConfig(camera_ids=[1, 2]), MtmcAssociator())
+    first = {
+        "selectedModelKey": "osnet-x1-0",
+        "modelVersion": "osnet-a.onnx",
+        "ready": True,
+        "runtimeState": "ready",
+        "backend": "strong-onnx",
+        "provider": "onnxruntime-cuda",
+        "inputSize": [128, 256],
+        "embeddingDim": 512,
+        "availableModelSpaces": ["osnet-x1-0"],
+        "backendReadiness": {"strong": {"ready": True}},
+        "degraded": False,
+        "degradedReason": None,
+    }
+    second = {
+        **first,
+        "selectedModelKey": "opencv-person-reid-youtu",
+        "modelVersion": "youtu-b.onnx",
+        "backend": "youtu-reid-opencv",
+        "provider": "opencv-dnn-cpu",
+        "embeddingDim": 768,
+        "availableModelSpaces": ["opencv-person-reid-youtu"],
+        "backendReadiness": {"youtu": {"ready": True}},
+    }
+
+    mtmc_engine._record_runtime_model(session, "personReid", 1, first)
+    mtmc_engine._record_runtime_model(session, "personReid", 2, second)
+    actual = session.to_dict()["runtime"]["models"]["personReid"]
+
+    assert actual["mixed"] is True
+    assert actual["selectedModelKey"] is None
+    assert actual["modelVersion"] is None
+    assert actual["backend"] is None
+    assert actual["provider"] is None
+    assert actual["embeddingDim"] is None
+    assert "availableModelSpaces" not in actual
+    assert "backendReadiness" not in actual
+    assert actual["byCamera"] == {"1": first, "2": second}
+
+
+def test_available_model_space_difference_alone_marks_runtime_mixed():
+    session = MtmcSession("mixed-spaces", MtmcConfig(camera_ids=[1, 2]), MtmcAssociator())
+    common = {
+        "selectedModelKey": "shared-reid",
+        "modelVersion": "shared.onnx",
+        "ready": True,
+        "runtimeState": "ready",
+        "backend": "onnx",
+        "provider": "onnxruntime-cpu",
+        "inputSize": [128, 256],
+        "embeddingDim": 512,
+        "backendReadiness": {"onnx": {"ready": True}},
+        "degraded": False,
+        "degradedReason": None,
+    }
+    first = {**common, "availableModelSpaces": ["space-a"]}
+    second = {**common, "availableModelSpaces": ["space-b"]}
+
+    mtmc_engine._record_runtime_model(session, "personReid", 1, first)
+    mtmc_engine._record_runtime_model(session, "personReid", 2, second)
+    actual = session.to_dict()["runtime"]["models"]["personReid"]
+
+    assert actual["mixed"] is True
+    assert "availableModelSpaces" not in actual
+    assert actual["selectedModelKey"] == "shared-reid"
+    assert actual["byCamera"] == {"1": first, "2": second}
+
+
 def test_same_model_with_different_camera_execution_outcomes_is_mixed():
     session = MtmcSession("mixed-health", MtmcConfig(camera_ids=[1, 2]), MtmcAssociator())
     ready = {
@@ -837,10 +907,11 @@ def test_plate_detector_real_predict_failure_is_recorded_by_engine(monkeypatch):
     assert "plate predictor crash" in actual["degradedReason"]
 
 
-def test_legacy_plate_detector_helper_propagates_inference_failure():
+def test_legacy_plate_detector_helper_tolerates_failure_unless_strict():
     with patch("services.vehicle_track.detect_image", side_effect=RuntimeError("detect helper crash")):
+        assert vehicle_track._detect_plate_boxes("plate.pt", _frame()) == []
         with pytest.raises(RuntimeError, match="detect helper crash"):
-            vehicle_track._detect_plate_boxes("plate.pt", _frame())
+            vehicle_track._detect_plate_boxes("plate.pt", _frame(), strict_errors=True)
 
 
 def test_plate_heuristic_fallback_is_explicitly_degraded():

@@ -1301,6 +1301,7 @@ def _record_runtime_model(session, role: str, camera_id: int, observation: dict)
                 "selectedModelKey", "modelVersion", "backend", "provider",
                 "inputSize", "embeddingDim", "ready", "runtimeState",
                 "degraded", "degradedReason", "mixed", "byCamera",
+                "availableModelSpaces", "backendReadiness",
                 "selectedModelKeys", "modelVersions", "backends", "providers",
                 "inputSizes", "embeddingDims",
             }
@@ -1369,6 +1370,7 @@ def _record_runtime_model(session, role: str, camera_id: int, observation: dict)
                 "selectedModelKey", "modelVersion", "backend", "provider",
                 "inputSize", "embeddingDim", "ready", "runtimeState",
                 "degraded", "degradedReason", "backendReadiness",
+                "availableModelSpaces",
             )
         )
         merged["byCamera"] = by_camera
@@ -3109,6 +3111,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                         from services.vehicle_track import _plate_candidates, _ocr_plate
                         plate_candidates = list(_plate_candidates(
                             t.bbox, frame, cfg.plate_model_path, 0.2,
+                            strict_errors=True,
                         ))
                         source = plate_candidates[0][1] if plate_candidates else (
                             "model" if cfg.plate_model_path else "heuristic"
@@ -3119,7 +3122,13 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                         _record_plate_detection_runtime(session, cam_id, error=error)
                     for pb, _src, _q, warp in plate_candidates:
                         try:
-                            ocr = _ocr_plate(cfg.ocr_fn, frame, pb, warped=warp)
+                            ocr = _ocr_plate(
+                                cfg.ocr_fn,
+                                frame,
+                                pb,
+                                warped=warp,
+                                strict_errors=True,
+                            )
                             plate_budget["consumed"] += 1
                             _record_plate_ocr_runtime(session, cam_id)
                         except Exception as error:  # noqa: BLE001

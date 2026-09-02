@@ -141,11 +141,22 @@ def _plate_roi_heuristic(vehicle_bbox, img_h, img_w):
     return _clip_bbox([x1, py1, x2, py2], img_w, img_h, pad=4)
 
 
-def _detect_plate_boxes(plate_model_path: str, img_bgr, conf: float = 0.25) -> list[dict]:
+def _detect_plate_boxes(
+    plate_model_path: str,
+    img_bgr,
+    conf: float = 0.25,
+    *,
+    strict_errors: bool = False,
+) -> list[dict]:
     ok, buf = cv2.imencode(".jpg", img_bgr)
     if not ok:
         return []
-    res = detect_image(plate_model_path, buf.tobytes(), conf=conf, draw=False)
+    try:
+        res = detect_image(plate_model_path, buf.tobytes(), conf=conf, draw=False)
+    except Exception:  # noqa: BLE001 - plate enrichment is optional outside MTMC
+        if strict_errors:
+            raise
+        return []
     return res.get("detections") or []
 
 
@@ -205,7 +216,13 @@ def _warp_plate(img_bgr, quad, out_w: int = 240, out_h: int = 80) -> np.ndarray 
         return None
 
 
-def _locate_plates_in_roi(plate_model_path: str, roi_bgr, conf: float = 0.25) -> list[dict]:
+def _locate_plates_in_roi(
+    plate_model_path: str,
+    roi_bgr,
+    conf: float = 0.25,
+    *,
+    strict_errors: bool = False,
+) -> list[dict]:
     """在车辆 ROI 内定位车牌，返回 [{bbox, quad, confidence, source}]。
 
     优先 pose 4 角点 → OBB → detect bbox。
@@ -213,8 +230,13 @@ def _locate_plates_in_roi(plate_model_path: str, roi_bgr, conf: float = 0.25) ->
     from inference import _get_model, _yolo_predict_kwargs
 
     out: list[dict] = []
-    model = _get_model(plate_model_path)
-    r = model.predict(roi_bgr, **_yolo_predict_kwargs(conf=conf))[0]
+    try:
+        model = _get_model(plate_model_path)
+        r = model.predict(roi_bgr, **_yolo_predict_kwargs(conf=conf))[0]
+    except Exception:  # noqa: BLE001 - callers choose optional or observable failure semantics
+        if strict_errors:
+            raise
+        return []
 
     # Pose：keypoints 4 点
     if getattr(r, "keypoints", None) is not None and r.keypoints is not None and r.keypoints.xy is not None:
@@ -271,7 +293,14 @@ def _locate_plates_in_roi(plate_model_path: str, roi_bgr, conf: float = 0.25) ->
     return out[:3]
 
 
-def _plate_candidates(vehicle_bbox, img_bgr, plate_model_path: str | None, plate_conf: float):
+def _plate_candidates(
+    vehicle_bbox,
+    img_bgr,
+    plate_model_path: str | None,
+    plate_conf: float,
+    *,
+    strict_errors: bool = False,
+):
     """生成车牌候选：yield (bbox_abs, source, quad_abs|None, warped_bgr|None)。"""
     h, w = img_bgr.shape[:2]
     if plate_model_path:
@@ -279,7 +308,12 @@ def _plate_candidates(vehicle_bbox, img_bgr, plate_model_path: str | None, plate
         if crop:
             x1, y1, x2, y2 = crop
             roi = img_bgr[y1:y2, x1:x2]
-            plates = _locate_plates_in_roi(plate_model_path, roi, conf=plate_conf)
+            plates = _locate_plates_in_roi(
+                plate_model_path,
+                roi,
+                conf=plate_conf,
+                strict_errors=strict_errors,
+            )
             for p in plates:
                 pb = p.get("bbox") or []
                 if len(pb) < 4:
@@ -314,9 +348,22 @@ def _plate_candidates(vehicle_bbox, img_bgr, plate_model_path: str | None, plate
             yield exp, "heuristic", quad, _warp_plate(img_bgr, quad)
 
 
-def _pick_plate_bbox(vehicle_bbox, img_bgr, plate_model_path: str | None, plate_conf: float):
+def _pick_plate_bbox(
+    vehicle_bbox,
+    img_bgr,
+    plate_model_path: str | None,
+    plate_conf: float,
+    *,
+    strict_errors: bool = False,
+):
     """兼容旧接口：返回“首个候选框”。主流程会改用多候选 OCR。"""
-    for pb, src, _quad, _warp in _plate_candidates(vehicle_bbox, img_bgr, plate_model_path, plate_conf):
+    for pb, src, _quad, _warp in _plate_candidates(
+        vehicle_bbox,
+        img_bgr,
+        plate_model_path,
+        plate_conf,
+        strict_errors=strict_errors,
+    ):
         return pb, src
     return None, None
 
@@ -411,7 +458,14 @@ def _merge_ocr_lines(lines: list[dict]) -> tuple[str, float]:
     return text, score
 
 
-def _ocr_plate(ocr_fn: Callable[[bytes], dict] | None, img_bgr, bbox, warped: np.ndarray | None = None) -> dict:
+def _ocr_plate(
+    ocr_fn: Callable[[bytes], dict] | None,
+    img_bgr,
+    bbox,
+    warped: np.ndarray | None = None,
+    *,
+    strict_errors: bool = False,
+) -> dict:
     """对透视矫正牌面或 bbox 裁剪做 OCR（优先 warped + rec-only）。"""
     if ocr_fn is None:
         return {"text": "", "score": 0.0, "lines": []}
@@ -438,9 +492,14 @@ def _ocr_plate(ocr_fn: Callable[[bytes], dict] | None, img_bgr, bbox, warped: np
         if not ok:
             continue
         try:
-            res = ocr_fn(buf.tobytes(), rec_only=True) or {}
-        except TypeError:
-            res = ocr_fn(buf.tobytes()) or {}
+            try:
+                res = ocr_fn(buf.tobytes(), rec_only=True) or {}
+            except TypeError:
+                res = ocr_fn(buf.tobytes()) or {}
+        except Exception:  # noqa: BLE001 - plate enrichment is optional outside MTMC
+            if strict_errors:
+                raise
+            continue
         lines = res.get("lines") or []
         text = _fix_plate_ocr_chars(_normalize_plate_text(res.get("text") or ""))
         score = 0.0

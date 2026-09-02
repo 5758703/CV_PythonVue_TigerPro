@@ -292,7 +292,7 @@
           <el-alert
             v-if="runtimeRiskText"
             :title="runtimeRiskText"
-            type="error"
+            :type="runtimeOverallTone === 'danger' ? 'error' : 'warning'"
             :closable="false"
             show-icon
             class="runtime-risk"
@@ -826,6 +826,7 @@ import {
   associationScoreParts,
   runtimeBudgetRows,
   runtimeModelRows,
+  runtimeOverallStatus,
   runtimeRiskSummary,
   topologyPolicyText,
 } from '../../../utils/mtmcRuntimeStatus'
@@ -854,18 +855,9 @@ let pollTimer = null
 
 const runtimeModels = computed(() => runtimeModelRows(session.value?.runtime || {}))
 const runtimeRiskText = computed(() => runtimeRiskSummary(session.value?.runtime || {}))
-const runtimeOverallTone = computed(() => {
-  const gallery = session.value?.runtime?.gallery || {}
-  if (gallery.degraded === true || gallery.ready === false) return 'danger'
-  if (runtimeModels.value.some((row) => row.tone === 'danger')) return 'danger'
-  if (runtimeModels.value.length && runtimeModels.value.every((row) => row.tone === 'success')) return 'success'
-  return 'info'
-})
-const runtimeOverallLabel = computed(() => ({
-  danger: '存在降级',
-  success: '运行就绪',
-  info: '等待运行探测',
-})[runtimeOverallTone.value])
+const runtimeOverall = computed(() => runtimeOverallStatus(session.value?.runtime || {}))
+const runtimeOverallTone = computed(() => runtimeOverall.value.tone)
+const runtimeOverallLabel = computed(() => runtimeOverall.value.label)
 const runtimeBudgets = computed(() => {
   return runtimeBudgetRows(session.value?.runtime?.budgets || {})
 })

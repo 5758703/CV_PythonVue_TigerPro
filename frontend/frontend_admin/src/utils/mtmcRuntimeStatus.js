@@ -13,21 +13,23 @@ const ROLE_LABELS = {
 const valueOr = (primary, fallback) => primary == null ? fallback : primary
 
 export function runtimeTone(status = {}) {
-  if (status.degradedReason || status.degraded === true || status.ready === false) return 'danger'
+  if (status.ready === false || status.runtimeState === 'failed') return 'danger'
+  if (status.degradedReason || status.degraded === true || status.runtimeState === 'degraded') return 'warning'
   if (status.ready === true) return 'success'
   return 'info'
 }
 
 export function runtimeLabel(status = {}) {
-  if (status.degradedReason || status.degraded === true) return '降级'
+  if (status.ready === false || status.runtimeState === 'failed') return '失败'
+  if (status.degradedReason || status.degraded === true || status.runtimeState === 'degraded') return '降级'
   if (status.ready === true) return '就绪'
-  if (status.ready === false) return '不可用'
   return '等待探测'
 }
 
 export function runtimeRisk(status = {}) {
   if (status.degradedReason) return String(status.degradedReason)
   if (status.ready === false) return '后端不可用'
+  if (status.degraded === true || status.runtimeState === 'degraded') return '已降级'
   return ''
 }
 
@@ -121,11 +123,22 @@ export function runtimeBudgetRows(budgets = {}) {
 
 export function runtimeRiskSummary(runtime = {}) {
   const risks = runtimeModelRows(runtime)
-    .filter((row) => row.tone === 'danger')
+    .filter((row) => row.tone === 'danger' || row.tone === 'warning')
     .map((row) => `${row.roleLabel}：${runtimeRisk(row)}`)
   const gallery = runtime.gallery || {}
-  if (runtimeTone(gallery) === 'danger') {
+  if (['danger', 'warning'].includes(runtimeTone(gallery))) {
     risks.push(`人员底库：${gallery.degradedReason || gallery.error || gallery.code || '后端不可用'}`)
   }
   return risks.join('；')
+}
+
+export function runtimeOverallStatus(runtime = {}) {
+  const tones = runtimeModelRows(runtime).map((row) => row.tone)
+  tones.push(runtimeTone(runtime.gallery || {}))
+  if (tones.includes('danger')) return { tone: 'danger', label: '存在失败' }
+  if (tones.includes('warning')) return { tone: 'warning', label: '存在降级' }
+  if (tones.length > 1 && tones.slice(0, -1).every((tone) => tone === 'success')) {
+    return { tone: 'success', label: '运行就绪' }
+  }
+  return { tone: 'info', label: '等待运行探测' }
 }

@@ -8,10 +8,25 @@ try {
   // RED: the production helper does not exist yet.
 }
 
-test('degraded strong ReID is visible and never labeled ready', () => {
+test('failed strong ReID takes precedence over its degraded fallback metadata', () => {
   assert.equal(helpers.runtimeTone?.({ ready: false, degradedReason: 'shape mismatch' }), 'danger')
-  assert.equal(helpers.runtimeLabel?.({ ready: false, degradedReason: 'shape mismatch' }), '降级')
+  assert.equal(helpers.runtimeLabel?.({ ready: false, degradedReason: 'shape mismatch' }), '失败')
   assert.equal(helpers.runtimeRisk?.({ ready: false, degradedReason: 'shape mismatch' }), 'shape mismatch')
+  assert.deepEqual(helpers.runtimeOverallStatus?.({
+    models: {
+      personReid: { ready: false, runtimeState: 'failed', degraded: true, degradedReason: 'shape mismatch' },
+    },
+  }), { tone: 'danger', label: '存在失败' })
+})
+
+test('successful fallback is warning degradation rather than failure', () => {
+  const degraded = { ready: true, runtimeState: 'degraded', degraded: true, degradedReason: 'strong unavailable' }
+
+  assert.equal(helpers.runtimeTone?.(degraded), 'warning')
+  assert.equal(helpers.runtimeLabel?.(degraded), '降级')
+  assert.deepEqual(helpers.runtimeOverallStatus?.({
+    models: { personReid: degraded },
+  }), { tone: 'warning', label: '存在降级' })
 })
 
 test('ready runtime without degradation is presented as ready', () => {
@@ -78,7 +93,7 @@ test('model rows preserve actual runtime key version provider input and dimensio
     provider: 'youtu-reid-opencv',
     inputSize: '128×256',
     embeddingDim: 768,
-    tone: 'danger',
+    tone: 'warning',
     statusLabel: '降级',
   }])
 })
@@ -148,7 +163,7 @@ test('same model with different camera health renders ready and failed rows', ()
     cameraId, selectedModelKey, tone, statusLabel,
   })), [
     { cameraId: '1', selectedModelKey: 'vehicle-reid-v1', tone: 'success', statusLabel: '就绪' },
-    { cameraId: '2', selectedModelKey: 'vehicle-reid-v1', tone: 'danger', statusLabel: '降级' },
+    { cameraId: '2', selectedModelKey: 'vehicle-reid-v1', tone: 'danger', statusLabel: '失败' },
   ])
 })
 

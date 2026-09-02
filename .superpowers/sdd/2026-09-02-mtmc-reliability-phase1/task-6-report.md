@@ -261,3 +261,72 @@ e619c4029a6c048410634dc60203ddd532bedf974a95cfdb82065df4f81bf424  frontend/front
 - tracker update 异常仍按既有策略终止当前帧并由静态图、文件或流 worker 捕获；本轮只保证异常前先写真实 runtime 状态，没有静默改成 raw fallback。
 - 完整套件 46 条 warning 仍为 42 条既有 `datetime.utcnow()`、2 条 SQLAlchemy `Query.get()` 和 2 条受限 `.pytest_cache` 写入提示；Vite 仍有第三方 PURE 注释及既有大 chunk 警告。
 - 本轮创建的 3 个残留 `.pytest-task6-r2-*` 目录已在确认绝对路径属于工作区后删除；单项 pytest 的临时目录由 pytest 自行清理。
+
+---
+
+## 审查修复轮次 3/5
+
+### 状态与基线
+
+- 状态：`DONE_WITH_CONCERNS`
+- 审查基线：`bf5bfb98a08102a66cda93f4d41640a63fe1a6b1`（`fix: surface MTMC execution failures`）
+- 本轮提交主题：`fix: isolate optional plate failures`
+- 范围：只处理本轮 3 项 Important；没有改变请求参数、数据库结构或模型配置。
+
+### RED 证据
+
+生产代码修改前观察到以下预期失败：
+
+```text
+非 MTMC 图片/实时单帧/视频 OCR 异常隔离：3 failed
+legacy plate helper 默认容错与聚合旧字段清空：2 failed
+availableModelSpaces 单独不一致触发 mixed：1 failed
+前端失败优先级、降级色调与总状态：4 failed, 10 passed
+```
+
+失败原因分别是：共享 plate/OCR helper 默认抛错并穿透独立 vehicle 路由；聚合对象继承第一相机的 `availableModelSpaces/backendReadiness`；`availableModelSpaces` 未进入 mixed 判定；前端把 failed 与成功回退都归为 danger/“降级”，且没有可复用的总状态判定。
+
+### 三项修复映射
+
+1. `_detect_plate_boxes`、`_locate_plates_in_roi`、`_plate_candidates`、`_pick_plate_bbox`、`_ocr_plate` 新增 API 兼容的 `strict_errors=False`。独立图片、实时单帧和离线视频在 plate/OCR 推理失败时保留车辆、跳过该次车牌增强并继续；MTMC engine 对 detector 与 OCR 两个调用点显式传 `strict_errors=True`，因此既有 runtime failed/degraded 记录仍可观察真实异常。
+2. 多相机聚合每次重建顶层公共状态时先移除 `availableModelSpaces/backendReadiness`，只在所有相机值相同时恢复；模型键、版本、backend、provider、inputSize、embeddingDim 在不一致时继续明确为 `None`。`availableModelSpaces` 也纳入 mixed 签名，差异事实由 `mixed=true + byCamera` 权威表达，不再残留 camera 1 数据。
+3. 前端状态优先级统一为 failed/not-ready → danger/“失败”，成功回退 → warning/“降级”，ready → success。新增 `runtimeOverallStatus` 作为页面唯一总状态来源，明确输出“存在失败”或“存在降级”；风险提示同步 warning/error 色调，避免标签与视觉语义分叉。
+
+### GREEN 与最终验证
+
+```text
+非 MTMC 图片/实时单帧/视频 focused：3 passed
+MTMC strict、聚合与 mixed focused：5 passed
+前端纯函数 focused/final：14 passed, 0 failed
+完整 MTMC：185 passed, 46 warnings in 150.32s
+vehicle speed + zone：67 passed, 2 warnings
+Python py_compile：exit code 0
+git diff --check：exit code 0（仅 LF→CRLF 提示）
+```
+
+前端生产构建：
+
+```text
+npm run build
+2731 modules transformed
+built in 27.35s
+exit code 0
+```
+
+### 本轮变更文件 SHA-256
+
+```text
+8cd63e175a674d15668fd3af118ead61fdd8991b584a0f2164253cc9ccf99612  backend/services/mtmc_engine.py
+e1cfa34589cb6074127edd8a4270c95c32007e016d334a25fc6813ee6d1997e5  backend/services/vehicle_track.py
+d02f212cf1e14fafe5a393d98cb125c4f51ad88f591d5d39ca498b8c41a05d47  backend/unittests/test_mtmc_runtime_status.py
+869c85712373594b1bd6a7d27d892af8201a340a336870651baa5051ae71ed0a  backend/unittests/test_vehicle_speed.py
+907430f08fdce9416a61d1fe0b6414e4088c22e38ebcec54119b29922a37afb9  frontend/frontend_admin/src/utils/mtmcRuntimeStatus.js
+eda6e558e9fe7b0bd03f6a87164cfc74bb5582a4b3b624c9477e7ab7611985d3  frontend/frontend_admin/src/utils/mtmcRuntimeStatus.test.js
+9718a9f58b799946f41923ca606c5ef16d3f4b1437b722f5880b168658c4dff6  frontend/frontend_admin/src/views/ai/mtmc/index.vue
+```
+
+### 自审与关注项
+
+- `strict_errors` 只在 MTMC engine 的真实 plate detector/OCR 边界开启；非 MTMC 默认行为与审查前约定一致，脚本调用也保持位置参数兼容。
+- 完整 MTMC 套件的 46 条 warning 仍为 42 条既有 `datetime.utcnow()`、2 条 SQLAlchemy `Query.get()` 和 2 条受限 `.pytest_cache` 写入提示；Vite 仍有第三方 PURE 注释与既有大 chunk 警告，均未影响退出码。
+- 本轮创建的 `.pytest-task6-r3-*` 临时目录已在确认绝对路径属于工作区后删除；未触碰既有且权限受限的 `backend/.pytest_cache`。
