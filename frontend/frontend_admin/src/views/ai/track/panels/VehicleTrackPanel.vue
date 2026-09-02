@@ -435,7 +435,11 @@ import {
 import { modelApi, vehicleApi, alertApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
 import { pickRecommendedModel } from '../../../../utils/trackModelRecommendation'
-import { createLivePreviewLifecycle } from '../../../../utils/livePreviewLifecycle'
+import {
+  createLivePreviewLifecycle,
+  releaseOpenedStream,
+  waitForImageReady,
+} from '../../../../utils/livePreviewLifecycle'
 
 const ALERT_SOURCE_KEY = 'vehicle-camera'
 
@@ -624,6 +628,7 @@ let frameCount = 0
 let fpsTimer = null
 let loopTimer = null
 let streamReady = false
+let imageReadyController = null
 const previewLifecycle = createLivePreviewLifecycle({
   requestFrame: (callback) => requestAnimationFrame(callback),
   cancelFrame: (id) => cancelAnimationFrame(id),
@@ -801,13 +806,17 @@ const loadManagedCameras = async () => {
   }
 }
 
-const enumCams = async () => {
+const enumCams = async ({ apply = true } = {}) => {
   try {
     const list = await navigator.mediaDevices.enumerateDevices()
-    devices.value = list.filter((d) => d.kind === 'videoinput').map((d, i) => ({
+    const nextDevices = list.filter((d) => d.kind === 'videoinput').map((d, i) => ({
       deviceId: d.deviceId, label: d.label, idx: i + 1,
     }))
-  } catch (_) { /* ignore */ }
+    if (apply) devices.value = nextDevices
+    return nextDevices
+  } catch (_) {
+    return []
+  }
 }
 
 const onModeChange = async () => {
@@ -1268,28 +1277,6 @@ const exportCsv = async () => {
   }
 }
 
-const waitForImgReady = (img, timeoutMs = 15000) =>
-  new Promise((resolve, reject) => {
-    if (img.naturalWidth > 0) { resolve(); return }
-    const started = Date.now()
-    const finish = (ok, err) => {
-      clearInterval(poll)
-      clearTimeout(timer)
-      img.removeEventListener('load', onLoad)
-      img.removeEventListener('error', onError)
-      ok ? resolve() : reject(err)
-    }
-    const onLoad = () => finish(true)
-    const onError = () => finish(false, new Error('load'))
-    const poll = setInterval(() => {
-      if (img.naturalWidth > 0) finish(true)
-      else if (Date.now() - started > timeoutMs) finish(false, new Error('timeout'))
-    }, 200)
-    const timer = setTimeout(() => finish(false, new Error('timeout')), timeoutMs)
-    img.addEventListener('load', onLoad)
-    img.addEventListener('error', onError)
-  })
-
 const getFrameSource = () => {
   if (mode.value === 'network') {
     const img = streamImg.value
@@ -1316,8 +1303,11 @@ const openLivePreview = async () => {
     }
     img.removeAttribute('crossorigin')
     img.src = cameraApi.streamUrl(cameraId.value, String(Date.now()), false, true)
+    imageReadyController?.abort()
+    const readyController = new AbortController()
+    imageReadyController = readyController
     try {
-      await waitForImgReady(img)
+      await waitForImageReady(img, { signal: readyController.signal })
       if (!previewLifecycle.isCurrent(openToken)) return
       streamReady = true
     } catch (_) {
@@ -1326,6 +1316,7 @@ const openLivePreview = async () => {
       img.removeAttribute('src')
       return
     } finally {
+      if (imageReadyController === readyController) imageReadyController = null
       if (previewLifecycle.isCurrent(openToken)) previewOpening.value = false
     }
     setupCapCanvas(img.naturalWidth, img.naturalHeight)
@@ -1348,12 +1339,16 @@ const openLivePreview = async () => {
     return
   }
   if (!previewLifecycle.isCurrent(openToken)) {
-    openedStream.getTracks().forEach((track) => track.stop())
+    releaseOpenedStream(openedStream, camStream, camVideo.value)
     return
   }
   await nextTick()
+  if (!previewLifecycle.isCurrent(openToken)) {
+    releaseOpenedStream(openedStream, camStream, camVideo.value)
+    return
+  }
   if (!camVideo.value) {
-    openedStream.getTracks().forEach((track) => track.stop())
+    releaseOpenedStream(openedStream, camStream, null)
     ElMessage.error('实时画面未就绪，请重试')
     previewOpening.value = false
     return
@@ -1364,24 +1359,20 @@ const openLivePreview = async () => {
     await camVideo.value.play()
   } catch (_) {
     if (previewLifecycle.isCurrent(openToken)) ElMessage.error('摄像头画面播放失败')
-    camStream.getTracks().forEach((track) => track.stop())
-    camStream = null
+    camStream = releaseOpenedStream(openedStream, camStream, camVideo.value)
     if (previewLifecycle.isCurrent(openToken)) previewOpening.value = false
     return
   }
   if (!previewLifecycle.isCurrent(openToken)) {
-    openedStream.getTracks().forEach((track) => track.stop())
-    if (camStream === openedStream) camStream = null
-    if (camVideo.value?.srcObject === openedStream) camVideo.value.srcObject = null
+    camStream = releaseOpenedStream(openedStream, camStream, camVideo.value)
     return
   }
-  await enumCams()
+  const nextDevices = await enumCams({ apply: false })
   if (!previewLifecycle.isCurrent(openToken)) {
-    openedStream.getTracks().forEach((track) => track.stop())
-    if (camStream === openedStream) camStream = null
-    if (camVideo.value?.srcObject === openedStream) camVideo.value.srcObject = null
+    camStream = releaseOpenedStream(openedStream, camStream, camVideo.value)
     return
   }
+  devices.value = nextDevices
   setupCapCanvas(camVideo.value.videoWidth, camVideo.value.videoHeight)
   livePreviewing.value = true
   previewOpening.value = false
@@ -1835,6 +1826,8 @@ const liveLoop = () => {
 
 const liveStop = async () => {
   previewLifecycle.invalidate()
+  imageReadyController?.abort()
+  imageReadyController = null
   previewOpening.value = false
   liveRunning.value = false
   livePreviewing.value = false

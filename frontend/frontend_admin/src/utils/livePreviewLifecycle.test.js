@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createLivePreviewLifecycle } from './livePreviewLifecycle.js'
+import {
+  createLivePreviewLifecycle,
+  releaseOpenedStream,
+  waitForImageReady,
+} from './livePreviewLifecycle.js'
 
 test('invalidating an opener makes its late result stale', () => {
   const lifecycle = createLivePreviewLifecycle({
@@ -62,4 +66,32 @@ test('starting analysis can stop painting without invalidating the open source',
 
   assert.equal(cancelled, 9)
   assert.equal(lifecycle.isCurrent(token), true)
+})
+
+test('releasing stale stream A never clears current stream B', () => {
+  const stopped = []
+  const streamA = { getTracks: () => [{ stop: () => stopped.push('A') }] }
+  const streamB = { getTracks: () => [{ stop: () => stopped.push('B') }] }
+  const video = { srcObject: streamB }
+
+  const current = releaseOpenedStream(streamA, streamB, video)
+
+  assert.deepEqual(stopped, ['A'])
+  assert.equal(current, streamB)
+  assert.equal(video.srcObject, streamB)
+})
+
+test('aborting image readiness removes listeners and rejects immediately', async () => {
+  const listeners = new Map()
+  const image = {
+    naturalWidth: 0,
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: (name) => listeners.delete(name),
+  }
+  const controller = new AbortController()
+  const pending = waitForImageReady(image, { timeoutMs: 15000, signal: controller.signal })
+  controller.abort()
+
+  await assert.rejects(pending, (error) => error.name === 'AbortError')
+  assert.equal(listeners.size, 0)
 })
