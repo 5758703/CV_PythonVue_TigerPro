@@ -103,6 +103,7 @@ class TrackletBuilder:
         frame_w: int,
         embedding: np.ndarray | None = None,
         embedding_spaces: dict[str, np.ndarray] | None = None,
+        embedding_space_versions: dict[str, str | None] | None = None,
         model_key: str | None = None,
         model_version: str | None = None,
         plate: str | None = None,
@@ -122,7 +123,8 @@ class TrackletBuilder:
         spaces: dict[tuple[str, int, str | None], np.ndarray] = {}
         for key, value in (embedding_spaces or {}).items():
             vector = _l2(np.asarray(value, dtype=np.float32).reshape(-1))
-            spaces[(str(key), int(vector.size), str(model_version) if model_version else None)] = vector
+            version = (embedding_space_versions or {}).get(key, model_version)
+            spaces[(str(key), int(vector.size), str(version) if version else None)] = vector
         if emb is not None and not spaces:
             key = str(model_key or f"legacy:{self.object_type}")
             spaces[(key, int(emb.size), str(model_version) if model_version else None)] = emb

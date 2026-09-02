@@ -135,6 +135,9 @@ def match_embedding(
         "personId": person_ids[idx] if matched else None,
         "facePersonId": face_person_ids[idx] if matched else None,
         "name": names[idx] if matched else "未知",
+        "candidatePersonId": person_ids[idx],
+        "candidateFacePersonId": face_person_ids[idx],
+        "candidateName": names[idx],
         "score": round(score, 4),
         "matched": matched,
     }
@@ -267,6 +270,9 @@ def match_embedding_faiss(
             "personId": person_ids[idx] if matched else None,
             "facePersonId": cached["face_person_ids"][idx] if matched else None,
             "name": cached["names"][idx] if matched else "未知",
+            "candidatePersonId": person_ids[idx],
+            "candidateFacePersonId": cached["face_person_ids"][idx],
+            "candidateName": cached["names"][idx],
             "score": round(score, 4),
             "matched": matched,
         }

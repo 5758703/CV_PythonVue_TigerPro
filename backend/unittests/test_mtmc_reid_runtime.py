@@ -217,3 +217,73 @@ def test_runtime_metadata_reports_actual_spaces_and_selected_keys(monkeypatch):
     assert meta["availableModelSpaces"] == ["opencv-person-reid-youtu"]
     assert meta["associationModelKey"] == "opencv-person-reid-youtu"
     assert meta["activeBackend"] == "youtu"
+
+
+def test_gallery_fuses_raw_scores_before_applying_the_final_threshold(monkeypatch):
+    """A valid fused identity must retain a below-threshold per-space score."""
+    def fake_match(_embedding, model_key, threshold):
+        score = {"osnet-x1-0": 0.8, "opencv-person-reid-youtu": 0.4}[model_key]
+        return {"personId": 11, "facePersonId": None, "name": "Lin", "score": score, "matched": score >= threshold}
+
+    monkeypatch.setattr(reid_gallery, "match_embedding_faiss", fake_match)
+    result = _match_gallery(
+        {"osnet-x1-0": np.array([1.0, 0.0]), "opencv-person-reid-youtu": np.array([0.0, 1.0])},
+        threshold=0.48,
+        score_weights={"osnet-x1-0": 0.75, "opencv-person-reid-youtu": 0.25},
+    )
+
+    assert result["matched"] is True
+    assert result["score"] == pytest.approx(0.7)
+    assert result["scoreByModelKey"] == {"osnet-x1-0": 0.8, "opencv-person-reid-youtu": 0.4}
+
+
+def test_tracklet_separates_same_key_and_dim_when_model_versions_differ():
+    """Dropping model version must not average embeddings from different assets."""
+    builder = TrackletBuilder.create(
+        session_id="s", camera_id=1, object_type="person", local_track_id=9, now=1.0,
+    )
+    builder.add_observation(
+        bbox=[0, 0, 160, 240], conf=0.9, frame_h=300, frame_w=300,
+        embedding_spaces={"clip-reid-person": np.array([1.0, 0.0])},
+        embedding_space_versions={"clip-reid-person": "clip-v1"}, now=1.0,
+    )
+    builder.add_observation(
+        bbox=[0, 0, 160, 240], conf=0.9, frame_h=300, frame_w=300,
+        embedding_spaces={"clip-reid-person": np.array([0.0, 1.0])},
+        embedding_space_versions={"clip-reid-person": "clip-v2"}, now=2.0,
+    )
+
+    assert set(builder.aggregate_embedding_spaces()) == {
+        ("clip-reid-person", 2, "clip-v1"),
+        ("clip-reid-person", 2, "clip-v2"),
+    }
+
+
+def test_extraction_returns_a_model_version_for_each_available_space(monkeypatch):
+    """Losing Youtu's version before Tracklet persistence must fail."""
+    monkeypatch.setattr(strong_reid, "extract_strong", lambda _root, _image: (np.array([1.0, 0.0]), {
+        "modelKey": "osnet-x1-0", "modelVersion": "osnet-v1",
+    }))
+    monkeypatch.setattr(strong_reid, "extract_youtu", lambda _root, _image: (np.array([0.0, 1.0]), {
+        "modelVersion": "youtu-v3",
+    }))
+
+    _spaces, meta = strong_reid.extract_person_embeddings(np.zeros((10, 10, 3), dtype=np.uint8))
+
+    assert meta["modelVersionsBySpace"] == {
+        "osnet-x1-0": "osnet-v1", "opencv-person-reid-youtu": "youtu-v3",
+    }
+
+
+@pytest.mark.parametrize(
+    ("fuse_weight_strong", "available_space", "expected_weight"),
+    [(1.0, "opencv-person-reid-youtu", 1.0), (0.0, "osnet-x1-0", 1.0)],
+)
+def test_single_available_backend_weight_is_always_one(fuse_weight_strong, available_space, expected_weight):
+    """A missing configured backend cannot zero out the remaining backend."""
+    weights = mtmc_engine._reid_score_weights(
+        MtmcConfig(camera_ids=[], fuse_weight_strong=fuse_weight_strong),
+        {available_space: np.array([1.0, 0.0])},
+    )
+
+    assert weights == {available_space: expected_weight}

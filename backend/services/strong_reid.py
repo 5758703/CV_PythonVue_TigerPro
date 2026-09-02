@@ -136,6 +136,7 @@ def extract_strong(strong_root: str | None, image_bgr: np.ndarray) -> tuple[np.n
             "strong": True,
             "onnx": os.path.basename(onnx),
             "modelKey": _strong_model_key(onnx),
+            "modelVersion": os.path.basename(onnx),
             "dim": int(feat.size),
         }
     except Exception as e:  # noqa: BLE001
@@ -209,7 +210,7 @@ def extract_person_embeddings(
     if strong is not None:
         key = str(strong_meta.get("modelKey") or _strong_model_key(strong_meta.get("onnx") or "unknown.onnx"))
         spaces[key] = _l2(strong)
-        backends["strong"] = {"ready": True, "modelKey": key, "dim": int(spaces[key].size)}
+        backends["strong"] = {"ready": True, "modelKey": key, "modelVersion": strong_meta.get("modelVersion"), "dim": int(spaces[key].size)}
     if youtu is not None:
         key = "opencv-person-reid-youtu"
         spaces[key] = _l2(youtu)
@@ -221,11 +222,16 @@ def extract_person_embeddings(
         }
 
     best_key = next(iter(spaces), None)
+    versions_by_space = {
+        key: (strong_meta.get("modelVersion") if key != "opencv-person-reid-youtu" else youtu_meta.get("modelVersion"))
+        for key in spaces
+    }
     return spaces, {
         **youtu_meta,
         **strong_meta,
         "backends": backends,
         "availableModelSpaces": list(spaces),
+        "modelVersionsBySpace": versions_by_space,
         "bestModelKey": best_key,
         "associationModelKey": best_key,
         "activeBackend": "strong" if strong is not None else ("youtu" if youtu is not None else None),

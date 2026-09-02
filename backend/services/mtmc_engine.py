@@ -823,11 +823,14 @@ def _reid_score_weights(cfg: MtmcConfig, embeddings: dict[str, np.ndarray]) -> d
     strong_keys = [key for key in embeddings if key != "opencv-person-reid-youtu"]
     youtu_keys = [key for key in embeddings if key == "opencv-person-reid-youtu"]
     weights: dict[str, float] = {}
+    if len(embeddings) == 1:
+        return {next(iter(embeddings)): 1.0}
+    strong_weight = float(np.clip(float(cfg.fuse_weight_strong), 0.0, 1.0))
     if strong_keys:
-        per_strong = float(cfg.fuse_weight_strong) / len(strong_keys)
+        per_strong = strong_weight / len(strong_keys)
         weights.update({key: per_strong for key in strong_keys})
     if youtu_keys:
-        per_youtu = (1.0 - float(cfg.fuse_weight_strong)) / len(youtu_keys)
+        per_youtu = (1.0 - strong_weight) / len(youtu_keys)
         weights.update({key: per_youtu for key in youtu_keys})
     return weights
 
@@ -853,9 +856,13 @@ def _match_gallery(
                 row = match_embedding(emb, key, threshold=threshold)
             except Exception:  # noqa: BLE001
                 continue
-        if not row.get("matched"):
+        person_key = (
+            row.get("candidatePersonId", row.get("personId")),
+            row.get("candidateFacePersonId", row.get("facePersonId")),
+            row.get("candidateName", row.get("name")),
+        )
+        if person_key[0] is None and person_key[1] is None:
             continue
-        person_key = (row.get("personId"), row.get("facePersonId"), row.get("name"))
         grouped = rows_by_person.setdefault(person_key, {"row": row, "scores": {}})
         grouped["scores"][key] = float(row.get("score") or 0.0)
     best = {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
@@ -867,6 +874,9 @@ def _match_gallery(
         row = grouped["row"]
         best = {
             **row,
+            "personId": person_key[0],
+            "facePersonId": person_key[1],
+            "name": person_key[2] or "未知",
             "score": float(fused),
             "matched": True,
             "modelKey": max(scores, key=scores.get),
@@ -1627,6 +1637,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 frame_w=fw,
                 embedding=emb,
                 embedding_spaces=embeddings,
+                embedding_space_versions=meta.get("modelVersionsBySpace"),
                 model_key=meta.get("associationModelKey"),
                 visual_key="rider" if is_rider else None,
                 trail=list(t.trail),
