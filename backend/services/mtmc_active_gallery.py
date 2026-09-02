@@ -11,6 +11,10 @@ from services.reid_gallery import l2_normalize
 _lock = threading.Lock()
 
 
+def _space_id(model_key: str | None, embedding: np.ndarray, model_version: str | None = None) -> tuple[str, int, str | None]:
+    return (str(model_key or "legacy"), int(np.asarray(embedding).size), model_version)
+
+
 def _import_faiss():
     try:
         import faiss  # type: ignore
@@ -23,12 +27,12 @@ class MtmcActiveGallery:
     """会话级内存向量库：object_type -> global_id -> camera_id -> embedding。"""
 
     def __init__(self):
-        # object_type -> global_id -> camera_id -> embedding
-        self._vecs: dict[str, dict[str, dict[int, np.ndarray]]] = {}
-        self._dirty: set[str] = set()
-        self._index: dict[str, Any] = {}
-        self._gids: dict[str, list[str]] = {}
-        self._dim: dict[str, int] = {}
+        # (object_type, model_key, dim, version) -> global_id -> camera_id -> embedding
+        self._vecs: dict[tuple, dict[str, dict[int, np.ndarray]]] = {}
+        self._dirty: set[tuple] = set()
+        self._index: dict[tuple, Any] = {}
+        self._gids: dict[tuple, list[str]] = {}
+        self._dim: dict[tuple, int] = {}
 
     def clear(self, object_type: str | None = None) -> None:
         with _lock:
@@ -39,11 +43,13 @@ class MtmcActiveGallery:
                 self._gids.clear()
                 self._dim.clear()
                 return
-            self._vecs.pop(object_type, None)
-            self._dirty.discard(object_type)
-            self._index.pop(object_type, None)
-            self._gids.pop(object_type, None)
-            self._dim.pop(object_type, None)
+            keys = [key for key in self._vecs if key[0] == object_type]
+            for key in keys:
+                self._vecs.pop(key, None)
+                self._dirty.discard(key)
+                self._index.pop(key, None)
+                self._gids.pop(key, None)
+                self._dim.pop(key, None)
 
     def upsert(
         self,
@@ -52,13 +58,16 @@ class MtmcActiveGallery:
         embedding: np.ndarray | None,
         *,
         camera_id: int | None = None,
+        model_key: str | None = None,
+        model_version: str | None = None,
     ) -> None:
         if embedding is None:
             return
         v = l2_normalize(np.asarray(embedding, dtype=np.float32).reshape(-1))
         cam_key = int(camera_id) if camera_id is not None else -1
+        bucket_key = (object_type, *_space_id(model_key, v, model_version))
         with _lock:
-            bucket = self._vecs.setdefault(object_type, {})
+            bucket = self._vecs.setdefault(bucket_key, {})
             cam_map = bucket.setdefault(str(global_id), {})
             previous = cam_map.get(cam_key)
             if previous is None:
@@ -66,30 +75,29 @@ class MtmcActiveGallery:
             else:
                 # Keep a camera-specific prototype stable across weak or
                 # partially occluded observations.
-                dim = max(previous.size, v.size)
-                old = np.zeros(dim, dtype=np.float32)
-                new = np.zeros(dim, dtype=np.float32)
-                old[: previous.size] = previous
-                new[: v.size] = v
-                cam_map[cam_key] = l2_normalize(0.8 * old + 0.2 * new)
-            self._dirty.add(object_type)
+                if previous.size != v.size:
+                    raise ValueError("active gallery model-space dimension changed")
+                cam_map[cam_key] = l2_normalize(0.8 * previous + 0.2 * v)
+            self._dirty.add(bucket_key)
 
     def remove(self, object_type: str, global_id: str) -> None:
         with _lock:
-            bucket = self._vecs.get(object_type)
-            if bucket and global_id in bucket:
-                bucket.pop(global_id, None)
-                self._dirty.add(object_type)
+            for key, bucket in self._vecs.items():
+                if key[0] == object_type and global_id in bucket:
+                    bucket.pop(global_id, None)
+                    self._dirty.add(key)
 
     def size(self, object_type: str) -> int:
         with _lock:
-            return len(self._vecs.get(object_type, {}))
+            return len({gid for key, bucket in self._vecs.items() if key[0] == object_type for gid in bucket})
 
     def cameras_for_global(self, object_type: str, global_id: str) -> set[int]:
         """某 Global 已存原型的相机集合（不含 -1 占位）。"""
         with _lock:
-            cam_map = self._vecs.get(object_type, {}).get(str(global_id), {})
-            return {int(c) for c in cam_map if int(c) >= 0}
+            return {
+                int(c) for key, bucket in self._vecs.items() if key[0] == object_type
+                for c in bucket.get(str(global_id), {}) if int(c) >= 0
+            }
 
     def max_similarity(
         self,
@@ -98,28 +106,28 @@ class MtmcActiveGallery:
         embedding: np.ndarray,
         *,
         exclude_camera_id: int | None = None,
+        model_key: str | None = None,
+        model_version: str | None = None,
     ) -> float:
         """与某 Global 已存原型的最大余弦；可排除本相机原型（跨镜匹配用）。"""
         q = l2_normalize(np.asarray(embedding, dtype=np.float32).reshape(-1))
+        bucket_key = (object_type, *_space_id(model_key, q, model_version))
         with _lock:
-            cam_map = self._vecs.get(object_type, {}).get(str(global_id), {})
+            cam_map = self._vecs.get(bucket_key, {}).get(str(global_id), {})
             if not cam_map:
                 return -1.0
             best = -1.0
             for cam_id, vec in cam_map.items():
                 if exclude_camera_id is not None and int(cam_id) == int(exclude_camera_id):
                     continue
-                dim = max(q.size, vec.size)
-                qa = np.zeros(dim, dtype=np.float32)
-                va = np.zeros(dim, dtype=np.float32)
-                qa[: q.size] = q
-                va[: vec.size] = vec
-                best = max(best, float(np.dot(qa, va)))
+                if q.size != vec.size:
+                    continue
+                best = max(best, float(np.dot(q, vec)))
             return best
 
-    def _rebuild(self, object_type: str) -> None:
+    def _rebuild(self, bucket_key: tuple) -> None:
         faiss = _import_faiss()
-        bucket = self._vecs.get(object_type, {})
+        bucket = self._vecs.get(bucket_key, {})
         flat_gids: list[str] = []
         rows: list[np.ndarray] = []
         for gid, cam_map in bucket.items():
@@ -127,19 +135,19 @@ class MtmcActiveGallery:
                 flat_gids.append(gid)
                 rows.append(vec)
         if not rows:
-            self._index[object_type] = faiss.IndexFlatIP(128)
-            self._gids[object_type] = []
-            self._dim[object_type] = 128
-            self._dirty.discard(object_type)
+            self._index[bucket_key] = faiss.IndexFlatIP(int(bucket_key[2]))
+            self._gids[bucket_key] = []
+            self._dim[bucket_key] = int(bucket_key[2])
+            self._dirty.discard(bucket_key)
             return
         mat = np.stack(rows, axis=0).astype(np.float32)
         dim = int(mat.shape[1])
         index = faiss.IndexFlatIP(dim)
         index.add(mat)
-        self._index[object_type] = index
-        self._gids[object_type] = flat_gids
-        self._dim[object_type] = dim
-        self._dirty.discard(object_type)
+        self._index[bucket_key] = index
+        self._gids[bucket_key] = flat_gids
+        self._dim[bucket_key] = dim
+        self._dirty.discard(bucket_key)
 
     def search(
         self,
@@ -147,13 +155,16 @@ class MtmcActiveGallery:
         embedding: np.ndarray,
         *,
         topk: int = 50,
+        model_key: str | None = None,
+        model_version: str | None = None,
     ) -> list[tuple[str, float]]:
         q = l2_normalize(np.asarray(embedding, dtype=np.float32).reshape(-1))
+        bucket_key = (object_type, *_space_id(model_key, q, model_version))
         with _lock:
-            if object_type in self._dirty:
-                self._rebuild(object_type)
-            index = self._index.get(object_type)
-            flat_gids = self._gids.get(object_type, [])
+            if bucket_key in self._dirty:
+                self._rebuild(bucket_key)
+            index = self._index.get(bucket_key)
+            flat_gids = self._gids.get(bucket_key, [])
             if index is None or not flat_gids or index.ntotal <= 0:
                 return []
             k = min(int(topk) * 3, int(index.ntotal))

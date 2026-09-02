@@ -46,6 +46,9 @@ class TrackletObservation:
     conf: float
     quality: float
     embedding: np.ndarray | None = None
+    model_key: str | None = None
+    model_version: str | None = None
+    embedding_spaces: dict[tuple[str, int, str | None], np.ndarray] = field(default_factory=dict)
     plate: str | None = None
     plate_score: float = 0.0
     identity_key: str | None = None
@@ -99,6 +102,9 @@ class TrackletBuilder:
         frame_h: int,
         frame_w: int,
         embedding: np.ndarray | None = None,
+        embedding_spaces: dict[str, np.ndarray] | None = None,
+        model_key: str | None = None,
+        model_version: str | None = None,
         plate: str | None = None,
         plate_score: float = 0.0,
         identity_key: str | None = None,
@@ -113,6 +119,13 @@ class TrackletBuilder:
         emb = None
         if embedding is not None:
             emb = _l2(np.asarray(embedding, dtype=np.float32))
+        spaces: dict[tuple[str, int, str | None], np.ndarray] = {}
+        for key, value in (embedding_spaces or {}).items():
+            vector = _l2(np.asarray(value, dtype=np.float32).reshape(-1))
+            spaces[(str(key), int(vector.size), str(model_version) if model_version else None)] = vector
+        if emb is not None and not spaces:
+            key = str(model_key or f"legacy:{self.object_type}")
+            spaces[(key, int(emb.size), str(model_version) if model_version else None)] = emb
         self.observations.append(
             TrackletObservation(
                 ts=ts,
@@ -120,6 +133,9 @@ class TrackletBuilder:
                 conf=float(conf or 0),
                 quality=q,
                 embedding=emb,
+                model_key=str(model_key) if model_key else None,
+                model_version=str(model_version) if model_version else None,
+                embedding_spaces=spaces,
                 plate=plate,
                 plate_score=float(plate_score or 0),
                 identity_key=identity_key,
@@ -148,13 +164,30 @@ class TrackletBuilder:
             for o in self.observations
         )
 
-    def aggregate_embedding(self) -> np.ndarray | None:
-        """Top-K 质量加权聚合 embedding。"""
-        keyed = [(o.quality, o.embedding) for o in self.observations if o.embedding is not None and o.quality > 0]
+    def aggregate_embedding_spaces(self) -> dict[tuple[str, int, str | None], np.ndarray]:
+        """Aggregate only observations from the exact same model space."""
+        groups: dict[tuple[str, int, str | None], list[TrackletObservation]] = {}
+        for observation in self.observations:
+            spaces = observation.embedding_spaces
+            if not spaces and observation.embedding is not None:
+                vector = np.asarray(observation.embedding, dtype=np.float32).reshape(-1)
+                key = observation.model_key or f"legacy:{self.object_type}"
+                spaces = {(key, int(vector.size), observation.model_version): vector}
+            for space, vector in spaces.items():
+                groups.setdefault(space, []).append(
+                    TrackletObservation(
+                        ts=observation.ts, bbox=observation.bbox, conf=observation.conf,
+                        quality=observation.quality, embedding=vector,
+                    )
+                )
+        return {space: self._aggregate_space(observations) for space, observations in groups.items()}
+
+    def _aggregate_space(self, observations: list[TrackletObservation]) -> np.ndarray:
+        keyed = [(o.quality, o.embedding) for o in observations if o.embedding is not None and o.quality > 0]
         if not keyed:
-            keyed = [(o.quality, o.embedding) for o in self.observations if o.embedding is not None]
+            keyed = [(o.quality, o.embedding) for o in observations if o.embedding is not None]
         if not keyed:
-            return None
+            raise ValueError("cannot aggregate an empty model space")
         keyed.sort(key=lambda x: -x[0])
         top_k = _TOPK_BY_TYPE.get(self.object_type, 8)
         top = keyed[:top_k]
@@ -162,10 +195,10 @@ class TrackletBuilder:
         # medoid represents the most coherent appearance within this tracklet.
         if len(top) >= 3:
             vecs = [_l2(np.asarray(emb, dtype=np.float32).reshape(-1)) for _, emb in top]
-            dim_all = max(v.size for v in vecs)
-            mat = np.zeros((len(vecs), dim_all), dtype=np.float32)
-            for i, vec in enumerate(vecs):
-                mat[i, : vec.size] = vec
+            dim = int(vecs[0].size)
+            if any(vec.size != dim for vec in vecs):
+                raise ValueError("model-space aggregation received mixed dimensions")
+            mat = np.stack(vecs, axis=0)
             sims = mat @ mat.T
             medoid = int(np.argmax(np.median(sims, axis=1)))
             keep_at = 0.30 if self.object_type == "vehicle" else 0.38
@@ -178,14 +211,26 @@ class TrackletBuilder:
         out = np.zeros(dim, dtype=np.float32)
         for w, (_, emb) in zip(weights, top):
             e = np.asarray(emb, dtype=np.float32).reshape(-1)
-            if e.size < dim:
-                pad = np.zeros(dim, dtype=np.float32)
-                pad[: e.size] = e
-                e = pad
-            elif e.size > dim:
-                e = e[:dim]
+            if e.size != dim:
+                raise ValueError("model-space aggregation received mixed dimensions")
             out += float(w) * e
         return _l2(out)
+
+    def aggregate_embedding(
+        self,
+        model_key: str | None = None,
+        model_version: str | None = None,
+    ) -> np.ndarray | None:
+        """Compatibility view of the best single isolated model space."""
+        spaces = self.aggregate_embedding_spaces()
+        if not spaces:
+            return None
+        if model_key is not None:
+            for (key, _dim, version), embedding in spaces.items():
+                if key == model_key and version == model_version:
+                    return embedding
+            return None
+        return next(iter(spaces.values()))
 
     def aggregate_plate(self) -> tuple[str | None, float]:
         """多帧车牌投票（取最高分）。"""

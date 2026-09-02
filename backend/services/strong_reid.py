@@ -225,7 +225,10 @@ def extract_person_embeddings(
         **youtu_meta,
         **strong_meta,
         "backends": backends,
+        "availableModelSpaces": list(spaces),
         "bestModelKey": best_key,
+        "associationModelKey": best_key,
+        "activeBackend": "strong" if strong is not None else ("youtu" if youtu is not None else None),
         "backend": "strong" if strong is not None else ("youtu" if youtu is not None else None),
         "dim": int(spaces[best_key].size) if best_key else 0,
     }

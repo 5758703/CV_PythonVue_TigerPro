@@ -22,10 +22,13 @@ import numpy as np
 from services.vehicle_reid_feat import plate_reliable, vehicle_class_conflict
 
 try:
-    from services.strong_reid import color_sig_cosine
+    from services.strong_reid import color_sig_cosine, fuse_similarity_scores
 except ImportError:  # pragma: no cover
     def color_sig_cosine(a, b):  # type: ignore
         return -1.0
+
+    def fuse_similarity_scores(scores, weights):  # type: ignore
+        return None
 
 _INVALID_IDENTITY_KEYS = frozenset({"", "UNKNOWN|U", "UNKNOWN", "NONE", "NULL"})
 
@@ -48,12 +51,33 @@ def _cos(a: np.ndarray | None, b: np.ndarray | None) -> float:
     if a is None or b is None:
         return -1.0
     x, y = _l2(a), _l2(b)
-    dim = max(x.size, y.size)
-    xa = np.zeros(dim, dtype=np.float32)
-    ya = np.zeros(dim, dtype=np.float32)
-    xa[: x.size] = x
-    ya[: y.size] = y
-    return float(np.dot(xa, ya))
+    if x.size != y.size:
+        return -1.0
+    return float(np.dot(x, y))
+
+
+def _space_id(model_key: str, embedding: np.ndarray, model_version: str | None = None) -> tuple[str, int, str | None]:
+    return (str(model_key), int(np.asarray(embedding).size), model_version)
+
+
+def _normalize_embedding_spaces(
+    embedding: np.ndarray | None,
+    embedding_spaces: dict[str, np.ndarray] | None,
+    association_model_key: str | None,
+    model_version: str | None,
+) -> tuple[dict[tuple[str, int, str | None], np.ndarray], tuple[str, int, str | None] | None]:
+    source = dict(embedding_spaces or {})
+    if embedding is not None and not source:
+        source[association_model_key or "legacy"] = embedding
+    spaces = {
+        (key if isinstance(key, tuple) else _space_id(key, value, model_version)): _l2(value)
+        for key, value in source.items() if value is not None
+    }
+    if association_model_key:
+        for space in spaces:
+            if space[0] == association_model_key:
+                return spaces, space
+    return spaces, next(iter(spaces), None)
 
 
 def _valid_identity_key(key: str | None) -> str | None:
@@ -70,6 +94,8 @@ class GlobalTrack:
     global_id: str
     object_type: str  # person|vehicle
     embedding: np.ndarray | None = None
+    embedding_spaces: dict[tuple[str, int, str | None], np.ndarray] = field(default_factory=dict)
+    association_model_space: tuple[str, int, str | None] | None = None
     camera_id: int | None = None
     last_seen: float = field(default_factory=time.time)
     first_seen: float = field(default_factory=time.time)
@@ -189,16 +215,26 @@ class MtmcAssociator:
         self._gallery = MtmcActiveGallery()
         self._candidates: list[dict] = []
 
-    def _gallery_upsert(self, g: GlobalTrack, observation: np.ndarray | None = None) -> None:
+    def _gallery_upsert(
+        self,
+        g: GlobalTrack,
+        observation: np.ndarray | None = None,
+        *,
+        observation_spaces: dict[tuple[str, int, str | None], np.ndarray] | None = None,
+    ) -> None:
         # Do not copy the blended global centroid into every camera slot: that
         # makes different camera prototypes converge and lose discrimination.
-        prototype = observation if observation is not None else g.embedding
-        if prototype is not None:
+        spaces = observation_spaces or g.embedding_spaces
+        if not spaces and observation is not None:
+            spaces = {_space_id("legacy", observation): observation}
+        for (model_key, _dim, model_version), prototype in spaces.items():
             self._gallery.upsert(
                 g.object_type,
                 g.global_id,
                 prototype,
                 camera_id=g.camera_id,
+                model_key=model_key,
+                model_version=model_version,
             )
 
     def _gallery_remove(self, object_type: str, global_id: str) -> None:
@@ -498,6 +534,8 @@ class MtmcAssociator:
         *,
         camera_id: int,
         embedding: np.ndarray | None,
+        embedding_spaces: dict[tuple[str, int, str | None], np.ndarray] | None = None,
+        association_model_space: tuple[str, int, str | None] | None = None,
         identity_key: str | None,
         plate: str | None,
         reid_person_id: int | None,
@@ -518,19 +556,17 @@ class MtmcAssociator:
         g.last_assoc_mode = mode.value
         if local_track_id is not None:
             g.local_track_id = int(local_track_id)
-        if update_embedding and embedding is not None:
-            if g.embedding is None:
-                g.embedding = _l2(embedding)
-            else:
-                a, b = _l2(g.embedding), _l2(embedding)
-                dim = max(a.size, b.size)
-                aa = np.zeros(dim, dtype=np.float32)
-                bb = np.zeros(dim, dtype=np.float32)
-                aa[: a.size] = a
-                bb[: b.size] = b
-                # 粘性短时：弱更新；长时复活：稍强写入新观测
-                alpha = 0.15 if mode == AssocMode.STICKY else 0.35
-                g.embedding = _l2((1.0 - alpha) * aa + alpha * bb)
+        if update_embedding and embedding_spaces:
+            alpha = 0.15 if mode == AssocMode.STICKY else 0.35
+            for space, value in embedding_spaces.items():
+                current = g.embedding_spaces.get(space)
+                if current is None:
+                    g.embedding_spaces[space] = _l2(value)
+                else:
+                    g.embedding_spaces[space] = _l2((1.0 - alpha) * _l2(current) + alpha * _l2(value))
+            if association_model_space in g.embedding_spaces:
+                g.association_model_space = association_model_space
+                g.embedding = g.embedding_spaces[association_model_space]
         if reid_person_id:
             g.reid_person_id = reid_person_id
         if face_person_id:
@@ -604,6 +640,8 @@ class MtmcAssociator:
         object_type: str,
         camera_id: int,
         embedding: np.ndarray | None,
+        embedding_spaces: dict[tuple[str, int, str | None], np.ndarray] | None = None,
+        score_weights: dict[str, float] | None = None,
         identity_key: str | None,
         plate: str | None,
         reid_person_id: int | None,
@@ -621,14 +659,22 @@ class MtmcAssociator:
             return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
 
         same_cam = g.camera_id == camera_id
-        cross_proto = -1.0
-        if embedding is not None:
-            cross_proto = self._gallery.max_similarity(
-                object_type,
-                g.global_id,
-                embedding,
-                exclude_camera_id=camera_id,
+        per_space_scores: dict[str, float] = {}
+        per_space_cross: dict[str, float] = {}
+        for (model_key, _dim, model_version), vector in (embedding_spaces or {}).items():
+            prototype = g.embedding_spaces.get((model_key, int(vector.size), model_version))
+            if prototype is not None:
+                per_space_scores[model_key] = _cos(vector, prototype)
+            cross = self._gallery.max_similarity(
+                object_type, g.global_id, vector, exclude_camera_id=camera_id,
+                model_key=model_key, model_version=model_version,
             )
+            if cross >= 0:
+                per_space_cross[model_key] = cross
+        centroid_cos = fuse_similarity_scores(per_space_scores, score_weights or {key: 1.0 for key in per_space_scores})
+        cross_proto = fuse_similarity_scores(per_space_cross, score_weights or {key: 1.0 for key in per_space_cross})
+        centroid_cos = float(centroid_cos) if centroid_cos is not None else -1.0
+        cross_proto = float(cross_proto) if cross_proto is not None else -1.0
 
         sibling_occupied = self._same_cam_sibling_occupied(
             object_type, camera_id, g.global_id, local_track_id,
@@ -686,18 +732,17 @@ class MtmcAssociator:
                 if score < appear_need:
                     return None, {"topology": topo_w, "time": time_w, "reid": reid_raw, "final": None}
             elif ik and g_ik and ik == g_ik:
-                cos = _cos(embedding, g.embedding)
+                cos = centroid_cos
                 min_cos = appear_need
                 if cos >= 0 and cos < min_cos:
                     return None, {"topology": topo_w, "time": time_w, "reid": cos, "final": None}
                 score, reid_raw = 0.99, cos if cos >= 0 else None
             elif plate and g.plate and plate == g.plate:
-                cos = _cos(embedding, g.embedding)
+                cos = centroid_cos
                 if embedding is not None and g.embedding is not None and cos < appear_need * 0.65:
                     return None, {"topology": topo_w, "time": time_w, "reid": cos, "final": None}
                 score, reid_raw = 0.92, cos if cos >= 0 else None
             else:
-                centroid_cos = _cos(embedding, g.embedding)
                 peer_cls = self._peer_vehicle_class(g, camera_id)
                 if not same_cam and cross_proto >= 0:
                     if vehicle_class_conflict(vehicle_class, peer_cls):
@@ -715,7 +760,6 @@ class MtmcAssociator:
             if reid_person_id and g.reid_person_id and reid_person_id == g.reid_person_id:
                 score, reid_raw = 0.99, 1.0
             else:
-                centroid_cos = _cos(embedding, g.embedding)
                 if not same_cam and cross_proto >= 0:
                     reid_raw = cross_proto
                 else:
@@ -752,6 +796,7 @@ class MtmcAssociator:
         final = float(score * topo_w * recency_w * xcam_boost)
         return final, {
             "reid": reid_raw,
+            "reidByModelKey": per_space_scores or None,
             "crossProto": cross_proto if cross_proto >= 0 else None,
             "topology": topo_w,
             "time": time_w,
@@ -766,7 +811,11 @@ class MtmcAssociator:
         *,
         object_type: str,
         camera_id: int,
-        embedding: np.ndarray | None,
+        embedding: np.ndarray | None = None,
+        embedding_spaces: dict[str, np.ndarray] | None = None,
+        association_model_key: str | None = None,
+        model_version: str | None = None,
+        score_weights: dict[str, float] | None = None,
         identity_key: str | None = None,
         plate: str | None = None,
         reid_person_id: int | None = None,
@@ -787,6 +836,11 @@ class MtmcAssociator:
         3) 否则 NEW
         """
         now = float(now if now is not None else time.time())
+        spaces, association_space = _normalize_embedding_spaces(
+            embedding, embedding_spaces, association_model_key, model_version,
+        )
+        if association_space is not None:
+            embedding = spaces[association_space]
         excluded = set(exclude_gids or ())
         identity_key = _valid_identity_key(identity_key)
         vc = str(vehicle_class).strip().lower() if vehicle_class else None
@@ -865,6 +919,8 @@ class MtmcAssociator:
                                 g,
                                 camera_id=camera_id,
                                 embedding=embedding,
+                                embedding_spaces=spaces,
+                                association_model_space=association_space,
                                 identity_key=identity_key,
                                 plate=plate,
                                 reid_person_id=reid_person_id,
@@ -878,7 +934,7 @@ class MtmcAssociator:
                                 mode=AssocMode.STICKY,
                                 update_embedding=embedding is not None,
                             )
-                            self._gallery_upsert(g, embedding)
+                            self._gallery_upsert(g, embedding, observation_spaces=spaces)
                             return g
                         self._local_bind.pop(bkey, None)
                         self._mark_lost_if_unbound(sticky_gid, now)
@@ -922,6 +978,8 @@ class MtmcAssociator:
                         object_type=object_type,
                         camera_id=camera_id,
                         embedding=embedding,
+                        embedding_spaces=spaces,
+                        score_weights=score_weights,
                         identity_key=identity_key,
                         plate=plate,
                         reid_person_id=reid_person_id,
@@ -986,6 +1044,8 @@ class MtmcAssociator:
                     self.tracks[best_gid],
                     camera_id=camera_id,
                     embedding=embedding,
+                    embedding_spaces=spaces,
+                    association_model_space=association_space,
                     identity_key=identity_key,
                     plate=plate,
                     reid_person_id=reid_person_id,
@@ -1009,7 +1069,7 @@ class MtmcAssociator:
                     time_score=best_breakdown.get("time"),
                     final_score=best_breakdown.get("final"),
                 )
-                self._gallery_upsert(g, embedding)
+                self._gallery_upsert(g, embedding, observation_spaces=spaces)
             elif tier == "candidate" and candidate_gid is not None:
                 self.last_mode = AssocMode.CANDIDATE
                 gid = self._new_gid(object_type)
@@ -1017,6 +1077,8 @@ class MtmcAssociator:
                     global_id=gid,
                     object_type=object_type,
                     embedding=_l2(embedding) if embedding is not None else None,
+                    embedding_spaces=dict(spaces),
+                    association_model_space=association_space,
                     camera_id=camera_id,
                     last_seen=now,
                     first_seen=now,
@@ -1032,7 +1094,7 @@ class MtmcAssociator:
                     last_assoc_mode=AssocMode.CANDIDATE.value,
                 )
                 self.tracks[gid] = g
-                self._gallery_upsert(g, embedding)
+                self._gallery_upsert(g, embedding, observation_spaces=spaces)
                 self._candidates.append({
                     "globalId": gid,
                     "candidateGlobalId": candidate_gid,
@@ -1063,6 +1125,8 @@ class MtmcAssociator:
                     global_id=gid,
                     object_type=object_type,
                     embedding=_l2(embedding) if embedding is not None else None,
+                    embedding_spaces=dict(spaces),
+                    association_model_space=association_space,
                     camera_id=camera_id,
                     last_seen=now,
                     first_seen=now,
@@ -1078,7 +1142,7 @@ class MtmcAssociator:
                     last_assoc_mode=AssocMode.NEW.value,
                 )
                 self.tracks[gid] = g
-                self._gallery_upsert(g, embedding)
+                self._gallery_upsert(g, embedding, observation_spaces=spaces)
                 self.last_evidence = AssocEvidence(
                     decision=AssocMode.NEW.value,
                     target_global_id=g.global_id,
@@ -1111,17 +1175,15 @@ class MtmcAssociator:
             drop = self.tracks.get(drop_gid)
             if keep is None or drop is None or keep.object_type != drop.object_type:
                 return None
-            if drop.embedding is not None:
-                if keep.embedding is None:
-                    keep.embedding = _l2(drop.embedding)
-                else:
-                    a, b = _l2(keep.embedding), _l2(drop.embedding)
-                    dim = max(a.size, b.size)
-                    aa = np.zeros(dim, dtype=np.float32)
-                    bb = np.zeros(dim, dtype=np.float32)
-                    aa[: a.size] = a
-                    bb[: b.size] = b
-                    keep.embedding = _l2(0.5 * aa + 0.5 * bb)
+            for space, vector in drop.embedding_spaces.items():
+                current = keep.embedding_spaces.get(space)
+                keep.embedding_spaces[space] = (
+                    _l2(vector) if current is None else _l2(0.5 * _l2(current) + 0.5 * _l2(vector))
+                )
+            if keep.association_model_space is None:
+                keep.association_model_space = drop.association_model_space
+            if keep.association_model_space in keep.embedding_spaces:
+                keep.embedding = keep.embedding_spaces[keep.association_model_space]
             keep.hit_count += int(drop.hit_count or 1)
             if drop.reid_person_id and not keep.reid_person_id:
                 keep.reid_person_id = drop.reid_person_id

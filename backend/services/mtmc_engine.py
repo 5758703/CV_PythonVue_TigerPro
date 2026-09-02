@@ -818,12 +818,33 @@ def _gallery_model_keys(cfg: MtmcConfig, meta_backend: str | None = None) -> lis
     return out
 
 
-def _match_gallery(embeddings: dict[str, np.ndarray], threshold: float):
+def _reid_score_weights(cfg: MtmcConfig, embeddings: dict[str, np.ndarray]) -> dict[str, float]:
+    """Map the configured Strong/Youtu split onto the spaces actually available."""
+    strong_keys = [key for key in embeddings if key != "opencv-person-reid-youtu"]
+    youtu_keys = [key for key in embeddings if key == "opencv-person-reid-youtu"]
+    weights: dict[str, float] = {}
+    if strong_keys:
+        per_strong = float(cfg.fuse_weight_strong) / len(strong_keys)
+        weights.update({key: per_strong for key in strong_keys})
+    if youtu_keys:
+        per_youtu = (1.0 - float(cfg.fuse_weight_strong)) / len(youtu_keys)
+        weights.update({key: per_youtu for key in youtu_keys})
+    return weights
+
+
+def _match_gallery(
+    embeddings: dict[str, np.ndarray],
+    threshold: float,
+    *,
+    score_weights: dict[str, float] | None = None,
+):
     try:
         from services.reid_gallery import match_embedding, match_embedding_faiss
     except Exception:  # noqa: BLE001
         return {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
-    best = {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
+    from services.strong_reid import fuse_similarity_scores
+
+    rows_by_person: dict[tuple, dict] = {}
     for key, emb in embeddings.items():
         try:
             row = match_embedding_faiss(emb, key, threshold=threshold)
@@ -832,8 +853,25 @@ def _match_gallery(embeddings: dict[str, np.ndarray], threshold: float):
                 row = match_embedding(emb, key, threshold=threshold)
             except Exception:  # noqa: BLE001
                 continue
-        if row.get("matched") and float(row.get("score") or 0) > float(best.get("score") or 0):
-            best = {**row, "modelKey": key}
+        if not row.get("matched"):
+            continue
+        person_key = (row.get("personId"), row.get("facePersonId"), row.get("name"))
+        grouped = rows_by_person.setdefault(person_key, {"row": row, "scores": {}})
+        grouped["scores"][key] = float(row.get("score") or 0.0)
+    best = {"matched": False, "name": "未知", "personId": None, "score": 0.0, "modelKey": None}
+    for grouped in rows_by_person.values():
+        scores = grouped["scores"]
+        fused = fuse_similarity_scores(scores, score_weights or {key: 1.0 for key in scores})
+        if fused is None or fused < float(threshold) or fused <= float(best.get("score") or 0):
+            continue
+        row = grouped["row"]
+        best = {
+            **row,
+            "score": float(fused),
+            "matched": True,
+            "modelKey": max(scores, key=scores.get),
+            "scoreByModelKey": dict(scores),
+        }
     return best
 
 
@@ -1148,6 +1186,9 @@ def _associate_tracklet(
     builder,
     *,
     embedding,
+    embedding_spaces=None,
+    association_model_key=None,
+    score_weights=None,
     reid_person_id=None,
     display_name=None,
     identity_key=None,
@@ -1184,6 +1225,9 @@ def _associate_tracklet(
         object_type=builder.object_type,
         camera_id=builder.camera_id,
         embedding=embedding,
+        embedding_spaces=embedding_spaces,
+        association_model_key=association_model_key,
+        score_weights=score_weights,
         reid_person_id=reid_person_id,
         identity_key=identity_key,
         plate=plate,
@@ -1238,12 +1282,20 @@ def _resolve_overlay_global(
 
 def _finalize_tracklet(session: MtmcSession, builder, *, exclude_gids: set | None = None):
     """局部轨迹结束：聚合 embedding 后做最终关联并落库 tracklet。"""
-    emb = builder.aggregate_embedding()
+    spaces = builder.aggregate_embedding_spaces()
+    association_model_key = None
+    for observation in reversed(builder.observations):
+        association_model_key = (observation.meta or {}).get("reidModelKey")
+        if association_model_key:
+            break
+    emb = builder.aggregate_embedding(association_model_key)
     identity = builder.aggregate_identity()
     prev_gid = builder.assigned_global_id
     ex = set(exclude_gids or ())
     kwargs = dict(
         embedding=emb,
+        embedding_spaces=spaces,
+        association_model_key=association_model_key,
         exclude_gids=ex,
         now=builder.end_ts or time.time(),
         force=True,
@@ -1564,6 +1616,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                         gallery = _match_gallery(
                             gallery_embeddings,
                             cfg.appear_thresh,
+                            score_weights=_reid_score_weights(cfg, gallery_embeddings),
                         )
                     except Exception:  # noqa: BLE001
                         pass
@@ -1573,12 +1626,15 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 frame_h=fh,
                 frame_w=fw,
                 embedding=emb,
+                embedding_spaces=embeddings,
+                model_key=meta.get("associationModelKey"),
                 visual_key="rider" if is_rider else None,
                 trail=list(t.trail),
-                meta={"reidBackend": meta.get("backend"), "reidModelKey": meta.get("bestModelKey")},
+                meta={"reidBackend": meta.get("backend"), "reidModelKey": meta.get("associationModelKey")},
                 now=now,
             )
-            agg_emb = builder.aggregate_embedding()
+            agg_spaces = builder.aggregate_embedding_spaces()
+            agg_emb = builder.aggregate_embedding(meta.get("associationModelKey"))
             if agg_emb is None:
                 agg_emb = emb
             g = _resolve_overlay_global(
@@ -1589,6 +1645,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 now=now,
                 associate_kwargs={
                     "embedding": agg_emb,
+                    "embedding_spaces": agg_spaces,
+                    "association_model_key": meta.get("associationModelKey"),
+                    "score_weights": _reid_score_weights(cfg, embeddings),
                     "reid_person_id": gallery.get("personId") if gallery.get("matched") else None,
                     "display_name": gallery.get("name") if gallery.get("matched") else None,
                     "color_sig": c_sig,
@@ -1620,6 +1679,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                 "attrs": {
                     "reidBackend": meta.get("backend"),
                     "reidReadiness": meta.get("backends"),
+                    "availableModelSpaces": meta.get("availableModelSpaces", []),
+                    "associationModelKey": meta.get("associationModelKey"),
+                    "galleryModelKey": gallery.get("modelKey"),
                     "cameraId": cam_id,
                     "assocMode": getattr(g, "last_assoc_mode", None) if g else None,
                     "reidSkipped": not need_reid,
