@@ -313,6 +313,7 @@ class MtmcCandidatePair(db.Model):
             except Exception:  # noqa: BLE001
                 return None
 
+        evidence = _loads(self.evidence_json) or {}
         return {
             "id": self.id,
             "sessionId": self.session_id,
@@ -322,9 +323,15 @@ class MtmcCandidatePair(db.Model):
             "cameraId": self.camera_id,
             "trackletId": self.tracklet_id,
             "status": self.status,
+            "bestScore": evidence.get("bestScore", self.final_score),
+            "secondBestScore": evidence.get("secondBestScore"),
+            "matchMargin": evidence.get("matchMargin"),
             "finalScore": self.final_score,
             "reidScore": self.reid_score,
-            "evidence": _loads(self.evidence_json),
+            "appearanceScore": evidence.get("reid", self.reid_score),
+            "topologyScore": evidence.get("topology"),
+            "timeScore": evidence.get("time"),
+            "evidence": evidence or None,
             "createTime": self.create_time.isoformat() if self.create_time else None,
             "resolveTime": self.resolve_time.isoformat() if self.resolve_time else None,
         }

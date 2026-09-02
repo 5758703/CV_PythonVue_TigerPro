@@ -390,6 +390,10 @@
           <el-table-column prop="plate" label="车牌" width="110" />
           <el-table-column prop="identityKey" label="车辆身份键" min-width="160" show-overflow-tooltip />
           <el-table-column prop="hitCount" label="命中" width="70" />
+          <el-table-column prop="prototypeCount" label="原型" width="70" />
+          <el-table-column label="相机观测" min-width="190" show-overflow-tooltip>
+            <template #default="{ row }">{{ cameraObservationSummary(row) || '—' }}</template>
+          </el-table-column>
           <el-table-column label="轨迹" width="80">
             <template #default="{ row }">
               <el-button link type="primary" @click="showTraj(row.globalId)">查看</el-button>
@@ -454,8 +458,13 @@
           <el-table-column prop="globalId" label="新建 Global" min-width="130" />
           <el-table-column prop="candidateGlobalId" label="候选 Global" min-width="130" />
           <el-table-column prop="status" label="状态" width="90" />
-          <el-table-column prop="finalScore" label="综合分" width="80" />
-          <el-table-column prop="reidScore" label="ReID" width="70" />
+          <el-table-column label="最佳" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).best) }}</template></el-table-column>
+          <el-table-column label="次佳" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).second) }}</template></el-table-column>
+          <el-table-column label="边际" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).margin) }}</template></el-table-column>
+          <el-table-column label="外观" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).appearance) }}</template></el-table-column>
+          <el-table-column label="拓扑" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).topology) }}</template></el-table-column>
+          <el-table-column label="时间" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).time) }}</template></el-table-column>
+          <el-table-column label="最终" width="70"><template #default="{ row }">{{ formatScore(candidateScoreParts(row).final) }}</template></el-table-column>
           <el-table-column label="操作" width="140">
             <template #default="{ row }">
               <el-button
@@ -597,6 +606,15 @@
           <el-form-item label="最长(s)">
             <el-input-number v-model="topoForm.maxTransitSec" :min="1" :max="600" />
           </el-form-item>
+          <el-form-item label="边类型">
+            <el-select v-model="topoForm.edgeType" style="width: 130px">
+              <el-option label="非重叠" value="non_overlap" />
+              <el-option label="重叠视野" value="overlap" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="权重">
+            <el-input-number v-model="topoForm.weight" :min="0" :max="10" :step="0.1" />
+          </el-form-item>
           <el-button type="primary" v-permission="'ai:mtmc:edit'" @click="addTopo">添加边</el-button>
         </el-form>
         <h4 class="section-title"><span>已配置拓扑</span><small>有向边需要按两个方向分别配置</small></h4>
@@ -606,6 +624,8 @@
           <el-table-column prop="toCameraId" label="To" width="90" />
           <el-table-column prop="minTransitSec" label="最短秒" width="90" />
           <el-table-column prop="maxTransitSec" label="最长秒" width="90" />
+          <el-table-column prop="edgeType" label="边类型" width="110" />
+          <el-table-column prop="weight" label="权重" width="75" />
           <el-table-column prop="remark" label="备注" />
           <el-table-column label="操作" width="90">
             <template #default="{ row }">
@@ -824,10 +844,14 @@ import { cameraApi } from '../../../api/camera'
 import { mtmcApi } from '../../../api/mtmc'
 import {
   associationScoreParts,
+  cameraObservationSummary,
+  candidateScoreParts,
+  normalizeTopologyDraft,
   runtimeBudgetRows,
   runtimeModelRows,
   runtimeOverallStatus,
   runtimeRiskSummary,
+  stopSessionOutcome,
   topologyPolicyText,
 } from '../../../utils/mtmcRuntimeStatus'
 
@@ -1032,6 +1056,8 @@ const topoForm = reactive({
   toCameraId: null,
   minTransitSec: 0,
   maxTransitSec: 120,
+  edgeType: 'non_overlap',
+  weight: 1,
 })
 
 const eventQ = reactive({ globalId: '', objectType: '' })
@@ -1288,7 +1314,11 @@ const onStart = async () => {
   busy.value = true
   try {
     if (sessionId.value) {
-      try { await mtmcApi.stopSession(sessionId.value) } catch (_) { /* ignore */ }
+      const stop = stopSessionOutcome((await mtmcApi.stopSession(sessionId.value)).data)
+      if (!stop.completed) {
+        ElMessage.warning('原跨镜会话仍在停止，请稍后重试')
+        return
+      }
     }
     const res = await mtmcApi.startSession({ ...form, ...sessionPayload(), sourceMode: 'camera' })
     sessionId.value = res.data.sessionId
@@ -1338,7 +1368,11 @@ const onDetectStart = async () => {
   detectBusy.value = true
   try {
     if (detectSessionId.value) {
-      try { await mtmcApi.stopSession(detectSessionId.value) } catch (_) { /* ignore */ }
+      const stop = stopSessionOutcome((await mtmcApi.stopSession(detectSessionId.value)).data)
+      if (!stop.completed) {
+        ElMessage.warning('原检测会话仍在停止，请稍后重试')
+        return
+      }
     }
     let res
     const payload = detectPayload()
@@ -1397,10 +1431,10 @@ const onDetectStart = async () => {
 
 const onStop = async () => {
   if (!sessionId.value) return
-  try {
-    await mtmcApi.stopSession(sessionId.value)
-  } catch (_) {
-    /* 会话已失效也视为停止 */
+  const outcome = stopSessionOutcome((await mtmcApi.stopSession(sessionId.value)).data)
+  if (!outcome.completed) {
+    ElMessage.warning('会话仍在停止，保留会话编号以便重试')
+    return
   }
   clearSavedSession()
   ElMessage.success('已停止跨镜会话')
@@ -1408,10 +1442,10 @@ const onStop = async () => {
 
 const onDetectStop = async () => {
   if (!detectSessionId.value) return
-  try {
-    await mtmcApi.stopSession(detectSessionId.value)
-  } catch (_) {
-    /* ignore */
+  const outcome = stopSessionOutcome((await mtmcApi.stopSession(detectSessionId.value)).data)
+  if (!outcome.completed) {
+    ElMessage.warning('检测会话仍在停止，保留会话编号以便重试')
+    return
   }
   clearDetectSession()
   ElMessage.success('已停止实时检测')
@@ -1423,8 +1457,12 @@ const goWall = () => {
 }
 
 const addTopo = async () => {
-  if (!topoForm.fromCameraId || !topoForm.toCameraId) return
-  await mtmcApi.addTopology({ ...topoForm })
+  const normalized = normalizeTopologyDraft(topoForm)
+  if (!normalized.ok) {
+    ElMessage.warning(normalized.error)
+    return
+  }
+  await mtmcApi.addTopology(normalized.value)
   ElMessage.success('已添加')
   await loadTopo()
 }

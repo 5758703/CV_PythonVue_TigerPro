@@ -92,6 +92,59 @@ export function associationScoreParts(row = {}) {
   }
 }
 
+export function candidateScoreParts(row = {}) {
+  const evidence = row.evidence || {}
+  const best = valueOr(row.bestScore, valueOr(row.finalScore, valueOr(evidence.bestScore, evidence.final)))
+  return {
+    best,
+    second: valueOr(row.secondBestScore, evidence.secondBestScore),
+    margin: valueOr(row.matchMargin, evidence.matchMargin),
+    appearance: valueOr(row.appearanceScore, valueOr(row.reidScore, evidence.reid)),
+    topology: valueOr(row.topologyScore, evidence.topology),
+    time: valueOr(row.timeScore, evidence.time),
+    final: valueOr(row.finalScore, evidence.final),
+  }
+}
+
+export function cameraObservationSummary(row = {}) {
+  return Object.entries(row.cameraObservations || {})
+    .sort(([left], [right]) => Number(left) - Number(right))
+    .map(([cameraId, state = {}]) => `#${cameraId} ${state.active ? '在线' : '丢失'}`)
+    .join(' · ')
+}
+
+export function normalizeTopologyDraft(draft = {}) {
+  const fromCameraId = Number(draft.fromCameraId)
+  const toCameraId = Number(draft.toCameraId)
+  const minTransitSec = Number(draft.minTransitSec)
+  const maxTransitSec = Number(draft.maxTransitSec)
+  const weight = draft.weight == null ? 1 : Number(draft.weight)
+  const edgeType = String(draft.edgeType || 'non_overlap').trim().toLowerCase()
+  if (!Number.isInteger(fromCameraId) || !Number.isInteger(toCameraId) || fromCameraId <= 0 || toCameraId <= 0) {
+    return { ok: false, error: '请选择起点和终点相机' }
+  }
+  if (fromCameraId === toCameraId) return { ok: false, error: '起点和终点相机不能相同' }
+  if (!Number.isFinite(minTransitSec) || !Number.isFinite(maxTransitSec) || minTransitSec < 0 || maxTransitSec <= 0) {
+    return { ok: false, error: '通行时间必须为有效正数' }
+  }
+  if (minTransitSec > maxTransitSec) return { ok: false, error: '最短时间不能大于最长时间' }
+  if (!['overlap', 'non_overlap'].includes(edgeType)) return { ok: false, error: '请选择有效的边类型' }
+  if (!Number.isFinite(weight) || weight < 0) return { ok: false, error: '权重不能小于 0' }
+  return {
+    ok: true,
+    value: { fromCameraId, toCameraId, minTransitSec, maxTransitSec, edgeType, weight },
+  }
+}
+
+export function stopSessionOutcome(data = {}) {
+  const status = String(data.status || 'failed')
+  return {
+    status,
+    completed: status === 'stopped',
+    retryable: Boolean(data.retryable),
+  }
+}
+
 export function topologyPolicyText(policy = {}) {
   if (
     !policy

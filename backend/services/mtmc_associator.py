@@ -289,11 +289,15 @@ class MtmcAssociator:
         observation_spaces: dict[tuple[str, int, str | None], np.ndarray] | None = None,
         confirmed: bool = True,
         observation_quality: float | None = None,
+        finalized: bool = False,
     ) -> None:
         if (
             not confirmed
             or not g.confirmed
-            or g.last_assoc_mode not in {AssocMode.NEW.value, AssocMode.LONG_TERM.value}
+            or (
+                not finalized
+                and g.last_assoc_mode not in {AssocMode.NEW.value, AssocMode.LONG_TERM.value}
+            )
             or not self._quality_qualified(observation_quality)
         ):
             return
@@ -335,11 +339,20 @@ class MtmcAssociator:
         peer = {c for c in self._cameras_for_global(g) if int(c) != int(camera_id)}
         return len(peer) > 0
 
-    def _cross_cam_recency_weight(self, g: GlobalTrack, camera_id: int, now: float) -> float:
+    def _cross_cam_recency_weight(
+        self,
+        g: GlobalTrack,
+        camera_id: int,
+        now: float,
+        *,
+        source_camera_id: int | None = None,
+        source_observed_at: float | None = None,
+    ) -> float:
         """跨镜：优先刚在对侧相机出现的 Global；本侧 centroid 已污染则略降权。"""
-        if int(g.camera_id or -1) == int(camera_id):
+        if source_camera_id is not None and int(source_camera_id) == int(camera_id):
             return 0.90
-        dt = now - g.last_seen
+        observed = float(source_observed_at if source_observed_at is not None else g.last_seen)
+        dt = now - observed
         if dt <= 5.0:
             return 1.0 + 0.05 * max(0.0, (5.0 - dt) / 5.0)
         return 1.0
@@ -352,7 +365,7 @@ class MtmcAssociator:
             return 1.08
         if peer:
             return 1.04
-        if int(g.camera_id or -1) != cur:
+        if any(int(cam) != cur for cam in g.camera_observations) or int(g.camera_id or -1) != cur:
             return 1.02
         return 1.0
 
@@ -405,6 +418,7 @@ class MtmcAssociator:
         embedding: np.ndarray | None,
         excluded: set[str],
         *,
+        embedding_spaces: dict[tuple[str, int, str | None], np.ndarray] | None = None,
         reid_person_id: int | None = None,
         plate: str | None = None,
         identity_key: str | None = None,
@@ -434,14 +448,24 @@ class MtmcAssociator:
             and self._gallery.faiss_available()
             and self._gallery.size(object_type) > 0
         ):
-            for gid, _sim in self._gallery.search(object_type, embedding, topk=50):
-                if gid in excluded or gid in seen:
-                    continue
-                g = self.tracks.get(gid)
-                if g is None or g.object_type != object_type or not g.confirmed:
-                    continue
-                seen.add(gid)
-                yield g
+            query_spaces = embedding_spaces or {
+                ("legacy", int(np.asarray(embedding).size), None): embedding,
+            }
+            for (model_key, _dim, model_version), vector in query_spaces.items():
+                hits = self._gallery.search(
+                    object_type, vector, topk=50, model_key=model_key,
+                    model_version=model_version, include_space=True,
+                )
+                for gid, _sim, returned_space in hits:
+                    if returned_space != (model_key, int(np.asarray(vector).size), model_version):
+                        continue
+                    if gid in excluded or gid in seen:
+                        continue
+                    g = self.tracks.get(gid)
+                    if g is None or g.object_type != object_type or not g.confirmed:
+                        continue
+                    seen.add(gid)
+                    yield g
         for gid, g in self.tracks.items():
             if (
                 gid in excluded
@@ -484,7 +508,9 @@ class MtmcAssociator:
                 return True
         if cross_proto_new >= 0 and cross_proto_old >= 0 and cross_proto_new > cross_proto_old + 1e-6:
             return True
-        if int(g_new.camera_id or -1) != int(camera_id) and int(g_old.camera_id or -1) == int(camera_id):
+        new_here = int(camera_id) in g_new.camera_observations
+        old_here = int(camera_id) in g_old.camera_observations
+        if not new_here and old_here:
             return True
         new_peers = len({c for c in self._cameras_for_global(g_new) if int(c) != int(camera_id)})
         old_peers = len({c for c in self._cameras_for_global(g_old) if int(c) != int(camera_id)})
@@ -582,6 +608,58 @@ class MtmcAssociator:
             return 0.0
         return max(0.0, rule.weight)
 
+    def _best_source_observation(
+        self,
+        g: GlobalTrack,
+        camera_id: int,
+        now: float,
+    ) -> tuple[int | None, float, float, float]:
+        """Choose the actual camera observation that makes this transition viable."""
+        candidates: list[tuple[float, float, int, float, float, float]] = []
+        observations = g.camera_observations or {}
+        latest_observed_at = max(
+            (float(state.last_observed_at) for state in observations.values()),
+            default=float(g.last_seen),
+        )
+        for source_camera_id, state in observations.items():
+            observed_at = float(state.last_observed_at)
+            # Once a Global has progressed to a newer camera, an ancient
+            # observation from the destination itself cannot justify a local
+            # re-entry. That would let delayed frames pull the live identity
+            # backwards and oscillate its camera summary.
+            if int(source_camera_id) == int(camera_id) and observed_at < latest_observed_at:
+                continue
+            dt = float(now) - observed_at
+            topology = self._topology_ok(int(source_camera_id), int(camera_id), dt)
+            time_score = self._time_fit_score(int(source_camera_id), int(camera_id), dt)
+            if topology <= 0 or time_score <= 0:
+                continue
+            candidates.append((
+                float(topology * time_score), observed_at,
+                int(source_camera_id), observed_at, float(topology), float(time_score),
+            ))
+        if candidates:
+            _policy, _latest, source_camera_id, observed_at, topology, time_score = max(candidates)
+            return source_camera_id, observed_at, topology, time_score
+
+        # Compatibility for legacy Globals created before camera observations
+        # became canonical. A loaded observation map never falls back to the
+        # mutable camera_id/last_seen summary.
+        if not observations:
+            source_camera_id = g.camera_id
+            observed_at = float(g.last_seen)
+            dt = float(now) - observed_at
+            return (
+                source_camera_id,
+                observed_at,
+                self._topology_ok(source_camera_id, int(camera_id), dt),
+                self._time_fit_score(source_camera_id, int(camera_id), dt),
+            )
+        latest_camera_id, latest_state = max(
+            observations.items(), key=lambda item: item[1].last_observed_at,
+        )
+        return int(latest_camera_id), float(latest_state.last_observed_at), 0.0, 0.0
+
     def _bind_key(self, object_type: str, camera_id: int, local_track_id: int) -> tuple[str, int, int]:
         return (object_type, int(camera_id), int(local_track_id))
 
@@ -624,7 +702,9 @@ class MtmcAssociator:
             g = self.tracks.get(gid)
             if g is None or g.object_type != object_type:
                 return None
-            if now - g.last_seen > self.local_sticky_sec:
+            state = g.camera_observations.get(int(camera_id))
+            last_observed = state.last_observed_at if state is not None else g.last_seen
+            if now - last_observed > self.local_sticky_sec:
                 return None
             return gid
 
@@ -823,13 +903,18 @@ class MtmcAssociator:
         now: float,
     ) -> tuple[float | None, dict]:
         """仅用于新生 local track 的长时/跨镜外观匹配。返回 (final_score, breakdown)。"""
-        dt = now - g.last_seen
-        topo_w = self._topology_ok(g.camera_id, camera_id, dt)
-        time_w = self._time_fit_score(g.camera_id, camera_id, dt)
+        source_camera_id, source_observed_at, topo_w, time_w = self._best_source_observation(
+            g, camera_id, now,
+        )
+        dt = now - source_observed_at
         if topo_w <= 0:
-            return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
+            return None, {
+                "topology": topo_w, "time": time_w, "reid": None, "final": None,
+                "sourceCameraId": source_camera_id,
+                "sourceObservedAt": source_observed_at,
+            }
 
-        same_cam = g.camera_id == camera_id
+        same_cam = source_camera_id == camera_id
         per_space_scores: dict[tuple[str, int, str | None], float] = {}
         per_space_cross: dict[tuple[str, int, str | None], float] = {}
         for (model_key, _dim, model_version), vector in (embedding_spaces or {}).items():
@@ -958,7 +1043,11 @@ class MtmcAssociator:
                         "reid": reid_raw, "color": csim if csim >= 0 else None, "final": None,
                     }
         recency_w = (
-            self._cross_cam_recency_weight(g, camera_id, now)
+            self._cross_cam_recency_weight(
+                g, camera_id, now,
+                source_camera_id=source_camera_id,
+                source_observed_at=source_observed_at,
+            )
             if not same_cam
             else 1.0
         )
@@ -978,6 +1067,8 @@ class MtmcAssociator:
             "xcamBoost": xcam_boost,
             "final": final,
             "candidateGlobalId": g.global_id,
+            "sourceCameraId": source_camera_id,
+            "sourceObservedAt": source_observed_at,
         }
 
     def _select_long_term_target(
@@ -1004,6 +1095,7 @@ class MtmcAssociator:
         ranked_scores: list[tuple[str, float]] = []
         for g in self._iter_long_term_targets(
             object_type, embedding, excluded,
+            embedding_spaces=embedding_spaces,
             reid_person_id=reid_person_id, plate=plate, identity_key=identity_key,
         ):
             if self._hard_conflict(
@@ -1092,6 +1184,8 @@ class MtmcAssociator:
         *,
         camera_id: int,
         embedding: np.ndarray | None,
+        model_key: str | None = None,
+        model_version: str | None = None,
         vehicle_class: str | None = None,
         now: float | None = None,
     ) -> np.ndarray | None:
@@ -1103,7 +1197,9 @@ class MtmcAssociator:
         if embedding is None:
             return None
         ts = float(now if now is not None else time.time())
-        spaces, _ = _normalize_embedding_spaces(embedding, None, None, None)
+        spaces, association_space = _normalize_embedding_spaces(
+            embedding, None, model_key, model_version,
+        )
         with self._lock:
             self._purge_expired(ts)
             gid, _score, _breakdown, _ranked = self._select_long_term_target(
@@ -1114,9 +1210,85 @@ class MtmcAssociator:
                 excluded=set(), now=ts,
             )
             candidate = self.tracks.get(gid) if gid else None
-            if candidate is None or candidate.embedding is None:
+            if candidate is None or association_space is None:
                 return None
-            return np.asarray(candidate.embedding, dtype=np.float32).copy()
+            prototype = candidate.embedding_spaces.get(association_space)
+            if prototype is None:
+                return None
+            return np.asarray(prototype, dtype=np.float32).copy()
+
+    def commit_bound_tracklet(
+        self,
+        *,
+        global_id: str,
+        object_type: str,
+        camera_id: int,
+        local_track_id: int,
+        embedding: np.ndarray | None = None,
+        embedding_spaces: dict | None = None,
+        association_model_key: str | None = None,
+        model_version: str | None = None,
+        identity_key: str | None = None,
+        plate: str | None = None,
+        reid_person_id: int | None = None,
+        face_person_id: int | None = None,
+        display_name: str | None = None,
+        visual_key: str | None = None,
+        vehicle_class: str | None = None,
+        color_sig: np.ndarray | None = None,
+        observation_quality: float | None = None,
+        now: float | None = None,
+    ) -> GlobalTrack | None:
+        """Atomically commit finalized evidence to an existing sticky binding."""
+        ts = float(now if now is not None else time.time())
+        spaces, association_space = _normalize_embedding_spaces(
+            embedding, embedding_spaces, association_model_key, model_version,
+        )
+        if association_space is not None:
+            embedding = spaces[association_space]
+        bkey = self._bind_key(object_type, camera_id, int(local_track_id))
+        with self._lock:
+            if self._local_bind.get(bkey) != str(global_id):
+                return None
+            g = self.tracks.get(str(global_id))
+            if g is None or g.object_type != object_type:
+                return None
+            g = self._update_track(
+                g,
+                camera_id=int(camera_id),
+                embedding=embedding,
+                embedding_spaces=spaces,
+                association_model_space=association_space,
+                identity_key=identity_key,
+                plate=plate,
+                reid_person_id=reid_person_id,
+                face_person_id=face_person_id,
+                display_name=display_name,
+                visual_key=visual_key,
+                vehicle_class=vehicle_class,
+                color_sig=color_sig,
+                local_track_id=int(local_track_id),
+                now=ts,
+                mode=AssocMode.STICKY,
+                update_embedding=self._quality_qualified(observation_quality),
+            )
+            self._gallery_upsert(
+                g,
+                embedding,
+                observation_spaces=spaces,
+                confirmed=g.confirmed,
+                observation_quality=observation_quality,
+                finalized=True,
+            )
+            self.last_mode = AssocMode.STICKY
+            self.last_evidence = AssocEvidence(
+                decision=AssocMode.STICKY.value,
+                target_global_id=g.global_id,
+                source_global_id=g.global_id,
+                final_score=1.0,
+                extra={"finalizedCommit": True},
+            )
+            return g
 
     def associate_with_evidence(
         self,
@@ -1193,9 +1365,10 @@ class MtmcAssociator:
                             not skip_sticky
                             and object_type == "vehicle"
                             and embedding is not None
-                            and g.embedding is not None
+                            and association_space is not None
                         ):
-                            cur_cos = _cos(embedding, g.embedding)
+                            current_prototype = g.embedding_spaces.get(association_space)
+                            cur_cos = _cos(embedding, current_prototype)
                             drift_need = max(0.40, self.vehicle_appear_thresh - 0.08)
                             if cur_cos >= 0 and cur_cos < drift_need:
                                 skip_sticky = True
@@ -1205,9 +1378,14 @@ class MtmcAssociator:
                                 and self._gallery.faiss_available()
                             ):
                                 best_cross = -1.0
-                                for alt_gid, _sim in self._gallery.search(
+                                for alt_gid, _sim, returned_space in self._gallery.search(
                                     object_type, embedding, topk=12,
+                                    model_key=association_space[0],
+                                    model_version=association_space[2],
+                                    include_space=True,
                                 ):
+                                    if returned_space != association_space:
+                                        continue
                                     if alt_gid == g.global_id:
                                         continue
                                     cp = self._gallery.max_similarity(
@@ -1215,6 +1393,8 @@ class MtmcAssociator:
                                         alt_gid,
                                         embedding,
                                         exclude_camera_id=camera_id,
+                                        model_key=association_space[0],
+                                        model_version=association_space[2],
                                     )
                                     if cp > best_cross:
                                         best_cross = cp
@@ -1223,7 +1403,11 @@ class MtmcAssociator:
                                     and best_cross > cur_cos + 0.06
                                 ):
                                     skip_sticky = True
-                        if not skip_sticky and now - g.last_seen <= self.local_sticky_sec:
+                        camera_state = g.camera_observations.get(int(camera_id))
+                        sticky_last_observed = (
+                            camera_state.last_observed_at if camera_state is not None else g.last_seen
+                        )
+                        if not skip_sticky and now - sticky_last_observed <= self.local_sticky_sec:
                             self.last_mode = AssocMode.STICKY
                             evidence = AssocEvidence(
                                 decision=AssocMode.STICKY.value,
@@ -1362,6 +1546,8 @@ class MtmcAssociator:
                         "secondBestScore": second_score,
                         "matchMargin": match_margin,
                         "minMatchMargin": self.min_match_margin,
+                        "sourceCameraId": best_breakdown.get("sourceCameraId"),
+                        "sourceObservedAt": best_breakdown.get("sourceObservedAt"),
                     },
                 )
                 self._gallery_upsert(
@@ -1429,6 +1615,8 @@ class MtmcAssociator:
                         "secondBestScore": second_score,
                         "matchMargin": match_margin,
                         "minMatchMargin": self.min_match_margin,
+                        "sourceCameraId": best_breakdown.get("sourceCameraId"),
+                        "sourceObservedAt": best_breakdown.get("sourceObservedAt"),
                     },
                 )
             else:
@@ -1714,6 +1902,7 @@ class MtmcAssociator:
                     "assocMode": g.last_assoc_mode,
                     "confirmed": g.confirmed,
                     "candidate": g.candidate,
+                    "prototypeCount": self._gallery.prototype_count(g.object_type, g.global_id),
                     "cameraObservations": {
                         str(camera_id): {
                             "active": state.active,

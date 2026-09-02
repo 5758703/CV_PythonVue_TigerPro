@@ -16,6 +16,9 @@ _MIN_AREA_RATIO = 0.002  # bbox 过小则丢弃
 _KEYFRAME_MIN_INTERVAL_SEC = 0.75
 _KEYFRAME_MAX_INTERVAL_SEC = 3.0
 _KEYFRAME_QUALITY_GAIN = 0.08
+_PLATE_MIN_INTERVAL_SEC = 0.75
+_PLATE_MAX_INTERVAL_SEC = 3.0
+_PLATE_QUALITY_GAIN = 0.08
 
 
 def _l2(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
@@ -62,6 +65,16 @@ class TrackletObservation:
     meta: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PlateObservation:
+    """One real OCR result, kept apart from frame/display cache replay."""
+
+    ts: float
+    text: str
+    score: float
+    quality: float
+
+
 @dataclass
 class TrackletBuilder:
     """单路 local_track 的观测累积器。"""
@@ -79,6 +92,9 @@ class TrackletBuilder:
     last_embedding_sample_at: float | None = None
     last_embedding_sample_quality: float = 0.0
     sampled_view_tokens: set[str] = field(default_factory=set)
+    plate_observations: list[PlateObservation] = field(default_factory=list)
+    last_plate_sample_at: float | None = None
+    last_plate_sample_quality: float = 0.0
 
     @classmethod
     def create(
@@ -134,6 +150,47 @@ class TrackletBuilder:
     def should_sample_embedding(self, now: float, quality: float, view_token: str | None = None) -> bool:
         """Compatibility API: atomically check and reserve one keyframe."""
         return self.reserve_embedding_sample(now, quality, view_token)
+
+    def plate_sample_eligible(self, now: float, quality: float) -> bool:
+        """Return whether OCR cooldown/quality policy permits a fresh sample."""
+        ts = float(now)
+        q = max(0.0, min(1.0, float(quality or 0.0)))
+        last = self.last_plate_sample_at
+        return (
+            last is None
+            or (ts - last) >= _PLATE_MAX_INTERVAL_SEC
+            or (
+                (ts - last) >= _PLATE_MIN_INTERVAL_SEC
+                and q >= self.last_plate_sample_quality + _PLATE_QUALITY_GAIN
+            )
+        )
+
+    def reserve_plate_sample(self, now: float, quality: float) -> bool:
+        """Reserve one real OCR attempt after the caller has secured budget."""
+        if not self.plate_sample_eligible(now, quality):
+            return False
+        self.last_plate_sample_at = float(now)
+        self.last_plate_sample_quality = max(0.0, min(1.0, float(quality or 0.0)))
+        return True
+
+    def add_plate_observation(
+        self,
+        text: str | None,
+        score: float,
+        *,
+        quality: float,
+        now: float | None = None,
+    ) -> None:
+        """Store only a newly executed OCR result; display cache is excluded."""
+        value = str(text or "").strip()
+        if not value:
+            return
+        self.plate_observations.append(PlateObservation(
+            ts=float(now if now is not None else time.time()),
+            text=value,
+            score=max(0.0, float(score or 0.0)),
+            quality=max(0.0, min(1.0, float(quality or 0.0))),
+        ))
 
     def add_observation(
         self,
@@ -276,12 +333,19 @@ class TrackletBuilder:
         return next(iter(spaces.values()))
 
     def aggregate_plate(self) -> tuple[str | None, float]:
-        """多帧车牌投票（取最高分）。"""
-        best_text, best_score = None, 0.0
-        for o in self.observations:
-            if o.plate and float(o.plate_score or 0) >= best_score:
-                best_text, best_score = o.plate, float(o.plate_score)
-        return best_text, best_score
+        """Vote over real OCR observations; retain legacy rows as fallback."""
+        from services.vehicle_reid_feat import aggregate_vehicle_plate_votes
+
+        if self.plate_observations:
+            return aggregate_vehicle_plate_votes(
+                (observation.text, observation.score)
+                for observation in self.plate_observations
+            )
+        return aggregate_vehicle_plate_votes(
+            (observation.plate, observation.plate_score)
+            for observation in self.observations
+            if observation.plate
+        )
 
     def aggregate_identity(self) -> dict[str, Any]:
         best = self.best_observation()

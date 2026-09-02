@@ -181,7 +181,8 @@ class MtmcActiveGallery:
         topk: int = 50,
         model_key: str | None = None,
         model_version: str | None = None,
-    ) -> list[tuple[str, float]]:
+        include_space: bool = False,
+    ) -> list[tuple]:
         q = l2_normalize(np.asarray(embedding, dtype=np.float32).reshape(-1))
         bucket_key = (object_type, *_space_id(model_key, q, model_version))
         with _lock:
@@ -199,8 +200,20 @@ class MtmcActiveGallery:
                 continue
             gid = flat_gids[int(idx)]
             best_by_gid[gid] = max(best_by_gid.get(gid, -1.0), float(score))
-        ranked = sorted(best_by_gid.items(), key=lambda x: -x[1])
-        return ranked[: int(topk)]
+        ranked = sorted(best_by_gid.items(), key=lambda x: -x[1])[: int(topk)]
+        if include_space:
+            space = (bucket_key[1], int(bucket_key[2]), bucket_key[3])
+            return [(gid, score, space) for gid, score in ranked]
+        return ranked
+
+    def prototype_count(self, object_type: str, global_id: str) -> int:
+        """Count camera-specific prototypes across exact model spaces."""
+        with _lock:
+            return sum(
+                len(bucket.get(str(global_id), {}))
+                for key, bucket in self._vecs.items()
+                if key[0] == object_type
+            )
 
     def faiss_available(self) -> bool:
         try:

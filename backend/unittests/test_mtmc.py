@@ -87,14 +87,16 @@ def test_vehicle_fuse_plate_identity():
     emb = _l2(np.random.randn(64).astype(np.float32))
     r = fuse_plate_visual(plate="粤B12345", plate_score=0.9, emb_a=emb, emb_b=emb)
     assert r["plateOk"]
-    assert r["identityKey"].startswith("粤B12345|")
+    assert r["identityKey"] == "粤B12345"
+    assert r["visualKey"].startswith("V")
     assert r["fuseScore"] > 0.5
 
 
 def test_vehicle_fuse_noplate_visual():
     emb = _color_hist_embedding(np.zeros((80, 120, 3), dtype=np.uint8) + 40)
     r = fuse_plate_visual(plate=None, plate_score=0, emb_a=emb, emb_b=emb)
-    assert r["identityKey"].startswith("NOPLATE|")
+    assert r["identityKey"] is None
+    assert r["visualKey"].startswith("V")
     assert r["visualKey"]
 
 
@@ -365,7 +367,9 @@ def test_vehicle_cross_cam_noplate_visual_merge():
     noise = _l2(emb + np.random.randn(64).astype(np.float32) * 0.05)
     fuse_a = fuse_plate_visual(plate=None, plate_score=0, emb_a=emb, emb_b=emb)
     fuse_b = fuse_plate_visual(plate=None, plate_score=0, emb_a=noise, emb_b=noise)
-    assert fuse_a["identityKey"] != fuse_b["identityKey"]
+    assert fuse_a["identityKey"] is None
+    assert fuse_b["identityKey"] is None
+    assert fuse_a["visualKey"] != fuse_b["visualKey"]
     g1 = assoc.associate(
         object_type="vehicle", camera_id=71, embedding=emb,
         identity_key=fuse_a["identityKey"], local_track_id=1, exclude_gids=set(), now=100.0,

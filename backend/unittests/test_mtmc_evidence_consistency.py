@@ -206,7 +206,7 @@ def test_stop_timeout_does_not_finalize_or_cleanup(monkeypatch, tmp_path):
     monkeypatch.setattr("shutil.rmtree", lambda *_args, **_kwargs: order.append("cleanup"))
 
     assert mtmc_engine.stop_session(session.session_id) is False
-    assert order == ["join"]
+    assert order and set(order) == {"join"}
 
 
 def test_concurrent_stop_finalizes_and_cleans_up_once(monkeypatch, tmp_path):

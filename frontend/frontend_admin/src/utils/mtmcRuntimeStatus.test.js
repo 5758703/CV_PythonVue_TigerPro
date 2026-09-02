@@ -263,6 +263,73 @@ test('budget rows preserve every scheduling decision counter', () => {
   }])
 })
 
+test('topology draft explicitly preserves overlap type and zero weight', () => {
+  assert.deepEqual(helpers.normalizeTopologyDraft?.({
+    fromCameraId: 1,
+    toCameraId: 2,
+    minTransitSec: 0,
+    maxTransitSec: 30,
+    edgeType: 'overlap',
+    weight: 0,
+  }), {
+    ok: true,
+    value: {
+      fromCameraId: 1,
+      toCameraId: 2,
+      minTransitSec: 0,
+      maxTransitSec: 30,
+      edgeType: 'overlap',
+      weight: 0,
+    },
+  })
+})
+
+test('topology draft rejects self edges and reversed transit windows', () => {
+  assert.equal(helpers.normalizeTopologyDraft?.({
+    fromCameraId: 1, toCameraId: 1, minTransitSec: 0, maxTransitSec: 10,
+  }).ok, false)
+  assert.equal(helpers.normalizeTopologyDraft?.({
+    fromCameraId: 1, toCameraId: 2, minTransitSec: 20, maxTransitSec: 10,
+  }).ok, false)
+})
+
+test('camera observation summary exposes active and lost per-camera state', () => {
+  assert.equal(helpers.cameraObservationSummary?.({
+    cameraObservations: {
+      2: { active: false, lostAt: 20 },
+      1: { active: true, lastObservedAt: 21 },
+    },
+  }), '#1 在线 · #2 丢失')
+})
+
+test('candidate score parts expose best second margin and all components', () => {
+  assert.deepEqual(helpers.candidateScoreParts?.({
+    finalScore: 0.7,
+    reidScore: 0.8,
+    topologyScore: 1,
+    timeScore: 0.5,
+    secondBestScore: 0.65,
+    matchMargin: 0.05,
+  }), {
+    best: 0.7,
+    second: 0.65,
+    margin: 0.05,
+    appearance: 0.8,
+    topology: 1,
+    time: 0.5,
+    final: 0.7,
+  })
+})
+
+test('stop outcome only completes for a stopped response', () => {
+  assert.deepEqual(helpers.stopSessionOutcome?.({ status: 'pending', retryable: true }), {
+    status: 'pending', completed: false, retryable: true,
+  })
+  assert.deepEqual(helpers.stopSessionOutcome?.({ status: 'stopped', retryable: false }), {
+    status: 'stopped', completed: true, retryable: false,
+  })
+})
+
 test('gallery degradation is included in the operator risk summary', () => {
   assert.equal(helpers.runtimeRiskSummary?.({
     models: {},

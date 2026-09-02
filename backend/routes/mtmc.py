@@ -359,13 +359,27 @@ def add_topology():
     b = int(data.get("toCameraId") or 0)
     if not a or not b or a == b:
         return jsonify(code=400, message="请填写不同的 from/to 摄像头"), 400
+    edge_type = str(data.get("edgeType") or "non_overlap").strip().lower()
+    if edge_type not in {"overlap", "non_overlap"}:
+        return jsonify(code=400, message="edgeType must be overlap or non_overlap"), 400
+    try:
+        raw_min_transit = data.get("minTransitSec")
+        raw_max_transit = data.get("maxTransitSec")
+        min_transit = float(0 if raw_min_transit is None else raw_min_transit)
+        max_transit = float(120 if raw_max_transit is None else raw_max_transit)
+        raw_weight = data.get("weight")
+        weight = float(1 if raw_weight is None else raw_weight)
+    except (TypeError, ValueError):
+        return jsonify(code=400, message="transit time and weight must be numeric"), 400
+    if min_transit < 0 or max_transit <= 0 or min_transit > max_transit or weight < 0:
+        return jsonify(code=400, message="invalid transit window or weight"), 400
     row = CameraTopology(
         from_camera_id=a,
         to_camera_id=b,
-        min_transit_sec=float(data.get("minTransitSec") or 0),
-        max_transit_sec=float(data.get("maxTransitSec") or 120),
-        weight=float(data.get("weight") or 1),
-        edge_type=str(data.get("edgeType") or "non_overlap").strip().lower(),
+        min_transit_sec=min_transit,
+        max_transit_sec=max_transit,
+        weight=weight,
+        edge_type=edge_type,
         remark=(data.get("remark") or "").strip() or None,
     )
     db.session.add(row)
@@ -631,10 +645,15 @@ def start_session_sources():
 @mtmc_bp.post("/sessions/<sid>/stop")
 @permission_required("ai:mtmc:edit")
 def stop_session(sid):
-    ok = mtmc_engine.stop_session(sid)
-    if not ok:
-        return jsonify(code=404, message="会话不存在"), 404
-    return jsonify(code=0, message="已停止")
+    result = mtmc_engine.stop_session_status(sid)
+    status = result.get("status")
+    if status == "not_found":
+        return jsonify(code=404, message="会话不存在", data=result), 404
+    if status == "pending":
+        return jsonify(code=0, message="会话正在停止", data=result), 202
+    if status == "failed":
+        return jsonify(code=503, message=result.get("message") or "停止失败", data=result), 503
+    return jsonify(code=0, message="已停止", data=result)
 
 
 @mtmc_bp.get("/events")

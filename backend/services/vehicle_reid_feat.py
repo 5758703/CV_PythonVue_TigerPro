@@ -1,6 +1,6 @@
 """车辆视觉 ReID（TransReID / CLIP-ReID / ViT 风格 ONNX）+ 车牌融合打分。
 
-身份键：plate|visual_key（有牌优先；无牌仅视觉；两者融合生成稳定 identity_key）。
+身份键只采用可靠车牌；视觉哈希仅用于诊断，不参与跨帧身份键。
 """
 from __future__ import annotations
 
@@ -142,9 +142,9 @@ def extract_vehicle_embedding(model_path: str | None, image_bgr: np.ndarray) -> 
 
 
 def visual_key_from_embedding(emb: np.ndarray, prefix: str = "V") -> str:
-    """将 embedding 量化为短视觉键（稳定聚类代理）。
+    """将 embedding 量化为短视觉诊断键。
 
-    使用 float32 字节哈希，避免 int8 粗量化导致相似外观（如直方图兜底）碰撞同一键。
+    该值只用于排障展示；浮点字节哈希不具备跨帧身份稳定性。
     """
     e = _l2(emb)
     digest = hashlib.sha1(e.astype(np.float32).tobytes()).hexdigest()[:12]
@@ -261,6 +261,8 @@ def fuse_plate_visual(
     emb_b: np.ndarray | None = None,
     plate_weight: float = 0.7,
     visual_weight: float = 0.3,
+    model_space_a: tuple[str, int, str | None] | None = None,
+    model_space_b: tuple[str, int, str | None] | None = None,
 ) -> dict:
     """车牌优先 + 视觉相似度融合打分，生成 identity_key。
 
@@ -269,36 +271,32 @@ def fuse_plate_visual(
     """
     plate_text = (plate or "").strip().upper() or None
     visual_sim = 0.0
+    comparable_visual = False
     if emb_a is not None and emb_b is not None:
         a, b = _l2(emb_a), _l2(emb_b)
-        dim = max(a.size, b.size)
-        if a.size != dim:
-            aa = np.zeros(dim, dtype=np.float32)
-            aa[: a.size] = a
-            a = aa
-        if b.size != dim:
-            bb = np.zeros(dim, dtype=np.float32)
-            bb[: b.size] = b
-            b = bb
-        visual_sim = float(np.dot(a, b))
+        spaces_match = (
+            model_space_a == model_space_b
+            if model_space_a is not None or model_space_b is not None
+            else True
+        )
+        declared_dims_match = (
+            (model_space_a is None or int(model_space_a[1]) == int(a.size))
+            and (model_space_b is None or int(model_space_b[1]) == int(b.size))
+        )
+        if spaces_match and declared_dims_match and a.size == b.size:
+            visual_sim = float(np.dot(a, b))
+            comparable_visual = True
 
     plate_ok = plate_reliable(plate_text, plate_score)
     pw = float(plate_weight) if plate_ok else 0.0
-    vw = float(visual_weight) if emb_a is not None else 0.0
+    vw = float(visual_weight) if comparable_visual else 0.0
     if pw + vw <= 1e-6:
         fuse = 0.0
     else:
         fuse = (pw * float(plate_score) + vw * max(0.0, visual_sim)) / (pw + vw)
 
     vkey = visual_key_from_embedding(emb_a) if emb_a is not None else None
-    if plate_ok and vkey:
-        identity = f"{plate_text}|{vkey}"
-    elif plate_ok:
-        identity = plate_text
-    elif vkey:
-        identity = f"NOPLATE|{vkey}"
-    else:
-        identity = None
+    identity = plate_text if plate_ok else None
 
     return {
         "plate": plate_text,
@@ -311,16 +309,29 @@ def fuse_plate_visual(
     }
 
 
-def cosine(a: np.ndarray, b: np.ndarray) -> float:
+def cosine(a: np.ndarray, b: np.ndarray) -> float | None:
     x, y = _l2(a), _l2(b)
-    dim = max(x.size, y.size)
-    xa = np.zeros(dim, dtype=np.float32)
-    ya = np.zeros(dim, dtype=np.float32)
-    xa[: x.size] = x
-    ya[: y.size] = y
-    return float(np.dot(xa, ya))
+    if x.size != y.size:
+        return None
+    return float(np.dot(x, y))
 
 
-def vehicle_candidate_score(tracklet_embedding: np.ndarray, candidate_prototype: np.ndarray) -> float:
+def vehicle_candidate_score(
+    tracklet_embedding: np.ndarray,
+    candidate_prototype: np.ndarray,
+    *,
+    model_space_a: tuple[str, int, str | None] | None = None,
+    model_space_b: tuple[str, int, str | None] | None = None,
+) -> float | None:
     """Visual evidence is a tracklet-to-candidate comparison, never self-score."""
+    if model_space_a is not None or model_space_b is not None:
+        if model_space_a != model_space_b:
+            return None
+        if model_space_a is None:
+            return None
+        if (
+            int(np.asarray(tracklet_embedding).size) != int(model_space_a[1])
+            or int(np.asarray(candidate_prototype).size) != int(model_space_a[1])
+        ):
+            return None
     return cosine(tracklet_embedding, candidate_prototype)

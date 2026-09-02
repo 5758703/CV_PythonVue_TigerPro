@@ -462,6 +462,8 @@ class MtmcSession:
         self._stop_finalized = False
         self._stop_finalizer_started = False
         self._stop_finalization_done = threading.Event()
+        self._stop_state = "running"
+        self._stop_error: str | None = None
         self.cams: dict[int, CamState] = {}
         self.events: list[dict] = []
         self.passes: list[dict] = []
@@ -552,19 +554,75 @@ def list_sessions() -> list[dict]:
         return [s.to_dict() for s in _sessions.values()]
 
 
+def _record_finalization_failure(
+    session: MtmcSession,
+    error: Exception,
+    *,
+    camera_id: int | None = None,
+    object_type: str | None = None,
+    local_track_id: int | None = None,
+) -> None:
+    """Publish a retryable durability failure without discarding its inputs."""
+    message = str(error)
+    with _runtime_status_lock(session):
+        runtime = getattr(session, "runtime_status", None)
+        if runtime is None:
+            runtime = {}
+            session.runtime_status = runtime
+        previous = dict(runtime.get("finalization") or {})
+        runtime["finalization"] = {
+            "ready": False,
+            "runtimeState": "failed",
+            "retryable": True,
+            "error": message,
+            "errorCount": int(previous.get("errorCount") or 0) + 1,
+            "cameraId": camera_id if camera_id is not None else previous.get("cameraId"),
+            "objectType": object_type if object_type is not None else previous.get("objectType"),
+            "localTrackId": (
+                local_track_id if local_track_id is not None else previous.get("localTrackId")
+            ),
+        }
+
+
+def _record_finalization_success(session: MtmcSession) -> None:
+    with _runtime_status_lock(session):
+        runtime = getattr(session, "runtime_status", None)
+        if runtime is None:
+            runtime = {}
+            session.runtime_status = runtime
+        previous = dict(runtime.get("finalization") or {})
+        runtime["finalization"] = {
+            "ready": True,
+            "runtimeState": "ready",
+            "retryable": False,
+            "error": None,
+            "errorCount": int(previous.get("errorCount") or 0),
+        }
+
+
 def _finish_stopped_session_locked(session: MtmcSession) -> bool:
     if getattr(session, "_stop_finalized", False):
         return True
-    for cam_state in list(session.cams.values()):
-        _flush_camera_tracklets(session, cam_state)
-    upload_dir = getattr(session, "upload_dir", None)
-    if upload_dir and os.path.isdir(upload_dir):
-        try:
+    try:
+        for cam_state in list(session.cams.values()):
+            _flush_camera_tracklets(session, cam_state)
+        upload_dir = getattr(session, "upload_dir", None)
+        if upload_dir and os.path.isdir(upload_dir):
             import shutil
-            shutil.rmtree(upload_dir, ignore_errors=True)
-        except Exception as e:  # noqa: BLE001
-            log.debug("cleanup mtmc upload dir failed: %s", e)
+            shutil.rmtree(upload_dir)
+    except Exception as error:  # noqa: BLE001
+        session._stop_state = "failed"
+        session._stop_error = str(error)
+        _record_finalization_failure(session, error)
+        done = getattr(session, "_stop_finalization_done", None)
+        if done is not None:
+            done.set()
+        log.warning("mtmc stop finalization failed session=%s: %s", session.session_id, error)
+        return False
     session._stop_finalized = True
+    session._stop_state = "stopped"
+    session._stop_error = None
+    _record_finalization_success(session)
     done = getattr(session, "_stop_finalization_done", None)
     if done is not None:
         done.set()
@@ -573,17 +631,20 @@ def _finish_stopped_session_locked(session: MtmcSession) -> bool:
 
 def _post_worker_finalizer(session: MtmcSession) -> None:
     """Daemon coordinator used when a session worker requests its own stop."""
-    for worker in list(getattr(session, "_threads", ())):
-        if worker is threading.current_thread():
-            continue
-        worker.join()
-    with session._finalization_lock:
-        if any(
-            callable(getattr(worker, "is_alive", None)) and worker.is_alive()
-            for worker in session._threads
-        ):
-            return
-        _finish_stopped_session_locked(session)
+    try:
+        for worker in list(getattr(session, "_threads", ())):
+            if worker is threading.current_thread():
+                continue
+            worker.join()
+        with session._finalization_lock:
+            if any(
+                callable(getattr(worker, "is_alive", None)) and worker.is_alive()
+                for worker in session._threads
+            ):
+                return
+            _finish_stopped_session_locked(session)
+    finally:
+        session._stop_finalizer_started = False
 
 
 def _schedule_post_worker_finalizer(session: MtmcSession) -> None:
@@ -598,11 +659,15 @@ def _schedule_post_worker_finalizer(session: MtmcSession) -> None:
     ).start()
 
 
-def stop_session(session_id: str) -> bool:
+def stop_session_status(session_id: str) -> dict:
+    """Stop with an explicit not-found/pending/stopped/failed state."""
     with _sessions_lock:
         s = _sessions.get(session_id)
     if not s:
-        return False
+        return {
+            "status": "not_found", "retryable": False, "accepted": False,
+            "message": "session does not exist",
+        }
     finalization_lock = getattr(s, "_finalization_lock", None)
     if finalization_lock is None:
         finalization_lock = threading.Lock()
@@ -610,21 +675,47 @@ def stop_session(session_id: str) -> bool:
         s._stop_finalized = False
     with finalization_lock:
         if getattr(s, "_stop_finalized", False):
-            return True
+            return {
+                "status": "stopped", "retryable": False, "accepted": True,
+                "message": "session stopped",
+            }
         s._stop.set()
         s.running = False
+        s._stop_state = "stopping"
+        s._stop_error = None
         current = threading.current_thread()
         workers = list(getattr(s, "_threads", ()))
         # A worker cannot wait for itself. Schedule a coordinator before it
         # exits so no external retry is needed to clean uploads safely.
         if any(worker is current for worker in workers):
             _schedule_post_worker_finalizer(s)
-            return True
+            return {
+                "status": "pending", "retryable": True, "accepted": True,
+                "message": "workers are still stopping",
+            }
+        join_deadline = time.monotonic() + 5.0
         for worker in workers:
-            worker.join(timeout=5.0)
+            worker.join(timeout=max(0.0, join_deadline - time.monotonic()))
         if any(callable(getattr(worker, "is_alive", None)) and worker.is_alive() for worker in workers):
-            return False
-        return _finish_stopped_session_locked(s)
+            _schedule_post_worker_finalizer(s)
+            return {
+                "status": "pending", "retryable": True, "accepted": False,
+                "message": "workers are still stopping",
+            }
+        if _finish_stopped_session_locked(s):
+            return {
+                "status": "stopped", "retryable": False, "accepted": True,
+                "message": "session stopped",
+            }
+        return {
+            "status": "failed", "retryable": True, "accepted": False,
+            "message": getattr(s, "_stop_error", None) or "stop finalization failed",
+        }
+
+
+def stop_session(session_id: str) -> bool:
+    """Compatibility boolean API; structured callers should use status."""
+    return bool(stop_session_status(session_id).get("accepted"))
 
 
 def _resolve_cam_source(camera_row, upload_folder: str) -> str:
@@ -2073,6 +2164,7 @@ def _associate_tracklet(
     embedding,
     embedding_spaces=None,
     association_model_key=None,
+    model_version=None,
     score_weights=None,
     reid_person_id=None,
     display_name=None,
@@ -2113,6 +2205,7 @@ def _associate_tracklet(
         "embedding": embedding,
         "embedding_spaces": embedding_spaces,
         "association_model_key": association_model_key,
+        "model_version": model_version,
         "score_weights": score_weights,
         "reid_person_id": reid_person_id,
         "identity_key": identity_key,
@@ -2291,21 +2384,43 @@ def _finalize_tracklet_locked(session: MtmcSession, builder, *, exclude_gids: se
     """局部轨迹结束：聚合 embedding 后做最终关联并落库 tracklet。"""
     spaces = builder.aggregate_embedding_spaces()
     association_model_key = None
+    association_model_version = None
     for observation in reversed(builder.observations):
         association_model_key = (observation.meta or {}).get("reidModelKey")
         if association_model_key:
+            matching = [space for space in spaces if space[0] == association_model_key]
+            if matching:
+                association_model_version = matching[-1][2]
             break
-    emb = builder.aggregate_embedding(association_model_key)
+    selected_space = next(
+        (space for space in spaces
+         if space[0] == association_model_key and space[2] == association_model_version),
+        next(iter(spaces), None),
+    )
+    if selected_space is not None:
+        association_model_key = selected_space[0]
+        association_model_version = selected_space[2]
+    emb = spaces.get(selected_space) if selected_space is not None else None
+    if emb is None:
+        aggregate_embedding = getattr(builder, "aggregate_embedding", None)
+        if callable(aggregate_embedding):
+            try:
+                emb = aggregate_embedding(association_model_key, association_model_version)
+            except TypeError:
+                emb = aggregate_embedding()
     identity = builder.aggregate_identity()
     if builder.object_type == "vehicle":
-        from services.vehicle_reid_feat import aggregate_vehicle_plate_votes, fuse_plate_visual
+        from services.vehicle_reid_feat import fuse_plate_visual
 
-        plate, plate_score = aggregate_vehicle_plate_votes(
-            (observation.plate, observation.plate_score)
-            for observation in builder.observations
-        )
+        aggregate_plate = getattr(builder, "aggregate_plate", None)
+        if callable(aggregate_plate):
+            plate, plate_score = aggregate_plate()
+        else:
+            plate = identity.get("plate")
+            plate_score = float(identity.get("plateScore") or 0.0)
         identity.update(fuse_plate_visual(
             plate=plate, plate_score=plate_score, emb_a=emb,
+            model_space_a=selected_space,
         ))
     prev_gid = builder.assigned_global_id
     ex = set(exclude_gids or ())
@@ -2313,6 +2428,7 @@ def _finalize_tracklet_locked(session: MtmcSession, builder, *, exclude_gids: se
         embedding=emb,
         embedding_spaces=spaces,
         association_model_key=association_model_key,
+        model_version=association_model_version,
         exclude_gids=ex,
         now=builder.end_ts or time.time(),
         force=True,
@@ -2331,9 +2447,32 @@ def _finalize_tracklet_locked(session: MtmcSession, builder, *, exclude_gids: se
         # The live frame path already updated this Global. Re-associating it as
         # force_long_term while its local binding is still active excludes its
         # own prototype and creates a replacement ID at tracker release.
-        g = sticky_track
-        builder.assigned_global_id = g.global_id
-    elif builder.object_type == "person":
+        best = builder.best_observation()
+        best_meta = (best.meta or {}) if best is not None else {}
+        g = session.associator.commit_bound_tracklet(
+            global_id=sticky_track.global_id,
+            object_type=builder.object_type,
+            camera_id=builder.camera_id,
+            local_track_id=int(builder.local_track_id),
+            embedding=emb,
+            embedding_spaces=spaces,
+            association_model_key=association_model_key,
+            model_version=association_model_version,
+            identity_key=identity.get("identityKey"),
+            plate=identity.get("plate"),
+            reid_person_id=best_meta.get("reidPersonId"),
+            face_person_id=best_meta.get("facePersonId"),
+            display_name=best_meta.get("displayName"),
+            visual_key=identity.get("visualKey"),
+            vehicle_class=best_meta.get("vehicleClass"),
+            observation_quality=(best.quality if best is not None else None),
+            now=builder.end_ts or time.time(),
+        )
+        if g is None:
+            sticky_track = None
+        else:
+            builder.assigned_global_id = g.global_id
+    if sticky_track is None and builder.object_type == "person":
         g = _associate_tracklet(
             session,
             builder,
@@ -2341,7 +2480,7 @@ def _finalize_tracklet_locked(session: MtmcSession, builder, *, exclude_gids: se
             display_name=None,
             **kwargs,
         )
-    else:
+    elif sticky_track is None:
         g = _associate_tracklet(
             session,
             builder,
@@ -2380,14 +2519,23 @@ def _finalize_removed_builders(
         )
     finalized: set[int] = set()
     for tid in stale:
-        builder = pool.pop(tid, None)
-        if builder is None or not builder.observations:
+        builder = pool.get(tid)
+        if builder is None:
+            continue
+        if not builder.observations:
+            pool.pop(tid, None)
+            finalized.add(int(tid))
             continue
         try:
             _finalize_tracklet(session, builder, exclude_gids=set())
+            pool.pop(tid, None)
             finalized.add(int(tid))
         except Exception as e:  # noqa: BLE001
-            log.debug("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
+            _record_finalization_failure(
+                session, e, camera_id=cam_state.camera_id,
+                object_type=object_type, local_track_id=int(tid),
+            )
+            log.warning("finalize tracklet failed cam=%s %s#%s: %s", cam_state.camera_id, object_type, tid, e)
     return finalized
 
 
@@ -2409,6 +2557,16 @@ def _flush_camera_tracklets(session: MtmcSession, cam_state: CamState) -> None:
                 session, cam_state, object_type, set(pool),
             )
             _release_finalized_locals(session, cam_state, object_type, finalized)
+        remaining = [
+            f"{object_type}#{track_id}"
+            for object_type, pool in (
+                ("person", cam_state.person_builders),
+                ("vehicle", cam_state.vehicle_builders),
+            )
+            for track_id in sorted(pool)
+        ]
+        if remaining:
+            raise RuntimeError("tracklet finalization incomplete: " + ", ".join(remaining))
         cam_state.builders_flushed = True
 
 
@@ -2423,6 +2581,27 @@ def _pop_removed_track_ids(tracker) -> set[int]:
 def _reid_budget_for(cfg: MtmcConfig, object_type: str) -> int:
     configured = getattr(cfg, f"{object_type}_reid_budget", None)
     return max(0, int(cfg.reid_budget if configured is None else configured))
+
+
+def _vehicle_embedding_space(meta: dict | None, embedding) -> tuple[str, int, str | None] | None:
+    """Name the exact vehicle feature space used by one extractor result."""
+    if embedding is None:
+        return None
+    detail = dict(meta or {})
+    backend = str(detail.get("backend") or "hist-fallback")
+    if backend == "vehicle-onnx":
+        model_key = "vehicle-onnx"
+        version = str(detail.get("onnx") or "unknown-onnx")
+    else:
+        model_key = "vehicle-hist"
+        version = "hsv-edge-v1"
+    return (model_key, int(np.asarray(embedding).size), version)
+
+
+def _builder_finalize_grace_sec(cfg: MtmcConfig) -> float:
+    """Do not retire a builder before its local tracker can expire it."""
+    tracker_grace = float(cfg.local_track_max_age or 0) / max(0.2, float(cfg.sample_fps))
+    return max(float(cfg.lost_revive_sec or 0.0), tracker_grace)
 
 
 def _track_view_token(track) -> str | None:
@@ -2915,7 +3094,12 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 model_key=meta.get("associationModelKey"),
                 visual_key="rider" if is_rider else None,
                 trail=list(t.trail),
-                meta={"reidBackend": meta.get("backend"), "reidModelKey": meta.get("associationModelKey")},
+                meta={
+                    "reidBackend": meta.get("backend"),
+                    "reidModelKey": meta.get("associationModelKey"),
+                    "reidPersonId": gallery.get("personId") if gallery.get("matched") else None,
+                    "displayName": gallery.get("name") if gallery.get("matched") else None,
+                },
                 now=now,
             )
             agg_spaces = builder.aggregate_embedding_spaces()
@@ -2933,6 +3117,9 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                     "embedding": agg_emb,
                     "embedding_spaces": agg_spaces,
                     "association_model_key": meta.get("associationModelKey"),
+                    "model_version": (meta.get("modelVersionsBySpace") or {}).get(
+                        meta.get("associationModelKey")
+                    ),
                     "score_weights": _reid_score_weights(cfg, embeddings),
                     "reid_person_id": gallery.get("personId") if gallery.get("matched") else None,
                     "display_name": gallery.get("name") if gallery.get("matched") else None,
@@ -2998,7 +3185,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
         collector.flush("person", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "person", _pop_removed_track_ids(cam_state.tracker_person),
-            now=now, timeout_sec=cfg.lost_revive_sec,
+            now=now, timeout_sec=_builder_finalize_grace_sec(cfg),
         )
         _release_finalized_locals(session, cam_state, "person", finalized)
         _record_runtime_budget_frame(session, "personReid", cam_id, **person_budget)
@@ -3066,6 +3253,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             else:
                 vehicle_budget["samplerSkipped"] += 1
             emb, vmeta = None, {}
+            vehicle_space = None
             plate_text, plate_score = None, 0.0
             fuse = {
                 "identityKey": None, "plate": None, "visualKey": None,
@@ -3094,80 +3282,84 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                             session, "vehicleReid", cam_id, **vehicle_budget,
                         )
                 _record_vehicle_reid_runtime(session, cam_id, vmeta, emb)
-                wants_ocr = cfg.ocr_fn is not None and not plate_text
-                do_ocr = wants_ocr and plate_left > 0
-                plate_budget["considered"] += 1
-                if wants_ocr:
-                    plate_budget["eligible"] += 1
-                    if do_ocr:
-                        plate_budget["queued"] += 1
-                    else:
-                        plate_budget["budgetSkipped"] += 1
-                else:
-                    plate_budget["samplerSkipped"] += 1
-                if do_ocr:
-                    plate_left -= 1
-                    try:
-                        from services.vehicle_track import _plate_candidates, _ocr_plate
-                        plate_candidates = list(_plate_candidates(
-                            t.bbox, frame, cfg.plate_model_path, 0.2,
-                            strict_errors=True,
-                        ))
-                        source = plate_candidates[0][1] if plate_candidates else (
-                            "model" if cfg.plate_model_path else "heuristic"
-                        )
-                        _record_plate_detection_runtime(session, cam_id, source=source)
-                    except Exception as error:  # noqa: BLE001
-                        plate_candidates = []
-                        _record_plate_detection_runtime(session, cam_id, error=error)
-                    for pb, _src, _q, warp in plate_candidates:
-                        try:
-                            ocr = _ocr_plate(
-                                cfg.ocr_fn,
-                                frame,
-                                pb,
-                                warped=warp,
-                                strict_errors=True,
-                            )
-                            plate_budget["consumed"] += 1
-                            _record_plate_ocr_runtime(session, cam_id)
-                        except Exception as error:  # noqa: BLE001
-                            plate_budget["consumed"] += 1
-                            _record_plate_ocr_runtime(session, cam_id, error=error)
-                            break
-                        plate_text = ocr.get("text")
-                        plate_score = float(ocr.get("score") or 0)
-                        if plate_text:
-                            vsession.plates[t.track_id] = {
-                                "text": plate_text, "score": plate_score, "source": "mtmc",
-                            }
-                            cam_state.plate_cache[int(t.track_id)] = {
-                                "text": plate_text, "score": plate_score,
-                            }
-                            break
-                if not plate_text and t.track_id in vsession.plates:
-                    plate_text = vsession.plates[t.track_id].get("text")
-                    plate_score = float(vsession.plates[t.track_id].get("score") or 0)
+                vehicle_space = _vehicle_embedding_space(vmeta, emb)
 
-                candidate_prototype = session.associator.vehicle_candidate_prototype(
-                    camera_id=cam_id,
-                    embedding=emb,
-                    vehicle_class=infer_vehicle_class(
-                        getattr(t, "class_name", None), t.bbox, frame_h=fh, frame_w=fw,
-                    ),
-                    now=now,
-                )
-                fuse = fuse_plate_visual(
-                    plate=plate_text,
-                    plate_score=plate_score,
-                    emb_a=emb,
-                    emb_b=candidate_prototype,
-                )
-            elif t.track_id in vsession.plates:
+            # Plate OCR has its own sampler and budget. A cached display value
+            # must neither block a better future sample nor become another vote.
+            plate_budget["considered"] += 1
+            plate_eligible = bool(cfg.ocr_fn) and builder.plate_sample_eligible(now, quality)
+            if plate_eligible:
+                plate_budget["eligible"] += 1
+            do_ocr = False
+            if plate_eligible and plate_left > 0:
+                do_ocr = builder.reserve_plate_sample(now, quality)
+                plate_budget["queued"] += int(do_ocr)
+            elif plate_eligible:
+                plate_budget["budgetSkipped"] += 1
+            else:
+                plate_budget["samplerSkipped"] += 1
+            if do_ocr:
+                plate_left -= 1
+                try:
+                    from services.vehicle_track import _plate_candidates, _ocr_plate
+                    plate_candidates = list(_plate_candidates(
+                        t.bbox, frame, cfg.plate_model_path, 0.2,
+                        strict_errors=True,
+                    ))
+                    source = plate_candidates[0][1] if plate_candidates else (
+                        "model" if cfg.plate_model_path else "heuristic"
+                    )
+                    _record_plate_detection_runtime(session, cam_id, source=source)
+                except Exception as error:  # noqa: BLE001
+                    plate_candidates = []
+                    _record_plate_detection_runtime(session, cam_id, error=error)
+                for pb, _src, _q, warp in plate_candidates:
+                    try:
+                        ocr = _ocr_plate(
+                            cfg.ocr_fn, frame, pb, warped=warp, strict_errors=True,
+                        )
+                        plate_budget["consumed"] += 1
+                        _record_plate_ocr_runtime(session, cam_id)
+                    except Exception as error:  # noqa: BLE001
+                        plate_budget["consumed"] += 1
+                        _record_plate_ocr_runtime(session, cam_id, error=error)
+                        break
+                    plate_text = ocr.get("text")
+                    plate_score = float(ocr.get("score") or 0)
+                    if plate_text:
+                        builder.add_plate_observation(
+                            plate_text, plate_score, quality=quality, now=now,
+                        )
+                        vsession.plates[t.track_id] = {
+                            "text": plate_text, "score": plate_score, "source": "mtmc",
+                        }
+                        cam_state.plate_cache[int(t.track_id)] = {
+                            "text": plate_text, "score": plate_score,
+                        }
+                        break
+            if not plate_text and t.track_id in vsession.plates:
                 plate_text = vsession.plates[t.track_id].get("text")
                 plate_score = float(vsession.plates[t.track_id].get("score") or 0)
-                fuse = {"plate": plate_text, "plateScore": plate_score, "identityKey": None,
-                        "visualKey": None, "fuseScore": 0, "visualScore": 0}
+
+            vehicle_class = infer_vehicle_class(
+                getattr(t, "class_name", None), t.bbox, frame_h=fh, frame_w=fw,
+            )
+            candidate_prototype = session.associator.vehicle_candidate_prototype(
+                camera_id=cam_id,
+                embedding=emb,
+                model_key=vehicle_space[0] if vehicle_space else None,
+                model_version=vehicle_space[2] if vehicle_space else None,
+                vehicle_class=vehicle_class,
+                now=now,
+            )
+            fuse = fuse_plate_visual(
+                plate=plate_text,
+                plate_score=plate_score,
+                emb_a=emb,
+                emb_b=candidate_prototype,
+                model_space_a=vehicle_space,
+                model_space_b=vehicle_space if candidate_prototype is not None else None,
+            )
 
             builder.add_observation(
                 bbox=t.bbox,
@@ -3175,18 +3367,31 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 frame_h=fh,
                 frame_w=fw,
                 embedding=emb,
-                plate=fuse.get("plate") or plate_text,
-                plate_score=float(fuse.get("plateScore") or plate_score or 0),
+                embedding_spaces={vehicle_space[0]: emb} if vehicle_space else None,
+                embedding_space_versions={vehicle_space[0]: vehicle_space[2]} if vehicle_space else None,
+                model_key=vehicle_space[0] if vehicle_space else None,
+                model_version=vehicle_space[2] if vehicle_space else None,
                 identity_key=fuse.get("identityKey"),
                 visual_key=fuse.get("visualKey"),
                 fuse_score=float(fuse.get("fuseScore") or 0),
                 trail=list(t.trail),
-                meta={"vehicleReid": vmeta.get("backend")},
+                meta={
+                    "vehicleReid": vmeta.get("backend"),
+                    "reidModelKey": vehicle_space[0] if vehicle_space else None,
+                    "vehicleClass": vehicle_class,
+                },
                 now=now,
             )
-            agg_emb = builder.aggregate_embedding()
-            if agg_emb is None:
-                agg_emb = emb
+            agg_spaces = builder.aggregate_embedding_spaces()
+            association_space = vehicle_space or next(iter(agg_spaces), None)
+            agg_emb = agg_spaces.get(association_space) if association_space else None
+            aggregate_plate, aggregate_plate_score = builder.aggregate_plate()
+            aggregate_fuse = fuse_plate_visual(
+                plate=aggregate_plate,
+                plate_score=aggregate_plate_score,
+                emb_a=agg_emb,
+                model_space_a=association_space,
+            )
             g = _resolve_overlay_global(
                 session,
                 builder,
@@ -3196,15 +3401,13 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 collector=collector,
                 associate_kwargs={
                     "embedding": agg_emb,
-                    "identity_key": fuse.get("identityKey"),
-                    "plate": fuse.get("plate") or plate_text,
-                    "visual_key": fuse.get("visualKey"),
-                    "vehicle_class": infer_vehicle_class(
-                        getattr(t, "class_name", None),
-                        t.bbox,
-                        frame_h=fh,
-                        frame_w=fw,
-                    ),
+                    "embedding_spaces": agg_spaces,
+                    "association_model_key": association_space[0] if association_space else None,
+                    "model_version": association_space[2] if association_space else None,
+                    "identity_key": aggregate_fuse.get("identityKey"),
+                    "plate": aggregate_fuse.get("plate"),
+                    "visual_key": aggregate_fuse.get("visualKey"),
+                    "vehicle_class": vehicle_class,
                 },
             )
             if g is not None:
@@ -3283,7 +3486,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
         collector.flush("vehicle", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "vehicle", _pop_removed_track_ids(cam_state.tracker_vehicle),
-            now=now, timeout_sec=cfg.lost_revive_sec,
+            now=now, timeout_sec=_builder_finalize_grace_sec(cfg),
         )
         _release_finalized_locals(session, cam_state, "vehicle", finalized)
         _record_runtime_budget_frame(session, "vehicleReid", cam_id, **vehicle_budget)

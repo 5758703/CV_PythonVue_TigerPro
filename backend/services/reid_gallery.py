@@ -200,6 +200,7 @@ def avg_embeddings(vectors: list[np.ndarray]) -> np.ndarray:
 
 
 _faiss_cache: dict = {}
+_faiss_cache_generation = 0
 
 
 def _import_faiss():
@@ -212,7 +213,9 @@ def _import_faiss():
 
 def invalidate_faiss(model_key: str | None = None, modality: str | None = None, dim: int | None = None,
                      model_version: str | None = None):
+    global _faiss_cache_generation
     with _lock:
+        _faiss_cache_generation += 1
         if model_key is None and modality is None:
             _faiss_cache.clear()
             return
@@ -268,13 +271,27 @@ def match_embedding_faiss(
     q = l2_normalize(embedding)
     key = (model_key, modality, int(q.size), model_version)
     try:
-        with _lock:
-            cached = _faiss_cache.get(key)
-            if cached is None:
-                cached = _build_faiss_index(
-                    model_key, modality, dim=int(q.size), model_version=model_version,
-                )
-                _faiss_cache[key] = cached
+        # Building calls get_gallery(), which takes the same ordinary lock.
+        # Keep slow cache construction outside the lock, then install it only
+        # if no invalidation raced with the build.
+        while True:
+            with _lock:
+                cached = _faiss_cache.get(key)
+                generation = _faiss_cache_generation
+            if cached is not None:
+                break
+            built = _build_faiss_index(
+                model_key, modality, dim=int(q.size), model_version=model_version,
+            )
+            with _lock:
+                cached = _faiss_cache.get(key)
+                if cached is not None:
+                    break
+                if generation != _faiss_cache_generation:
+                    continue
+                _faiss_cache[key] = built
+                cached = built
+                break
         index = cached["index"]
         person_ids = cached["person_ids"]
         if index.ntotal <= 0 or not person_ids:
