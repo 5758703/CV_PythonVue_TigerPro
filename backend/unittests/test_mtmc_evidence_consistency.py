@@ -230,3 +230,50 @@ def test_concurrent_stop_finalizes_and_cleans_up_once(monkeypatch, tmp_path):
         assert all(pool.map(lambda _n: mtmc_engine.stop_session(session.session_id), range(2)))
 
     assert order.count("join") == order.count("finalize") == order.count("cleanup") == 1
+
+
+def test_self_worker_stop_schedules_post_worker_finalization(monkeypatch, tmp_path):
+    order: list[str] = []
+    session = MtmcSession("self-stop", MtmcConfig(camera_ids=[]), MtmcAssociator())
+    session.running = True
+    session.cams = {1: object()}
+    session.upload_dir = str(tmp_path)
+    monkeypatch.setitem(mtmc_engine._sessions, session.session_id, session)
+    monkeypatch.setattr(mtmc_engine, "_flush_camera_tracklets", lambda *_args: order.append("finalize"))
+    monkeypatch.setattr("shutil.rmtree", lambda *_args, **_kwargs: order.append("cleanup"))
+    results: list[bool] = []
+    worker = __import__("threading").Thread(target=lambda: results.append(mtmc_engine.stop_session(session.session_id)))
+    session._threads = [worker]
+
+    worker.start()
+    worker.join(timeout=2)
+    assert results == [True]
+    assert session._stop_finalization_done.wait(timeout=2)
+    assert order == ["finalize", "cleanup"]
+
+
+def test_promotion_alias_prevents_stale_association_result_from_persisting_old_gid(monkeypatch):
+    associator = MtmcAssociator(appear_thresh=0.99, confirm_thresh=0.99)
+    known = associator.associate(object_type="vehicle", camera_id=1, embedding=np.asarray([1.0, 0.0]), now=1.0)
+    pending = associator.associate(object_type="vehicle", camera_id=2, embedding=np.asarray([0.0, 1.0]), now=2.0)
+    session = MtmcSession("alias", MtmcConfig(camera_ids=[], persist_events=True), associator, app=object())
+    builder = SimpleNamespace(tracklet_id="tl", object_type="vehicle", camera_id=2, assigned_global_id=pending.global_id)
+    persisted: list[str] = []
+    barrier = __import__("threading").Barrier(2)
+
+    monkeypatch.setattr(mtmc_engine, "get_session", lambda _sid: session)
+    monkeypatch.setattr("services.mtmc_persist.resolve_candidate_pair", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("services.mtmc_persist.persist_association_edge", lambda _app, **row: persisted.append(row["target_global_id"]))
+
+    def stale_result_writer():
+        barrier.wait(timeout=2)
+        mtmc_engine._record_association(session, builder, pending, prev_global_id=pending.global_id)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(stale_result_writer)
+        assert mtmc_engine.promote_candidate(session.session_id, pending.global_id, known.global_id)["ok"]
+        barrier.wait(timeout=2)
+        future.result(timeout=2)
+
+    assert builder.assigned_global_id == known.global_id
+    assert persisted == [known.global_id]

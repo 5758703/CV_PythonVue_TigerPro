@@ -18,6 +18,26 @@ git diff --check
 exit 0
 ```
 
+## Round 2/5 follow-up
+
+Self-initiated worker shutdown now schedules one daemon coordinator. The
+coordinator joins the original workers after the caller exits, then takes the
+same finalization lock to flush builders and clean uploads exactly once.
+
+Promotion installs a session GID alias while holding the candidate lock after
+the database decision succeeds and before the in-memory merge/rekey. The
+association-record persistence boundary canonicalizes returned global IDs,
+source/candidate evidence IDs, builder assignment, and downstream event state
+under that lock. Rejection deliberately installs no alias.
+
+```text
+RED: 2 failed, 10 passed (self-worker finalizer and stale-GID persistence)
+GREEN: 12 passed, 26 warnings in 57.85s
+Final focused + MTMC regression: 89 passed, 26 warnings in 58.89s
+python -m py_compile backend/services/mtmc_engine.py: exit 0
+git diff --check: exit 0
+```
+
 The sandbox account cannot enumerate its default pytest temporary directory;
 the two pytest commands above were run with `PYTEST_ADDOPTS=--basetemp
 .pytest-task5-final`, and that workspace-only temporary directory was removed

@@ -11,7 +11,7 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 import cv2
@@ -321,8 +321,11 @@ class MtmcSession:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._candidate_lock = threading.RLock()
+        self._gid_alias: dict[str, str] = {}
         self._finalization_lock = threading.Lock()
         self._stop_finalized = False
+        self._stop_finalizer_started = False
+        self._stop_finalization_done = threading.Event()
         self.cams: dict[int, CamState] = {}
         self.events: list[dict] = []
         self.passes: list[dict] = []
@@ -413,6 +416,52 @@ def list_sessions() -> list[dict]:
         return [s.to_dict() for s in _sessions.values()]
 
 
+def _finish_stopped_session_locked(session: MtmcSession) -> bool:
+    if getattr(session, "_stop_finalized", False):
+        return True
+    for cam_state in list(session.cams.values()):
+        _flush_camera_tracklets(session, cam_state)
+    upload_dir = getattr(session, "upload_dir", None)
+    if upload_dir and os.path.isdir(upload_dir):
+        try:
+            import shutil
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        except Exception as e:  # noqa: BLE001
+            log.debug("cleanup mtmc upload dir failed: %s", e)
+    session._stop_finalized = True
+    done = getattr(session, "_stop_finalization_done", None)
+    if done is not None:
+        done.set()
+    return True
+
+
+def _post_worker_finalizer(session: MtmcSession) -> None:
+    """Daemon coordinator used when a session worker requests its own stop."""
+    for worker in list(getattr(session, "_threads", ())):
+        if worker is threading.current_thread():
+            continue
+        worker.join()
+    with session._finalization_lock:
+        if any(
+            callable(getattr(worker, "is_alive", None)) and worker.is_alive()
+            for worker in session._threads
+        ):
+            return
+        _finish_stopped_session_locked(session)
+
+
+def _schedule_post_worker_finalizer(session: MtmcSession) -> None:
+    if getattr(session, "_stop_finalizer_started", False):
+        return
+    session._stop_finalizer_started = True
+    threading.Thread(
+        target=_post_worker_finalizer,
+        args=(session,),
+        name=f"mtmc-{session.session_id}-finalizer",
+        daemon=True,
+    ).start()
+
+
 def stop_session(session_id: str) -> bool:
     with _sessions_lock:
         s = _sessions.get(session_id)
@@ -430,25 +479,16 @@ def stop_session(session_id: str) -> bool:
         s.running = False
         current = threading.current_thread()
         workers = list(getattr(s, "_threads", ()))
-        # A worker cannot wait for itself.  Its finally block flushes its
-        # camera; an external caller must perform upload cleanup later.
+        # A worker cannot wait for itself. Schedule a coordinator before it
+        # exits so no external retry is needed to clean uploads safely.
         if any(worker is current for worker in workers):
-            return False
+            _schedule_post_worker_finalizer(s)
+            return True
         for worker in workers:
             worker.join(timeout=5.0)
         if any(callable(getattr(worker, "is_alive", None)) and worker.is_alive() for worker in workers):
             return False
-        for cam_state in list(s.cams.values()):
-            _flush_camera_tracklets(s, cam_state)
-        upload_dir = getattr(s, "upload_dir", None)
-        if upload_dir and os.path.isdir(upload_dir):
-            try:
-                import shutil
-                shutil.rmtree(upload_dir, ignore_errors=True)
-            except Exception as e:  # noqa: BLE001
-                log.debug("cleanup mtmc upload dir failed: %s", e)
-        s._stop_finalized = True
-        return True
+        return _finish_stopped_session_locked(s)
 
 
 def _resolve_cam_source(camera_row, upload_folder: str) -> str:
@@ -1280,6 +1320,35 @@ def _maybe_cross_camera_event(session: MtmcSession, builder, g, now: float, *, e
     session._global_last_seen_ts[gid] = now
 
 
+def _canonical_gid_locked(session: MtmcSession, global_id: str | None) -> str | None:
+    gid = global_id
+    seen: set[str] = set()
+    while gid and gid not in seen:
+        seen.add(gid)
+        next_gid = session._gid_alias.get(gid)
+        if next_gid is None or next_gid == gid:
+            break
+        gid = next_gid
+    return gid
+
+
+def _canonical_association_locked(session: MtmcSession, builder, g, prev_global_id, evidence):
+    gid = _canonical_gid_locked(session, g.global_id)
+    canonical_track = session.associator.get_track(gid) if gid else None
+    if canonical_track is not None:
+        g = canonical_track
+    builder.assigned_global_id = gid
+    prev_global_id = _canonical_gid_locked(session, prev_global_id)
+    if evidence is not None:
+        evidence = replace(
+            evidence,
+            target_global_id=_canonical_gid_locked(session, evidence.target_global_id) or g.global_id,
+            source_global_id=_canonical_gid_locked(session, evidence.source_global_id),
+            candidate_global_id=_canonical_gid_locked(session, evidence.candidate_global_id),
+        )
+    return g, prev_global_id, evidence
+
+
 def _record_association(
     session: MtmcSession,
     builder,
@@ -1296,39 +1365,44 @@ def _record_association(
         persist_tracklet,
     )
 
-    decision = evidence.decision if evidence else "NEW"
-    if prev_global_id and prev_global_id != g.global_id:
-        decision = "REFINE"
-    if session.cfg.persist_events:
-        persist_global_identity(session.app, g)
-        persist_association_edge(
-            session.app,
-            session_id=session.session_id,
-            tracklet_id=builder.tracklet_id,
-            object_type=builder.object_type,
-            decision=decision,
-            target_global_id=g.global_id,
-            source_global_id=prev_global_id,
-            scores=evidence.to_scores() if evidence else {},
-            evidence=evidence.to_dict() if evidence else {},
-            policy_version=evidence.policy_version if evidence else "mtmc_v2",
+    with session._candidate_lock:
+        g, prev_global_id, evidence = _canonical_association_locked(
+            session, builder, g, prev_global_id, evidence,
         )
-        if evidence and evidence.decision == "candidate" and evidence.candidate_global_id:
-            persist_candidate_pair(
+        decision = evidence.decision if evidence else "NEW"
+        if prev_global_id and prev_global_id != g.global_id:
+            decision = "REFINE"
+        if session.cfg.persist_events:
+            persist_global_identity(session.app, g)
+            persist_association_edge(
                 session.app,
                 session_id=session.session_id,
-                global_id=g.global_id,
-                candidate_global_id=evidence.candidate_global_id,
-                object_type=builder.object_type,
-                camera_id=builder.camera_id,
                 tracklet_id=builder.tracklet_id,
-                final_score=evidence.final_score,
-                reid_score=evidence.reid_score,
-                evidence=evidence.to_dict(),
+                object_type=builder.object_type,
+                decision=decision,
+                target_global_id=g.global_id,
+                source_global_id=prev_global_id,
+                scores=evidence.to_scores() if evidence else {},
+                evidence=evidence.to_dict() if evidence else {},
+                policy_version=evidence.policy_version if evidence else "mtmc_v2",
             )
-        if persist_tracklet_row:
-            persist_tracklet(session.app, builder, global_id=g.global_id)
-    _maybe_cross_camera_event(session, builder, g, time.time(), evidence=evidence)
+            if evidence and evidence.decision == "candidate" and evidence.candidate_global_id:
+                persist_candidate_pair(
+                    session.app,
+                    session_id=session.session_id,
+                    global_id=g.global_id,
+                    candidate_global_id=evidence.candidate_global_id,
+                    object_type=builder.object_type,
+                    camera_id=builder.camera_id,
+                    tracklet_id=builder.tracklet_id,
+                    final_score=evidence.final_score,
+                    reid_score=evidence.reid_score,
+                    evidence=evidence.to_dict(),
+                )
+            if persist_tracklet_row:
+                persist_tracklet(session.app, builder, global_id=g.global_id)
+        _maybe_cross_camera_event(session, builder, g, time.time(), evidence=evidence)
+        return g
 
 
 def _associate_tracklet(
@@ -1394,7 +1468,7 @@ def _associate_tracklet(
     }])[0]
     g = getattr(result, "global_track", result)
     builder.assigned_global_id = g.global_id
-    _record_association(
+    g = _record_association(
         session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False,
         evidence=getattr(result, "evidence", None),
     )
@@ -1452,7 +1526,7 @@ class _FrameAssociationCollector:
             g = assigned.get(record["key"])
             if g is None:
                 continue
-            _record_association(
+            g = _record_association(
                 self.session, builder, g, prev_global_id=None,
                 persist_tracklet_row=False, evidence=record.get("evidence"),
             )
@@ -2562,6 +2636,7 @@ def promote_candidate(session_id: str, global_id: str, candidate_global_id: str)
             status="promoted",
         ):
             return {"ok": False, "message": "persistent promotion failed"}
+        s._gid_alias[global_id] = candidate_global_id
         g = s.associator.merge_globals(candidate_global_id, global_id)
         if g is None:
             return {"ok": False, "message": "in-memory merge failed"}
