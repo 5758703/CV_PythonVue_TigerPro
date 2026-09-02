@@ -73,3 +73,27 @@ pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_p2.py -q -p no
 - The local test environment lacked three already-pinned runtime dependencies;
   installed `Flask-SQLAlchemy==3.1.1`, `Flask-Cors==4.0.1`, and
   `Flask-JWT-Extended==4.6.0` solely to execute the required suite.
+
+## Reviewer P1 follow-up — legacy schema migration
+
+Base commit: `22cb261ccf9a33c0cc78ee72661a3242d5458afd`.
+
+RED command/output:
+
+```text
+pytest backend/unittests/test_mtmc_topology_migration.py::test_migrate_adds_and_backfills_topology_edge_type -vv -p no:cacheprovider --basetemp .tmp_pytest_migration
+FAILED ... sqlite3.OperationalError: no such column: edge_type
+```
+
+GREEN coverage and Task 3 regression command/output:
+
+```text
+pytest backend/unittests/test_mtmc_topology_migration.py backend/unittests/test_mtmc_topology_policy.py backend/unittests/test_mtmc.py backend/unittests/test_mtmc_p2.py -q -p no:cacheprovider --basetemp .tmp_pytest_migration
+69 passed in 35.37s
+```
+
+`backend/app.py::_migrate()` now follows the existing inspector/`ALTER TABLE`
+pattern to add `camera_topology.edge_type VARCHAR(32) DEFAULT 'non_overlap'`.
+It then idempotently backfills null/empty values to `non_overlap`. The tests use
+an actual SQLite legacy table, query migrated data through SQL, and run
+`_migrate()` twice; neither the DDL nor SQL execution is mocked.

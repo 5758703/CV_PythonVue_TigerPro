@@ -93,6 +93,15 @@ def _migrate(db):
         ("domain_id", "ADD COLUMN domain_id VARCHAR(64) NULL"),
         ("category", "ADD COLUMN category VARCHAR(32) NULL"),
     ])
+    add_columns("camera_topology", [
+        ("edge_type", "ADD COLUMN edge_type VARCHAR(32) DEFAULT 'non_overlap'"),
+    ])
+    if "camera_topology" in tables:
+        with db.engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE camera_topology SET edge_type = 'non_overlap' "
+                "WHERE edge_type IS NULL OR edge_type = ''"
+            ))
 
 
 app = create_app()
