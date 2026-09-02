@@ -1266,6 +1266,7 @@ def _record_association(
     *,
     prev_global_id: str | None,
     persist_tracklet_row: bool = False,
+    evidence=None,
 ):
     from services.mtmc_persist import (
         persist_association_edge,
@@ -1274,7 +1275,7 @@ def _record_association(
         persist_tracklet,
     )
 
-    evidence = session.associator.last_evidence
+    evidence = evidence if evidence is not None else session.associator.last_evidence
     decision = evidence.decision if evidence else "NEW"
     if prev_global_id and prev_global_id != g.global_id:
         decision = "REFINE"
@@ -1384,10 +1385,12 @@ def _associate_prepared_tracklets(session, prepared: list[dict]) -> dict:
         dict(item["association"]) for item in prepared
     ])
     assigned = {}
-    for item, global_track in zip(prepared, results):
+    for item, result in zip(prepared, results):
+        global_track = getattr(result, "global_track", result)
         builder = item.get("builder")
         if builder is not None:
             builder.assigned_global_id = global_track.global_id
+        item["evidence"] = getattr(result, "evidence", None)
         assigned[item["key"]] = global_track
     return assigned
 
@@ -1425,7 +1428,10 @@ class _FrameAssociationCollector:
             g = assigned.get(record["key"])
             if g is None:
                 continue
-            _record_association(self.session, builder, g, prev_global_id=None, persist_tracklet_row=False)
+            _record_association(
+                self.session, builder, g, prev_global_id=None,
+                persist_tracklet_row=False, evidence=record.get("evidence"),
+            )
             resolved_item = None
             for item in items:
                 if (
@@ -1463,6 +1469,32 @@ class _FrameAssociationCollector:
                 ):
                     _persist_event(self.session.app, row)
                     cam_state.last_persist_at = self.now
+                if object_type == "vehicle" and self.session.cfg.persist_events:
+                    pass_key = f"{g.global_id}:{builder.camera_id}"
+                    seen = getattr(self.session, "_pass_seen", None)
+                    if seen is None:
+                        self.session._pass_seen = set()
+                        seen = self.session._pass_seen
+                    if pass_key not in seen:
+                        seen.add(pass_key)
+                        pass_row = {
+                            "sessionId": self.session.session_id,
+                            "cameraId": builder.camera_id,
+                            "globalId": g.global_id,
+                            "identityKey": resolved_item.get("identityKey"),
+                            "plate": resolved_item.get("plate"),
+                            "plateScore": resolved_item.get("plateScore"),
+                            "visualScore": resolved_item.get("visualScore"),
+                            "fuseScore": resolved_item.get("fuseScore"),
+                            "speedKmh": resolved_item.get("speedKmh"),
+                            "congestion": resolved_item.get("congestion"),
+                            "localTrackId": builder.local_track_id,
+                        }
+                        with self.session._events_lock:
+                            self.session.passes.append({**pass_row, "ts": self.now})
+                            if len(self.session.passes) > 300:
+                                self.session.passes = self.session.passes[-200:]
+                        _persist_pass(self.session.app, pass_row)
 
 
 def _resolve_overlay_global(
@@ -1473,6 +1505,7 @@ def _resolve_overlay_global(
     claimed: set,
     now: float,
     associate_kwargs: dict,
+    collector=None,
 ):
     """同帧 Global 独占：仅信任未占用的 sticky；否则带 exclude_gids 重关联。
 
@@ -1491,7 +1524,6 @@ def _resolve_overlay_global(
         builder.assigned_global_id = None
     elif builder.assigned_global_id and builder.assigned_global_id in claimed:
         builder.assigned_global_id = None
-    collector = getattr(session, "_frame_assoc_collector", None)
     if collector is not None:
         collector.enqueue(builder, associate_kwargs)
         return None
@@ -1856,7 +1888,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
         cam_state.tracker_vehicle = _make_local_tracker(cfg)
 
     items = []
-    session._frame_assoc_collector = _FrameAssociationCollector(session, now)
+    collector = _FrameAssociationCollector(session, now)
     claimed_person: set[str] = set()
     claimed_vehicle: set[str] = set()
     person_reid_left = _reid_budget_for(cfg, "person")
@@ -2002,6 +2034,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 sticky_gid=sticky_gid,
                 claimed=claimed_person,
                 now=now,
+                collector=collector,
                 associate_kwargs={
                     "embedding": agg_emb,
                     "embedding_spaces": agg_spaces,
@@ -2063,7 +2096,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 if cfg.persist_events and (now - float(cam_state.last_persist_at or 0)) >= 1.0:
                     _persist_event(session.app, row)
                     cam_state.last_persist_at = now
-        session._frame_assoc_collector.flush("person", items)
+        collector.flush("person", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "person", _pop_removed_track_ids(cam_state.tracker_person),
             now=now, timeout_sec=cfg.lost_revive_sec,
@@ -2192,6 +2225,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 sticky_gid=sticky_gid,
                 claimed=claimed_vehicle,
                 now=now,
+                collector=collector,
                 associate_kwargs={
                     "embedding": agg_emb,
                     "identity_key": fuse.get("identityKey"),
@@ -2282,14 +2316,13 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                             if len(session.passes) > 300:
                                 session.passes = session.passes[-200:]
                         _persist_pass(session.app, pass_row)
-        session._frame_assoc_collector.flush("vehicle", items)
+        collector.flush("vehicle", items)
         finalized = _finalize_removed_builders(
             session, cam_state, "vehicle", _pop_removed_track_ids(cam_state.tracker_vehicle),
             now=now, timeout_sec=cfg.lost_revive_sec,
         )
         _release_finalized_locals(session, cam_state, "vehicle", finalized)
 
-    del session._frame_assoc_collector
     _enforce_unique_camera_global_ids(items)
     _record_session_dets(cam_state, items, now)
     _publish_overlay(cam_state, frame, items, cam_state.congestion)

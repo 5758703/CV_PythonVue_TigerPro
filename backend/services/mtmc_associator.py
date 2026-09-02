@@ -167,6 +167,15 @@ class AssocEvidence:
 
 
 @dataclass(frozen=True)
+class AssociationResult:
+    global_track: GlobalTrack
+    evidence: AssocEvidence | None
+
+    def __getattr__(self, name):
+        return getattr(self.global_track, name)
+
+
+@dataclass(frozen=True)
 class TopologyRule:
     """Immutable policy for one directed camera transition."""
 
@@ -1381,7 +1390,7 @@ class MtmcAssociator:
                 self._local_bind[bkey] = g.global_id
             return g
 
-    def associate_batch(self, observations: Iterable[dict]) -> list[GlobalTrack]:
+    def associate_batch(self, observations: Iterable[dict]) -> list[AssociationResult]:
         """Associate one same-frame batch with deterministic mutual-best gating.
 
         The single-observation ``associate`` API remains the compatibility
@@ -1450,14 +1459,15 @@ class MtmcAssociator:
             ),
         )
         claimed: set[str] = set()
-        results: dict[int, GlobalTrack] = {}
+        results: dict[int, AssociationResult] = {}
         for index in execution_order:
             row = dict(rows[index])
             excluded = set(row.pop("exclude_gids", ()) or ()) | claimed
             row["exclude_gids"] = excluded
             row["force_candidate"] = index not in mutual
             result = self.associate(**row)
-            results[index] = result
+            evidence = self.last_evidence
+            results[index] = AssociationResult(result, evidence)
             if index in mutual and result.last_assoc_mode == AssocMode.LONG_TERM.value:
                 claimed.add(result.global_id)
         return [results[index] for index in range(len(rows))]
