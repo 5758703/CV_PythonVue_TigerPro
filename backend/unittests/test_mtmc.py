@@ -400,7 +400,7 @@ def test_garbage_plate_no_hard_conflict_merge():
     assert g1.global_id == g2.global_id
 
 
-def test_vehicle_cross_cam_takeover_same_cam_sibling():
+def test_vehicle_cross_cam_peer_prototype_cannot_take_over_active_same_cam_sibling():
     """同镜误占 Global 时，新 local 应能通过跨镜原型接管正确 Global。"""
     assoc = MtmcAssociator(
         appear_thresh=0.48, vehicle_appear_thresh=0.48, confirm_thresh=0.48,
@@ -424,12 +424,12 @@ def test_vehicle_cross_cam_takeover_same_cam_sibling():
         object_type="vehicle", camera_id=71, embedding=emb_right71,
         local_track_id=5, exclude_gids=set(), now=201.0,
     )
-    assert g_new.global_id == g81.global_id
-    assert assoc._local_bind.get(("vehicle", 71, 5)) == g81.global_id
-    assert ("vehicle", 71, 3) not in assoc._local_bind
+    assert g_new.global_id != g81.global_id
+    assert assoc._local_bind.get(("vehicle", 71, 5)) == g_new.global_id
+    assert assoc._local_bind.get(("vehicle", 71, 3)) == g81.global_id
 
 
-def test_overlay_unique_gids_after_same_cam_takeover():
+def test_overlay_unique_gids_after_same_cam_takeover_is_refused():
     """takeover 后受害者 builder 仍缓存旧 GID 时，同帧绘制不得与接管者共用。"""
     from types import SimpleNamespace
 
@@ -452,11 +452,12 @@ def test_overlay_unique_gids_after_same_cam_takeover():
         object_type="vehicle", camera_id=71, embedding=emb_wrong71,
         local_track_id=3, exclude_gids=set(), now=200.5,
     )
-    assoc.associate(
+    g_new = assoc.associate(
         object_type="vehicle", camera_id=71, embedding=emb_right71,
         local_track_id=5, exclude_gids=set(), now=201.0,
     )
-    assert ("vehicle", 71, 3) not in assoc._local_bind
+    assert assoc._local_bind[("vehicle", 71, 3)] == g81.global_id
+    assert assoc._local_bind[("vehicle", 71, 5)] == g_new.global_id
 
     session = SimpleNamespace(
         associator=assoc,
@@ -475,7 +476,7 @@ def test_overlay_unique_gids_after_same_cam_takeover():
     winner = TrackletBuilder.create(
         session_id="s", camera_id=71, object_type="vehicle", local_track_id=5, now=201.0,
     )
-    winner.assigned_global_id = g81.global_id
+    winner.assigned_global_id = g_new.global_id
     winner.add_observation(
         bbox=[200, 10, 320, 90], conf=0.9, frame_h=720, frame_w=1280,
         embedding=emb_right71, now=201.0,
@@ -495,14 +496,14 @@ def test_overlay_unique_gids_after_same_cam_takeover():
     sticky_v = assoc.peek_sticky(
         object_type="vehicle", camera_id=71, local_track_id=3, now=201.0,
     )
-    assert sticky_v is None
+    assert sticky_v == g81.global_id
     g_v = _resolve_overlay_global(
         session, victim, sticky_gid=sticky_v, claimed=claimed, now=201.0,
         associate_kwargs={"embedding": emb_wrong71},
     )
     assert g_v is not None
     assert g_v.global_id != g_w.global_id
-    assert g_w.global_id == g81.global_id
+    assert g_w.global_id == g_new.global_id
 
 
 def test_supplement_orphan_vehicle_dets():

@@ -1351,26 +1351,26 @@ def _associate_tracklet(
         prev_gid = None
 
     best_observation = builder.best_observation()
-    g = session.associator.associate(
-        object_type=builder.object_type,
-        camera_id=builder.camera_id,
-        embedding=embedding,
-        embedding_spaces=embedding_spaces,
-        association_model_key=association_model_key,
-        score_weights=score_weights,
-        reid_person_id=reid_person_id,
-        identity_key=identity_key,
-        plate=plate,
-        visual_key=visual_key,
-        vehicle_class=vehicle_class,
-        color_sig=color_sig,
-        display_name=display_name,
-        local_track_id=int(builder.local_track_id),
-        exclude_gids=ex,
-        now=now,
-        force_long_term=force,
-        observation_quality=(best_observation.quality if best_observation is not None else None),
-    )
+    g = session.associator.associate_batch([{
+        "object_type": builder.object_type,
+        "camera_id": builder.camera_id,
+        "embedding": embedding,
+        "embedding_spaces": embedding_spaces,
+        "association_model_key": association_model_key,
+        "score_weights": score_weights,
+        "reid_person_id": reid_person_id,
+        "identity_key": identity_key,
+        "plate": plate,
+        "visual_key": visual_key,
+        "vehicle_class": vehicle_class,
+        "color_sig": color_sig,
+        "display_name": display_name,
+        "local_track_id": int(builder.local_track_id),
+        "exclude_gids": ex,
+        "now": now,
+        "force_long_term": force,
+        "observation_quality": (best_observation.quality if best_observation is not None else None),
+    }])[0]
     builder.assigned_global_id = g.global_id
     _record_association(session, builder, g, prev_global_id=prev_gid, persist_tracklet_row=False)
     return g

@@ -155,3 +155,89 @@ def test_low_quality_observation_does_not_update_confirmed_prototype():
     np.testing.assert_allclose(
         assoc._gallery.prototype("vehicle", first.global_id, camera_id=1), before,
     )
+
+
+def test_active_same_camera_global_cannot_be_taken_over_by_peer_prototype():
+    assoc = MtmcAssociator(
+        appear_thresh=0.4, vehicle_appear_thresh=0.4, confirm_thresh=0.4,
+        topology={(81, 71): (0.0, 20.0)},
+    )
+    peer = _v(1.0, 0.0)
+    active = assoc.associate(
+        object_type="vehicle", camera_id=81, embedding=peer,
+        local_track_id=4, now=10.0,
+    )
+    assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=_v(0.98, 0.2),
+        local_track_id=3, now=11.0,
+    )
+    later = assoc.associate(
+        object_type="vehicle", camera_id=71, embedding=_v(0.99, 0.1),
+        local_track_id=5, now=12.0,
+    )
+
+    assert later.global_id != active.global_id
+    assert assoc._local_bind[("vehicle", 71, 3)] == active.global_id
+
+
+def test_candidate_stays_unconfirmed_and_never_becomes_a_match_target():
+    assoc = MtmcAssociator(
+        appear_thresh=0.6,
+        confirm_thresh=0.8,
+        candidate_thresh=0.5,
+        topology={(1, 2): (0.0, 20.0), (2, 3): (0.0, 20.0)},
+    )
+    confirmed = assoc.associate(
+        object_type="vehicle", camera_id=1, embedding=_v(1.0, 0.0),
+        local_track_id=1, now=1.0,
+    )
+    assoc.release_local("vehicle", 1, [1], now=1.1)
+    candidate = assoc.associate(
+        object_type="vehicle", camera_id=2, embedding=_v(0.7, 0.714),
+        local_track_id=2, now=3.0,
+    )
+    assert candidate.confirmed is False
+    assert candidate.candidate is True
+    assert assoc._gallery.prototype("vehicle", candidate.global_id, camera_id=2) is None
+
+    sticky = assoc.associate(
+        object_type="vehicle", camera_id=2, embedding=_v(0.7, 0.714),
+        local_track_id=2, now=3.1,
+    )
+    later = assoc.associate(
+        object_type="vehicle", camera_id=3, embedding=_v(0.7, 0.714),
+        local_track_id=3, now=4.0,
+    )
+
+    assert sticky.global_id == candidate.global_id
+    assert sticky.confirmed is False
+    assert later.global_id not in {confirmed.global_id, candidate.global_id}
+
+
+def test_batch_confirms_only_mutual_best_independent_of_input_order():
+    def run(order: tuple[int, int]) -> dict[int, tuple[str, str]]:
+        assoc = MtmcAssociator(
+            appear_thresh=0.5,
+            confirm_thresh=0.5,
+            candidate_thresh=0.3,
+            topology={(1, 3): (0.0, 20.0)},
+        )
+        target = assoc.associate(
+            object_type="vehicle", camera_id=1, embedding=_v(1.0, 0.0),
+            local_track_id=1, now=1.0,
+        )
+        assoc.release_local("vehicle", 1, [1], now=1.1)
+        observations = {
+            10: {"object_type": "vehicle", "camera_id": 3, "embedding": _v(0.99, 0.1), "local_track_id": 10, "now": 3.0},
+            20: {"object_type": "vehicle", "camera_id": 3, "embedding": _v(0.9, 0.435), "local_track_id": 20, "now": 3.0},
+        }
+        results = assoc.associate_batch([observations[index] for index in order])
+        by_local = {result.local_track_id: (result.global_id, result.last_assoc_mode) for result in results}
+        assert by_local[10][0] == target.global_id
+        assert by_local[20][0] != target.global_id
+        return by_local
+
+    forward = run((10, 20))
+    reverse = run((20, 10))
+    assert forward[10][1] == reverse[10][1] == AssocMode.LONG_TERM.value
+    assert forward[20][1] == reverse[20][1] != AssocMode.LONG_TERM.value

@@ -124,6 +124,10 @@ class GlobalTrack:
     trail_by_cam: dict[int, list] = field(default_factory=dict)
     local_track_id: int | None = None
     last_assoc_mode: str = AssocMode.NEW.value
+    # Candidate Globals are durable review objects, not provisional confirmed
+    # identities.  They can only become confirmed through explicit promotion.
+    confirmed: bool = True
+    candidate: bool = False
     # Canonical concurrent state; camera_id/last_seen above remain compatibility
     # summaries for legacy HTTP and table consumers.
     camera_observations: dict[int, CameraObservationState] = field(default_factory=dict)
@@ -277,7 +281,12 @@ class MtmcAssociator:
         confirmed: bool = True,
         observation_quality: float | None = None,
     ) -> None:
-        if not confirmed or not self._quality_qualified(observation_quality):
+        if (
+            not confirmed
+            or not g.confirmed
+            or g.last_assoc_mode not in {AssocMode.NEW.value, AssocMode.LONG_TERM.value}
+            or not self._quality_qualified(observation_quality)
+        ):
             return
         # Do not copy the blended global centroid into every camera slot: that
         # makes different camera prototypes converge and lose discrimination.
@@ -395,7 +404,7 @@ class MtmcAssociator:
         plate_norm = (plate or "").strip().upper()
         if plate_norm:
             for gid, g in self.tracks.items():
-                if gid in excluded or g.object_type != object_type:
+                if gid in excluded or g.object_type != object_type or not g.confirmed:
                     continue
                 gp = (g.plate or "").strip().upper()
                 if gp and gp == plate_norm:
@@ -420,12 +429,17 @@ class MtmcAssociator:
                 if gid in excluded or gid in seen:
                     continue
                 g = self.tracks.get(gid)
-                if g is None or g.object_type != object_type:
+                if g is None or g.object_type != object_type or not g.confirmed:
                     continue
                 seen.add(gid)
                 yield g
         for gid, g in self.tracks.items():
-            if gid in excluded or gid in seen or g.object_type != object_type:
+            if (
+                gid in excluded
+                or gid in seen
+                or g.object_type != object_type
+                or not g.confirmed
+            ):
                 continue
             yield g
 
@@ -570,6 +584,11 @@ class MtmcAssociator:
         global_id: str,
     ) -> None:
         """同镜另一 local 误占同一 Global 时解除粘性，让外观重匹配。"""
+        g = self.tracks.get(global_id)
+        if g is not None:
+            state = g.camera_observations.get(int(camera_id))
+            if state is not None and state.active:
+                return
         keep = self._bind_key(object_type, camera_id, int(local_track_id))
         for k in list(self._local_bind.keys()):
             if k == keep:
@@ -823,19 +842,13 @@ class MtmcAssociator:
         sibling_occupied = self._same_cam_sibling_occupied(
             object_type, camera_id, g.global_id, local_track_id,
         )
-        cross_takeover = (
-            object_type == "vehicle"
-            and cross_proto >= 0
-            and (sibling_occupied or (same_cam and not self._is_lost_for_revive(g, camera_id, now)))
-        )
-        if (
-            self._same_camera_active_occupied(g, object_type, camera_id, local_track_id)
-            and not cross_takeover
-        ):
+        if self._same_camera_active_occupied(g, object_type, camera_id, local_track_id):
             return None, {
                 "topology": topo_w, "time": time_w, "reid": None,
                 "final": None, "occupied": True,
             }
+
+        cross_takeover = False
 
         if cross_takeover:
             pass
@@ -981,6 +994,7 @@ class MtmcAssociator:
         now: float | None = None,
         force_long_term: bool = False,
         observation_quality: float | None = None,
+        force_candidate: bool = False,
     ) -> GlobalTrack:
         """
         McByte++ 路径：
@@ -1013,6 +1027,7 @@ class MtmcAssociator:
                         if (
                             object_type == "vehicle"
                             and embedding is not None
+                            and g.confirmed
                             and self.vehicle_sticky_warmup_sec > 0
                         ):
                             bind_at = self._local_bind_at.get(bkey)
@@ -1086,14 +1101,7 @@ class MtmcAssociator:
                                 local_track_id=int(local_track_id),
                                 now=now,
                                 mode=AssocMode.STICKY,
-                                update_embedding=(
-                                    embedding is not None
-                                    and self._quality_qualified(observation_quality)
-                                ),
-                            )
-                            self._gallery_upsert(
-                                g, embedding, observation_spaces=spaces,
-                                observation_quality=observation_quality,
+                                update_embedding=False,
                             )
                             return g
                         self._local_bind.pop(bkey, None)
@@ -1203,6 +1211,8 @@ class MtmcAssociator:
             })
             if best_gid is not None:
                 if (
+                    not force_candidate
+                    and
                     tier_score >= confirm_need
                     and (match_margin is None or match_margin >= self.min_match_margin)
                 ):
@@ -1270,6 +1280,8 @@ class MtmcAssociator:
                     color_sig=_l2(color_sig) if color_sig is not None else None,
                     local_track_id=int(local_track_id) if local_track_id is not None else None,
                     last_assoc_mode=AssocMode.CANDIDATE.value,
+                    confirmed=False,
+                    candidate=True,
                     camera_observations={
                         int(camera_id): CameraObservationState(
                             active=True, active_since=now, last_observed_at=now,
@@ -1354,17 +1366,116 @@ class MtmcAssociator:
 
             if local_track_id is not None:
                 bkey = self._bind_key(object_type, camera_id, int(local_track_id))
-                if (
-                    object_type == "vehicle"
-                    and self.last_mode == AssocMode.LONG_TERM
-                ):
-                    self._evict_same_cam_sibling_binds(
-                        object_type, camera_id, int(local_track_id), g.global_id,
-                    )
                 if bkey not in self._local_bind_at:
                     self._local_bind_at[bkey] = now
                 self._local_bind[bkey] = g.global_id
             return g
+
+    def associate_batch(self, observations: Iterable[dict]) -> list[GlobalTrack]:
+        """Associate one same-frame batch with deterministic mutual-best gating.
+
+        The single-observation ``associate`` API remains the compatibility
+        wrapper.  Batch callers get a first scoring pass, then only an
+        observation and Global that choose each other may confirm.
+        """
+        rows = [dict(row) for row in observations]
+        if not rows:
+            return []
+        scores_by_row: dict[int, tuple[str, float] | None] = {}
+        with self._lock:
+            for index, row in enumerate(rows):
+                now = float(row.get("now") if row.get("now") is not None else time.time())
+                self._purge_expired(now)
+                object_type = str(row["object_type"])
+                camera_id = int(row["camera_id"])
+                local_track_id = row.get("local_track_id")
+                embedding = row.get("embedding")
+                spaces, _association_space = _normalize_embedding_spaces(
+                    embedding,
+                    row.get("embedding_spaces"),
+                    row.get("association_model_key"),
+                    row.get("model_version"),
+                )
+                excluded = set(row.get("exclude_gids") or ())
+                best: tuple[str, float] | None = None
+                for g in self._iter_long_term_targets(
+                    object_type,
+                    embedding,
+                    excluded,
+                    reid_person_id=row.get("reid_person_id"),
+                    plate=row.get("plate"),
+                    identity_key=row.get("identity_key"),
+                ):
+                    if self._hard_conflict(
+                        object_type,
+                        plate=row.get("plate"),
+                        identity_key=row.get("identity_key"),
+                        vehicle_class=row.get("vehicle_class"),
+                        camera_id=camera_id,
+                        target=g,
+                    ):
+                        continue
+                    score, _breakdown = self._score_long_term(
+                        g,
+                        object_type=object_type,
+                        camera_id=camera_id,
+                        embedding=embedding,
+                        embedding_spaces=spaces,
+                        score_weights=row.get("score_weights"),
+                        identity_key=row.get("identity_key"),
+                        plate=row.get("plate"),
+                        reid_person_id=row.get("reid_person_id"),
+                        local_track_id=(int(local_track_id) if local_track_id is not None else None),
+                        vehicle_class=row.get("vehicle_class"),
+                        color_sig=row.get("color_sig"),
+                        visual_key=row.get("visual_key"),
+                        now=now,
+                    )
+                    if score is not None and (best is None or score > best[1]):
+                        best = (g.global_id, float(score))
+                scores_by_row[index] = best
+
+        best_row_by_global: dict[str, int] = {}
+        for index, candidate in scores_by_row.items():
+            if candidate is None:
+                continue
+            gid, score = candidate
+            current = best_row_by_global.get(gid)
+            if current is None:
+                best_row_by_global[gid] = index
+                continue
+            current_score = scores_by_row[current][1]  # type: ignore[index]
+            current_local = int(rows[current].get("local_track_id") or -1)
+            local_id = int(rows[index].get("local_track_id") or -1)
+            if score > current_score or (score == current_score and local_id < current_local):
+                best_row_by_global[gid] = index
+
+        mutual = {
+            index for index, candidate in scores_by_row.items()
+            if candidate is not None and best_row_by_global.get(candidate[0]) == index
+        }
+        execution_order = sorted(
+            range(len(rows)),
+            key=lambda index: (
+                index not in mutual,
+                -(scores_by_row[index][1] if scores_by_row[index] is not None else -1.0),
+                str(rows[index].get("object_type")),
+                int(rows[index].get("camera_id") or -1),
+                int(rows[index].get("local_track_id") or -1),
+            ),
+        )
+        claimed: set[str] = set()
+        results: dict[int, GlobalTrack] = {}
+        for index in execution_order:
+            row = dict(rows[index])
+            excluded = set(row.pop("exclude_gids", ()) or ()) | claimed
+            row["exclude_gids"] = excluded
+            row["force_candidate"] = index not in mutual
+            result = self.associate(**row)
+            results[index] = result
+            if index in mutual and result.last_assoc_mode == AssocMode.LONG_TERM.value:
+                claimed.add(result.global_id)
+        return [results[index] for index in range(len(rows))]
 
     def merge_globals(self, keep_gid: str, drop_gid: str, now: float | None = None) -> GlobalTrack | None:
         """P2：将 drop_gid 合并进 keep_gid（候选晋升）。"""
@@ -1410,6 +1521,8 @@ class MtmcAssociator:
             keep.camera_id = drop.camera_id
             keep.lost_at = None
             keep.last_assoc_mode = AssocMode.LONG_TERM.value
+            keep.confirmed = True
+            keep.candidate = False
             for k, v in list(self._local_bind.items()):
                 if v == drop_gid:
                     self._local_bind[k] = keep_gid
@@ -1495,6 +1608,8 @@ class MtmcAssociator:
                     "firstSeen": g.first_seen,
                     "lostAt": g.lost_at,
                     "assocMode": g.last_assoc_mode,
+                    "confirmed": g.confirmed,
+                    "candidate": g.candidate,
                     "cameraObservations": {
                         str(camera_id): {
                             "active": state.active,
