@@ -67,6 +67,12 @@ def _parse_session_params(data: dict) -> MtmcConfig:
     )
     plate_m = _pick_model(data.get("plateModelId"), keys=["yolo26s-plate-pose", "yolo26n-plate"])
     ocr_fn = _build_ocr_fn(data.get("ocrDetModelId"), data.get("ocrRecModelId"))
+    person_path = _abs_weight(person_m)
+    vehicle_path = _abs_weight(vehicle_m)
+    youtu_path = _abs_weight(youtu_m)
+    strong_path = _abs_weight(strong_m)
+    vehicle_reid_path = _abs_weight(vreid_m)
+    plate_path = _abs_weight(plate_m)
     track_backend = str(data.get("localTrackBackend") or "bytetrack").strip().lower()
     if track_backend not in ("iou", "bytetrack", "botsort"):
         track_backend = "bytetrack"
@@ -76,12 +82,12 @@ def _parse_session_params(data: dict) -> MtmcConfig:
     camera_ids = [int(x) for x in camera_ids]
     return MtmcConfig(
         camera_ids=camera_ids,
-        det_person_path=_abs_weight(person_m),
-        det_vehicle_path=_abs_weight(vehicle_m),
-        youtu_root=_abs_weight(youtu_m),
-        strong_reid_root=_abs_weight(strong_m),
-        vehicle_reid_root=_abs_weight(vreid_m),
-        plate_model_path=_abs_weight(plate_m),
+        det_person_path=person_path,
+        det_vehicle_path=vehicle_path,
+        youtu_root=youtu_path,
+        strong_reid_root=strong_path,
+        vehicle_reid_root=vehicle_reid_path,
+        plate_model_path=plate_path,
         ocr_fn=ocr_fn,
         enable_person=_form_bool(data.get("enablePerson"), True),
         enable_vehicle=_form_bool(data.get("enableVehicle"), True),
@@ -109,6 +115,14 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         lost_revive_sec=float(data.get("lostReviveSec") or 1.0),
         mcbyte_decouple=_form_bool(data.get("mcbyteDecouple"), True),
         detect_only=_form_bool(data.get("detectOnly"), False),
+        selected_models={
+            "personDetection": _model_runtime_descriptor(person_m, person_path),
+            "vehicleDetection": _model_runtime_descriptor(vehicle_m, vehicle_path),
+            "personReidStrong": _model_runtime_descriptor(strong_m, strong_path),
+            "personReidFallback": _model_runtime_descriptor(youtu_m, youtu_path),
+            "vehicleReid": _model_runtime_descriptor(vreid_m, vehicle_reid_path),
+            "plateDetection": _model_runtime_descriptor(plate_m, plate_path),
+        },
     )
 
 
@@ -202,6 +216,43 @@ def _abs_weight(m: AiModel | None) -> str | None:
     from services.model_paths import resolve_model_weight_path
 
     return resolve_model_weight_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+
+
+def _model_runtime_descriptor(model: AiModel | None, resolved_path: str | None) -> dict:
+    ready = bool(model is not None and resolved_path and os.path.exists(resolved_path))
+    if model is None:
+        reason = "no enabled model selected"
+    elif not resolved_path:
+        reason = "selected model has no resolved weight"
+    elif not ready:
+        reason = "selected model weight is missing"
+    else:
+        reason = None
+    return {
+        "selectedModelKey": getattr(model, "model_key", None),
+        "modelVersion": getattr(model, "version", None),
+        "ready": ready,
+        "provider": getattr(model, "library", None),
+        "inputSize": None,
+        "embeddingDim": None,
+        "degraded": bool(reason),
+        "degradedReason": reason,
+    }
+
+
+def _association_public_row(row) -> dict:
+    """Add explicit association-only scores while retaining nested legacy data."""
+    public = row.to_dict()
+    scores = dict(public.get("scores") or {})
+    evidence = dict(public.get("evidence") or {})
+    public.update({
+        "appearanceScore": scores.get("reid", evidence.get("reid")),
+        "topologyScore": scores.get("topology", evidence.get("topology")),
+        "timeScore": scores.get("time", evidence.get("time")),
+        "margin": evidence.get("matchMargin"),
+        "finalScore": scores.get("final", evidence.get("final")),
+    })
+    return public
 
 
 def _pick_model(mid: int | None, *, task=None, library=None, keys=None):
@@ -833,7 +884,7 @@ def list_associations():
         q = q.filter(MtmcAssociationEdge.tracklet_id == tid)
     total = q.count()
     rows = q.order_by(MtmcAssociationEdge.id.desc()).offset((page - 1) * size).limit(size).all()
-    return jsonify(code=0, data={"rows": [r.to_dict() for r in rows], "total": total})
+    return jsonify(code=0, data={"rows": [_association_public_row(r) for r in rows], "total": total})
 
 
 @mtmc_bp.get("/trajectory/<gid>")

@@ -165,6 +165,9 @@ class MtmcConfig:
     mcbyte_decouple: bool = True
     # 实时检测测试：仅 YOLO 画框，不做 Tracklet / ReID / 跨镜关联
     detect_only: bool = False
+    # Route-selected model records. Runtime inference may replace the effective
+    # ReID entry when a configured backend degrades to a fallback.
+    selected_models: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -308,6 +311,95 @@ def _session_det_snapshot(cam_state: "CamState") -> list[dict]:
 def _session_det_count(cam_state: "CamState") -> int:
     with cam_state.state_lock:
         return len(cam_state.session_dets)
+
+
+def _topology_runtime_policy(associator) -> dict:
+    edges = []
+    for (from_camera_id, to_camera_id), raw_rule in sorted(
+        dict(getattr(associator, "topology", {}) or {}).items(),
+    ):
+        rule = associator._coerce_topology_rule(raw_rule)
+        edges.append({
+            "fromCameraId": int(from_camera_id),
+            "toCameraId": int(to_camera_id),
+            "minTransitSec": float(rule.min_sec),
+            "maxTransitSec": float(rule.max_sec),
+            "weight": float(rule.weight),
+            "edgeType": str(rule.edge_type),
+        })
+    authoritative = bool(getattr(associator, "_topology_loaded", False))
+    return {
+        "directed": True,
+        "authoritative": authoritative,
+        "missingEdgePolicy": "reject" if authoritative else "time_window",
+        "edges": edges,
+    }
+
+
+def _effective_runtime_thresholds(associator) -> dict:
+    return {
+        "appearance": float(associator.appear_thresh),
+        "vehicleAppearance": float(associator.vehicle_appear_thresh),
+        "confirm": float(associator.confirm_thresh),
+        "candidate": float(associator.candidate_thresh),
+        "minMatchMargin": float(associator.min_match_margin),
+    }
+
+
+def _runtime_budget(limit_per_frame: int) -> dict:
+    return {
+        "limitPerFrame": max(0, int(limit_per_frame)),
+        "queued": 0,
+        "consumed": 0,
+        "skipped": 0,
+        "lastFrameByCamera": {},
+    }
+
+
+def _initial_runtime_status(cfg: MtmcConfig, associator) -> dict:
+    configured_models = copy.deepcopy(dict(getattr(cfg, "selected_models", {}) or {}))
+    allowed_roles = set()
+    if cfg.enable_person:
+        allowed_roles.add("personDetection")
+        if not cfg.detect_only:
+            allowed_roles.update({"personReidStrong", "personReidFallback"})
+    if cfg.enable_vehicle:
+        allowed_roles.add("vehicleDetection")
+        if not cfg.detect_only:
+            allowed_roles.update({"vehicleReid", "plateDetection"})
+    models = {
+        role: detail for role, detail in configured_models.items()
+        if role in allowed_roles and detail.get("selectedModelKey")
+    }
+    person_candidates = [
+        models.get("personReidStrong"), models.get("personReidFallback"),
+    ]
+    preferred = next((row for row in person_candidates if row and row.get("ready")), None)
+    if preferred is None:
+        preferred = next((row for row in person_candidates if row), None)
+    if preferred:
+        models["personReid"] = copy.deepcopy(preferred)
+    return {
+        "models": models,
+        "budgets": {
+            "personReid": _runtime_budget(_reid_budget_for(cfg, "person")),
+            "vehicleReid": _runtime_budget(_reid_budget_for(cfg, "vehicle")),
+            "plateOcr": _runtime_budget(cfg.plate_budget),
+        },
+        "effectiveThresholds": _effective_runtime_thresholds(associator),
+        "topologyPolicy": _topology_runtime_policy(associator),
+    }
+
+
+def _initialize_runtime_status(session) -> None:
+    with _runtime_status_lock(session):
+        runtime = getattr(session, "runtime_status", None)
+        if runtime is None:
+            runtime = {}
+            session.runtime_status = runtime
+        initial = _initial_runtime_status(session.cfg, session.associator)
+        for key, value in initial.items():
+            runtime.setdefault(key, value)
 
 
 class MtmcSession:
@@ -1063,6 +1155,185 @@ def _record_gallery_ready(session, meta: dict, *, camera_id=None) -> None:
             "errorCount": error_count,
             **({"errorsByCamera": errors_by_camera} if errors_by_camera else {}),
             **({"errorsBySpace": errors_by_runtime_space} if errors_by_runtime_space else {}),
+        }
+
+
+def _runtime_error_reason(backends: dict, expected: list[str]) -> str | None:
+    failures = []
+    for name in expected:
+        detail = dict(backends.get(name) or {})
+        if detail.get("ready"):
+            continue
+        failures.append(f"{name}: {detail.get('error') or 'backend unavailable'}")
+    return "; ".join(failures) or None
+
+
+def _strong_runtime_io(model_path: str | None) -> dict:
+    """Inspect the loaded ONNX session; never infer shape from a model name."""
+    if not model_path:
+        return {}
+    try:
+        from services.strong_reid import _get_ort, resolve_strong_onnx
+
+        onnx_path = resolve_strong_onnx(model_path)
+        if not onnx_path:
+            return {}
+        inference_session = _get_ort(onnx_path)
+        shape = list(inference_session.get_inputs()[0].shape)
+        input_size = None
+        if len(shape) == 4 and all(isinstance(value, int) and value > 0 for value in shape[2:4]):
+            input_size = [int(shape[3]), int(shape[2])]
+        get_providers = getattr(inference_session, "get_providers", None)
+        providers = list(get_providers() or []) if callable(get_providers) else []
+        return {
+            "inputSize": input_size,
+            "provider": providers[0] if providers else "onnxruntime-cpu",
+        }
+    except Exception:  # noqa: BLE001 - runtime metadata must not break inference
+        return {}
+
+
+def _record_runtime_model(session, role: str, camera_id: int, observation: dict) -> None:
+    """Merge a per-camera inference observation without hiding partial failures."""
+    _initialize_runtime_status(session)
+    camera_key = str(camera_id)
+    with _runtime_status_lock(session):
+        models = session.runtime_status.setdefault("models", {})
+        previous = dict(models.get(role) or {})
+        by_camera = copy.deepcopy(previous.get("byCamera") or {})
+        by_camera[camera_key] = copy.deepcopy(observation)
+        camera_rows = list(by_camera.values())
+        selected_keys = sorted({
+            str(row.get("selectedModelKey"))
+            for row in camera_rows if row.get("selectedModelKey")
+        })
+        versions = sorted({
+            str(row.get("modelVersion"))
+            for row in camera_rows if row.get("modelVersion")
+        })
+        reasons = sorted({
+            str(row.get("degradedReason"))
+            for row in camera_rows if row.get("degradedReason")
+        })
+        merged = copy.deepcopy(observation)
+        merged["ready"] = bool(camera_rows) and all(row.get("ready") is True for row in camera_rows)
+        merged["degraded"] = any(
+            row.get("degraded") is True or row.get("ready") is False for row in camera_rows
+        )
+        merged["degradedReason"] = "; ".join(reasons) or None
+        merged["selectedModelKey"] = selected_keys[0] if len(selected_keys) == 1 else None
+        merged["selectedModelKeys"] = selected_keys
+        merged["modelVersion"] = versions[0] if len(versions) == 1 else None
+        merged["modelVersions"] = versions
+        merged["byCamera"] = by_camera
+        models[role] = merged
+
+
+def _person_reid_runtime_observation(
+    cfg: MtmcConfig, meta: dict, embeddings: dict[str, np.ndarray],
+) -> dict:
+    selected_key = meta.get("associationModelKey")
+    active_backend = str(meta.get("activeBackend") or meta.get("backend") or "")
+    backends = copy.deepcopy(dict(meta.get("backends") or {}))
+    backend_detail = dict(backends.get(active_backend) or {})
+    versions = dict(meta.get("modelVersionsBySpace") or {})
+    expected = []
+    if cfg.strong_reid_root:
+        expected.append("strong")
+    if cfg.youtu_root:
+        expected.append("youtu")
+    reason = _runtime_error_reason(backends, expected)
+    selected_embedding = embeddings.get(selected_key) if selected_key else None
+    if selected_key == "opencv-person-reid-youtu":
+        provider = meta.get("backend") or backend_detail.get("provider") or "opencv-dnn"
+        input_size = backend_detail.get("inputSize") or meta.get("inputSize")
+    else:
+        runtime_io = _strong_runtime_io(cfg.strong_reid_root)
+        provider = (
+            backend_detail.get("provider") or meta.get("provider")
+            or runtime_io.get("provider") or "onnxruntime-cpu"
+        )
+        input_size = (
+            backend_detail.get("inputSize") or meta.get("strongInputSize")
+            or runtime_io.get("inputSize")
+        )
+    ready = bool(selected_key and selected_embedding is not None)
+    if not ready and reason is None:
+        reason = "no person ReID model space produced an embedding"
+    return {
+        "selectedModelKey": selected_key,
+        "modelVersion": versions.get(selected_key) if selected_key else None,
+        "ready": ready,
+        "provider": provider,
+        "inputSize": input_size,
+        "embeddingDim": int(selected_embedding.size) if selected_embedding is not None else None,
+        "degraded": bool(reason),
+        "degradedReason": reason,
+        "availableModelSpaces": sorted(embeddings),
+        "backendReadiness": backends,
+    }
+
+
+def _record_person_reid_runtime(
+    session, camera_id: int, meta: dict, embeddings: dict[str, np.ndarray],
+) -> None:
+    _record_runtime_model(
+        session, "personReid", camera_id,
+        _person_reid_runtime_observation(session.cfg, meta, embeddings),
+    )
+
+
+def _vehicle_reid_runtime_observation(cfg: MtmcConfig, meta: dict, embedding) -> dict:
+    backend = str(meta.get("backend") or "unknown")
+    configured = dict((getattr(cfg, "selected_models", {}) or {}).get("vehicleReid") or {})
+    fallback = backend == "hist-fallback"
+    selected_key = "histogram-fallback" if fallback else (
+        configured.get("selectedModelKey") or "vehicle-onnx"
+    )
+    reason = None
+    if fallback:
+        reason = str(meta.get("onnxError") or "configured vehicle ReID unavailable; using histogram fallback")
+    return {
+        "selectedModelKey": selected_key,
+        "modelVersion": "builtin" if fallback else (
+            meta.get("modelVersion") or meta.get("onnx") or configured.get("modelVersion")
+        ),
+        "ready": embedding is not None,
+        "provider": "opencv" if fallback else (meta.get("provider") or "onnxruntime-cpu"),
+        "inputSize": meta.get("inputSize"),
+        "embeddingDim": int(getattr(embedding, "size", 0)) or meta.get("dim"),
+        "degraded": fallback,
+        "degradedReason": reason,
+    }
+
+
+def _record_vehicle_reid_runtime(session, camera_id: int, meta: dict, embedding) -> None:
+    _record_runtime_model(
+        session, "vehicleReid", camera_id,
+        _vehicle_reid_runtime_observation(session.cfg, meta, embedding),
+    )
+
+
+def _record_runtime_budget_frame(
+    session, role: str, camera_id: int, *, queued: int, consumed: int, skipped: int,
+) -> None:
+    _initialize_runtime_status(session)
+    with _runtime_status_lock(session):
+        budgets = session.runtime_status.setdefault("budgets", {})
+        limit = {
+            "personReid": _reid_budget_for(session.cfg, "person"),
+            "vehicleReid": _reid_budget_for(session.cfg, "vehicle"),
+            "plateOcr": max(0, int(session.cfg.plate_budget or 0)),
+        }[role]
+        counter = budgets.setdefault(role, _runtime_budget(limit))
+        counter["limitPerFrame"] = limit
+        counter["queued"] = int(counter.get("queued") or 0) + int(queued)
+        counter["consumed"] = int(counter.get("consumed") or 0) + int(consumed)
+        counter["skipped"] = int(counter.get("skipped") or 0) + int(skipped)
+        counter.setdefault("lastFrameByCamera", {})[str(camera_id)] = {
+            "queued": int(queued),
+            "consumed": int(consumed),
+            "skipped": int(skipped),
         }
 
 
@@ -2043,6 +2314,9 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     person_reid_left = _reid_budget_for(cfg, "person")
     vehicle_reid_left = _reid_budget_for(cfg, "vehicle")
     plate_left = max(0, int(cfg.plate_budget or 0))
+    person_budget = {"queued": 0, "consumed": 0, "skipped": 0}
+    vehicle_budget = {"queued": 0, "consumed": 0, "skipped": 0}
+    plate_budget = {"queued": 0, "consumed": 0, "skipped": 0}
     raw_p, raw_v = _detect_person_vehicle(cfg, frame)
     # “命中”表示检测器命中，必须在耗时的 ReID/车牌/关联前统计；否则首帧
     # ReID 尚未完成时页面会错误地长期显示人员 0。
@@ -2091,9 +2365,16 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 now=now,
             )
             quality = frame_quality(t.bbox, t.conf, fh, fw)
+            person_budget["queued"] += 1
             need_reid = person_reid_left > 0 and builder.should_sample_embedding(
                 now, quality, view_token=_track_view_token(t),
             )
+            if need_reid:
+                person_budget["consumed"] += 1
+            elif person_reid_left <= 0:
+                # Preserve the scheduler's short circuit: merely observing a
+                # budget skip must not reserve this keyframe.
+                person_budget["skipped"] += 1
             emb, meta = None, {}
             embeddings: dict[str, np.ndarray] = {}
             c_sig = None
@@ -2114,6 +2395,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 except Exception as e:  # noqa: BLE001
                     emb, embeddings = None, {}
                     meta = {"backends": {"runtime": {"ready": False, "error": str(e)}}}
+                _record_person_reid_runtime(session, cam_id, meta, embeddings)
                 if embeddings:
                     try:
                         gallery_embeddings = embeddings
@@ -2256,6 +2538,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             now=now, timeout_sec=cfg.lost_revive_sec,
         )
         _release_finalized_locals(session, cam_state, "person", finalized)
+        _record_runtime_budget_frame(session, "personReid", cam_id, **person_budget)
 
     # ---- 车辆 ----
     if cfg.enable_vehicle and cfg.det_vehicle_path:
@@ -2302,9 +2585,14 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 now=now,
             )
             quality = frame_quality(t.bbox, t.conf, fh, fw)
+            vehicle_budget["queued"] += 1
             need_reid = vehicle_reid_left > 0 and builder.should_sample_embedding(
                 now, quality, view_token=_track_view_token(t),
             )
+            if need_reid:
+                vehicle_budget["consumed"] += 1
+            elif vehicle_reid_left <= 0:
+                vehicle_budget["skipped"] += 1
             emb, vmeta = None, {}
             plate_text, plate_score = None, 0.0
             fuse = {
@@ -2318,7 +2606,15 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             if need_reid:
                 vehicle_reid_left -= 1
                 emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
-                do_ocr = cfg.ocr_fn is not None and plate_left > 0 and not plate_text
+                _record_vehicle_reid_runtime(session, cam_id, vmeta, emb)
+                wants_ocr = cfg.ocr_fn is not None and not plate_text
+                do_ocr = wants_ocr and plate_left > 0
+                if wants_ocr:
+                    plate_budget["queued"] += 1
+                    if do_ocr:
+                        plate_budget["consumed"] += 1
+                    else:
+                        plate_budget["skipped"] += 1
                 if do_ocr:
                     plate_left -= 1
                     try:
@@ -2480,6 +2776,8 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             now=now, timeout_sec=cfg.lost_revive_sec,
         )
         _release_finalized_locals(session, cam_state, "vehicle", finalized)
+        _record_runtime_budget_frame(session, "vehicleReid", cam_id, **vehicle_budget)
+        _record_runtime_budget_frame(session, "plateOcr", cam_id, **plate_budget)
 
     _enforce_unique_camera_global_ids(items)
     _record_session_dets(cam_state, items, now)
@@ -2604,6 +2902,7 @@ def start_session(
     if topology_edges is not None:
         associator.set_topology(topology_edges)
     session = MtmcSession(sid, cfg, associator, app=app)
+    _initialize_runtime_status(session)
     session.source_mode = "upload" if video_sources else "camera"
     if video_sources:
         types = {vs.source_type for vs in video_sources.values()}

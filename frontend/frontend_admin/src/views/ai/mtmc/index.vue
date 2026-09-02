@@ -209,35 +209,46 @@
           <el-form-item label="采样 FPS">
             <el-input-number v-model="form.sampleFps" :min="0.5" :max="8" :step="0.5" />
           </el-form-item>
-          <div class="config-title advanced"><span>② 关联策略</span><small>一般保持默认；误合并时提高阈值，漏匹配时适当降低</small></div>
-          <el-form-item label="确认阈值">
-            <el-input-number v-model="form.confirmThresh" :min="0" :max="0.95" :step="0.01" />
-          </el-form-item>
-          <el-form-item label="外观阈值">
-            <el-input-number v-model="form.appearThresh" :min="0.2" :max="0.9" :step="0.01" />
-          </el-form-item>
-          <el-form-item label="候选阈值">
-            <el-input-number v-model="form.candidateThresh" :min="0" :max="0.9" :step="0.01" />
-          </el-form-item>
-          <el-form-item label="FAISS Gallery">
-            <el-switch v-model="form.useFaissGallery" />
-          </el-form-item>
-          <el-form-item label="时间窗(s)">
-            <el-input-number v-model="form.timeWindowSec" :min="10" :max="300" :step="5" />
-          </el-form-item>
-          <el-form-item label="局部跟踪">
-            <el-select v-model="form.localTrackBackend" style="width: 180px">
-              <el-option label="ByteTrack（推荐）" value="bytetrack" />
-              <el-option label="BoT-SORT（可CMC）" value="botsort" />
-              <el-option label="IoU（轻量）" value="iou" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="CMC">
-            <el-switch v-model="form.enableCmc" />
-          </el-form-item>
-          <el-form-item label="证据落库">
-            <el-switch v-model="form.persistEvents" />
-          </el-form-item>
+          <el-collapse v-model="advancedPanels" class="advanced-controls">
+            <el-collapse-item name="association">
+              <template #title>
+                <div class="advanced-title">
+                  <span>② 高级关联策略</span>
+                  <small>模型默认由后端按推荐顺序选择；仅在误合并或漏匹配时调整</small>
+                </div>
+              </template>
+              <div class="advanced-grid">
+                <el-form-item label="确认阈值">
+                  <el-input-number v-model="form.confirmThresh" :min="0" :max="0.95" :step="0.01" />
+                </el-form-item>
+                <el-form-item label="外观阈值">
+                  <el-input-number v-model="form.appearThresh" :min="0.2" :max="0.9" :step="0.01" />
+                </el-form-item>
+                <el-form-item label="候选阈值">
+                  <el-input-number v-model="form.candidateThresh" :min="0" :max="0.9" :step="0.01" />
+                </el-form-item>
+                <el-form-item label="FAISS Gallery">
+                  <el-switch v-model="form.useFaissGallery" />
+                </el-form-item>
+                <el-form-item label="时间窗(s)">
+                  <el-input-number v-model="form.timeWindowSec" :min="10" :max="300" :step="5" />
+                </el-form-item>
+                <el-form-item label="局部跟踪">
+                  <el-select v-model="form.localTrackBackend" style="width: 180px">
+                    <el-option label="ByteTrack（推荐）" value="bytetrack" />
+                    <el-option label="BoT-SORT（可CMC）" value="botsort" />
+                    <el-option label="IoU（轻量）" value="iou" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="CMC">
+                  <el-switch v-model="form.enableCmc" />
+                </el-form-item>
+                <el-form-item label="证据落库">
+                  <el-switch v-model="form.persistEvents" />
+                </el-form-item>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
           <el-form-item class="action-bar">
             <el-button :disabled="session?.running" @click="resetSessionDefaults">恢复推荐配置</el-button>
             <el-button type="primary" :loading="busy" v-permission="'ai:mtmc:edit'" @click="onStart">启动跨镜</el-button>
@@ -269,6 +280,56 @@
           <el-descriptions-item label="证据落库">{{ session.persistEvents ? '开' : '关' }}</el-descriptions-item>
           <el-descriptions-item label="跨镜策略">{{ session.mcbyteDecouple === false ? '标准' : '增强' }}</el-descriptions-item>
         </el-descriptions>
+
+        <section v-if="session && !isDetectKind(session)" class="runtime-flight mb" aria-label="MTMC 运行时真值">
+          <header class="runtime-flight__head">
+            <div>
+              <strong>运行飞行记录器</strong>
+              <span>展示实际启用模型与有效策略，不以配置意图代替运行结果</span>
+            </div>
+            <el-tag :type="runtimeOverallTone" effect="dark">{{ runtimeOverallLabel }}</el-tag>
+          </header>
+          <el-alert
+            v-if="runtimeRiskText"
+            :title="runtimeRiskText"
+            type="error"
+            :closable="false"
+            show-icon
+            class="runtime-risk"
+          />
+          <div class="runtime-models">
+            <article v-for="model in runtimeModels" :key="model.role" :class="['runtime-model', `is-${model.tone}`]">
+              <div class="runtime-model__role">
+                <span>{{ model.roleLabel }}</span>
+                <el-tag size="small" :type="model.tone" effect="plain">{{ model.statusLabel }}</el-tag>
+              </div>
+              <strong>{{ model.selectedModelKey }}</strong>
+              <div class="runtime-model__meta">
+                <span>版本 {{ model.modelVersion }}</span>
+                <span>后端 {{ model.provider }}</span>
+                <span>输入 {{ model.inputSize }}</span>
+                <span>维度 {{ model.embeddingDim ?? '—' }}</span>
+              </div>
+              <p v-if="model.degradedReason">{{ model.degradedReason }}</p>
+            </article>
+          </div>
+          <div class="runtime-policy">
+            <div>
+              <span class="runtime-policy__label">预算队列</span>
+              <span v-for="budget in runtimeBudgets" :key="budget.role">
+                {{ budget.label }} {{ budget.consumed }}/{{ budget.queued }}，跳过 {{ budget.skipped }}（每帧 {{ budget.limitPerFrame }}）
+              </span>
+            </div>
+            <div>
+              <span class="runtime-policy__label">有效阈值</span>
+              <span>{{ effectiveThresholdText }}</span>
+            </div>
+            <div>
+              <span class="runtime-policy__label">拓扑</span>
+              <span>{{ effectiveTopologyText }}</span>
+            </div>
+          </div>
+        </section>
 
         <div class="grid-preview" v-if="session?.running && !isDetectKind(session)">
           <div v-for="cid in (session?.cameraIds || [])" :key="cid" class="cell">
@@ -431,11 +492,11 @@
           <el-table-column prop="candidateGlobalId" label="候选 Global" min-width="120" />
           <el-table-column prop="trackletId" label="Tracklet" min-width="110" show-overflow-tooltip />
           <el-table-column prop="policyVersion" label="策略" width="90" />
-          <el-table-column label="分数" width="120">
-            <template #default="{ row }">
-              {{ formatAssocScores(row) }}
-            </template>
-          </el-table-column>
+          <el-table-column label="外观" width="74"><template #default="{ row }">{{ formatScore(associationScoreParts(row).appearance) }}</template></el-table-column>
+          <el-table-column label="拓扑" width="74"><template #default="{ row }">{{ formatScore(associationScoreParts(row).topology) }}</template></el-table-column>
+          <el-table-column label="时间" width="74"><template #default="{ row }">{{ formatScore(associationScoreParts(row).time) }}</template></el-table-column>
+          <el-table-column label="边际" width="74"><template #default="{ row }">{{ formatScore(associationScoreParts(row).margin) }}</template></el-table-column>
+          <el-table-column label="最终" width="74"><template #default="{ row }">{{ formatScore(associationScoreParts(row).final) }}</template></el-table-column>
           <el-table-column prop="createdAt" label="时间" width="170" />
         </el-table>
       </el-tab-pane>
@@ -758,6 +819,12 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { cameraApi } from '../../../api/camera'
 import { mtmcApi } from '../../../api/mtmc'
+import {
+  associationScoreParts,
+  runtimeModelRows,
+  runtimeRiskSummary,
+  topologyPolicyText,
+} from '../../../utils/mtmcRuntimeStatus'
 
 const router = useRouter()
 const tab = ref('detect')
@@ -766,6 +833,7 @@ const detectBusy = ref(false)
 const cameras = ref([])
 const sessionId = ref('')
 const session = ref(null)
+const advancedPanels = ref([])
 const detectSessionId = ref('')
 const detectSession = ref(null)
 const topology = ref([])
@@ -779,6 +847,46 @@ const crossEvents = ref([])
 const searchJobs = ref([])
 const overlayBust = reactive({})
 let pollTimer = null
+
+const runtimeModels = computed(() => runtimeModelRows(session.value?.runtime || {}))
+const runtimeRiskText = computed(() => runtimeRiskSummary(session.value?.runtime || {}))
+const runtimeOverallTone = computed(() => {
+  const gallery = session.value?.runtime?.gallery || {}
+  if (gallery.degraded === true || gallery.ready === false) return 'danger'
+  if (runtimeModels.value.some((row) => row.tone === 'danger')) return 'danger'
+  if (runtimeModels.value.length && runtimeModels.value.every((row) => row.tone === 'success')) return 'success'
+  return 'info'
+})
+const runtimeOverallLabel = computed(() => ({
+  danger: '存在降级',
+  success: '运行就绪',
+  info: '等待运行探测',
+})[runtimeOverallTone.value])
+const runtimeBudgets = computed(() => {
+  const labels = { personReid: '人员 ReID', vehicleReid: '车辆 ReID', plateOcr: '车牌 OCR' }
+  return Object.entries(session.value?.runtime?.budgets || {}).map(([role, value]) => ({
+    role,
+    label: labels[role] || role,
+    limitPerFrame: value.limitPerFrame ?? 0,
+    queued: value.queued ?? 0,
+    consumed: value.consumed ?? 0,
+    skipped: value.skipped ?? 0,
+  }))
+})
+const effectiveThresholdText = computed(() => {
+  const value = session.value?.runtime?.effectiveThresholds
+  if (!value) return '等待会话快照'
+  return [
+    `外观 ${formatScore(value.appearance)}`,
+    `车辆 ${formatScore(value.vehicleAppearance)}`,
+    `确认 ${formatScore(value.confirm)}`,
+    `候选 ${formatScore(value.candidate)}`,
+    `边际 ${formatScore(value.minMatchMargin)}`,
+  ].join(' · ')
+})
+const effectiveTopologyText = computed(() => topologyPolicyText(
+  session.value?.runtime?.topologyPolicy || {},
+))
 
 const form = reactive({
   sourceMode: 'camera',
@@ -1359,14 +1467,6 @@ const loadPasses = async () => {
   passes.value = res.data.rows || []
 }
 
-const formatAssocScores = (row) => {
-  const s = row.scores || {}
-  const parts = []
-  if (s.reid != null) parts.push(`r=${s.reid}`)
-  if (s.final != null) parts.push(`f=${s.final}`)
-  return parts.join(' ') || '-'
-}
-
 const loadEvidence = async () => {
   const sid = sessionId.value || undefined
   const [tRes, aRes] = await Promise.all([
@@ -1564,6 +1664,13 @@ onBeforeUnmount(() => {
 .config-title.advanced { margin-top: 3px; }
 .config-title span { color: #304866; font-size: 13px; font-weight: 700; }
 .config-title small { color: #91a0b3; font-size: 11px; }
+.advanced-controls { flex: 0 0 100%; margin: 2px 0 12px; border-top: 1px solid #e5ebf3; border-bottom: 1px solid #e5ebf3; }
+.advanced-controls :deep(.el-collapse-item__header) { min-height: 46px; height: auto; background: transparent; }
+.advanced-controls :deep(.el-collapse-item__wrap) { background: transparent; }
+.advanced-title { display: flex; align-items: baseline; gap: 10px; }
+.advanced-title span { color: #304866; font-size: 13px; font-weight: 700; }
+.advanced-title small { color: #91a0b3; font-size: 11px; font-weight: 400; }
+.advanced-grid { display: flex; flex-wrap: wrap; gap: 0 8px; padding-top: 10px; }
 .config-panel :deep(.el-form-item) { margin-right: 12px; margin-bottom: 12px; }
 .config-panel :deep(.el-form-item__label) { color: #61748d; font-size: 12px; }
 .action-bar { flex: 0 0 100%; display: flex; justify-content: flex-end; margin: 2px 0 0 !important; padding: 11px 0 5px; border-top: 1px solid #e6ecf4; }
@@ -1571,6 +1678,23 @@ onBeforeUnmount(() => {
 .status-panel { overflow: hidden; border-radius: 9px; }
 .status-panel :deep(.el-descriptions__label) { color: #718198; background: #f5f8fc !important; }
 .status-panel :deep(.el-descriptions__content) { color: #263a56; font-weight: 500; }
+.runtime-flight { overflow: hidden; border: 1px solid #cedaea; border-radius: 10px; background: #f7faff; }
+.runtime-flight__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; color: #eaf3ff; background: #18304f; }
+.runtime-flight__head > div { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.runtime-flight__head strong { font-size: 14px; letter-spacing: .3px; }
+.runtime-flight__head span { color: #9fb5d1; font-size: 11px; }
+.runtime-risk { border-radius: 0; }
+.runtime-models { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; padding: 12px 14px; }
+.runtime-model { min-width: 0; padding: 10px 11px; border: 1px solid #dfe7f2; border-left: 3px solid #8a9aaf; border-radius: 7px; background: #fff; }
+.runtime-model.is-success { border-left-color: #3aaa78; }
+.runtime-model.is-danger { border-left-color: #e05252; background: #fffafa; }
+.runtime-model__role { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #60748f; font-size: 11px; }
+.runtime-model > strong { display: block; margin: 7px 0 6px; overflow: hidden; color: #263b58; font: 650 13px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-model__meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: #7a8ca4; font-size: 10px; }
+.runtime-model p { margin: 7px 0 0; color: #b84444; font-size: 10px; line-height: 1.45; }
+.runtime-policy { display: grid; gap: 7px; padding: 10px 14px 12px; border-top: 1px solid #dfe7f2; color: #60748f; font-size: 11px; }
+.runtime-policy > div { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.runtime-policy__label { min-width: 64px; color: #2d496c; font-weight: 700; }
 .tab-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; padding: 11px 12px; flex-wrap: wrap; border: 1px solid #e2e9f2; border-radius: 9px; background: #f8fafc; }
 .section-title { display: flex; align-items: baseline; gap: 10px; margin: 17px 0 9px; color: #2b405d; }
 .section-title span { font-size: 14px; font-weight: 700; }
@@ -1705,11 +1829,16 @@ onBeforeUnmount(() => {
   .config-panel { padding: 12px 10px 4px; }
   .config-title { display: block; }
   .config-title small { display: block; margin-top: 3px; line-height: 1.5; }
+  .advanced-title { display: block; padding: 8px 0; }
+  .advanced-title small { display: block; margin-top: 3px; line-height: 1.4; }
   .config-panel :deep(.el-form-item) { width: 100%; margin-right: 0; }
   .config-panel :deep(.el-form-item__content) { flex-wrap: wrap; }
   .action-bar :deep(.el-form-item__content) { justify-content: flex-start; gap: 6px; }
   .cell-h { align-items: flex-start; flex-direction: column; }
   .cell-h-meta { white-space: normal; line-height: 1.5; }
+  .runtime-flight__head { align-items: flex-start; }
+  .runtime-flight__head > div { display: block; }
+  .runtime-flight__head span { display: block; margin-top: 3px; line-height: 1.4; }
   .guide-alerts { grid-template-columns: 1fr; }
 }
 </style>
