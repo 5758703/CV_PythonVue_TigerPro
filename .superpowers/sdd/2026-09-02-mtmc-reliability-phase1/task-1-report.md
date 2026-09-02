@@ -108,3 +108,42 @@ pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q
 ### Review-fix commit
 
 `b55b0e8f5e506e3cc257ed2bd35ee3741289389d fix: isolate MTMC ReID prototype spaces`
+
+## Review-fix round 2
+
+### RED / GREEN evidence
+
+Before the second implementation pass, the focused runtime test reported five expected failures:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider
+10 passed, 5 failed
+```
+
+They proved that a below-threshold Youtu score was dropped before fusion, per-space versions were not accepted/preserved, extraction did not expose per-space versions, and a configured zero weight could suppress the only live backend. After the minimal fix:
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider
+15 passed in 0.47s
+
+pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q -p no:cacheprovider --basetemp .pytest-mtmc-tmp
+61 passed in 2.75s
+```
+
+### Finding resolution
+
+1. Gallery matching now retains the raw Top-1 candidate identity fields for every model space. `_match_gallery` aligns these by identity, fuses calibrated scores, and applies the configured threshold exactly once after fusion. The explicit `0.80 * 0.75 + 0.40 * 0.25 = 0.70` case at threshold `0.48` is covered.
+2. `modelVersionsBySpace` now flows from extraction into `TrackletBuilder`; its aggregation tuples retain `(model_key, dim, version)`, so same-key/same-dimension distinct asset versions remain separate through Global/Active Gallery input.
+3. Score weights are clamped to `[0, 1]`, normalized across available spaces, and forced to `1.0` for a sole live backend. Both `Strong=1/Youtu-only` and `Strong=0/Strong-only` cases are covered.
+
+### Changed files
+
+- `backend/services/mtmc_engine.py`
+- `backend/services/mtmc_tracklet.py`
+- `backend/services/reid_gallery.py`
+- `backend/services/strong_reid.py`
+- `backend/unittests/test_mtmc_reid_runtime.py`
+
+### Review-fix commit
+
+`748cc41eda00035d6769c4d7c089093a3597db91 fix: finalize MTMC ReID score fusion`
