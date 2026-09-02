@@ -201,3 +201,45 @@ pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q
 - Existing legacy registration rows remain intentionally unmatched by an
   explicitly versioned runtime query until they are re-enrolled. This is a
   deliberate fail-closed policy preventing cross-version prototype mixing.
+
+## Independent-review fix pass 1
+
+### RED / GREEN evidence
+
+```text
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider --basetemp .pytest-review-red
+22 passed, 7 failed
+
+pytest backend/unittests/test_mtmc_reid_runtime.py -q -p no:cacheprovider --basetemp .pytest-review-green
+29 passed in 0.71s
+
+pytest backend/unittests/test_mtmc.py backend/unittests/test_mtmc_tracklet.py -q -p no:cacheprovider --basetemp .pytest-review-regression
+61 passed in 2.64s
+```
+
+### Finding resolution
+
+1. Image recognition, Gallery search and video search now retain the resolved
+   ONNX filename from `extract_feature` and pass it to Gallery lookup as the
+   precise model version. Service-level regressions cover recognize and Top-K
+   search hits from versioned vectors.
+2. Association score maps and weight maps retain complete
+   `(model_key, dim, model_version)` keys. Same-key vectors from different
+   versions can no longer overwrite one another before fusion.
+3. Gallery failures are logged and surfaced in both item `galleryStatus` and
+   session `runtime.gallery`; processing remains available in degraded mode.
+4. Non-finite fusion weights use the safe `0.65` default consistently. Explicit
+   finite zero remains valid and out-of-range finite values remain bounded.
+
+### Changed files
+
+- `backend/inference.py`
+- `backend/services/mtmc_associator.py`
+- `backend/services/mtmc_engine.py`
+- `backend/unittests/test_mtmc_reid_runtime.py`
+
+### Concerns
+
+- The regression uses inference service entry points because importing the
+  Flask route stack requires the optional `flask_sqlalchemy` dependency that is
+  unavailable in this execution environment.

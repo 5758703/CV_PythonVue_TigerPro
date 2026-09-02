@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import sys
+import types
 
 from services import reid_gallery
 from services import strong_reid
@@ -350,3 +352,62 @@ def test_gallery_match_forwards_explicit_model_version(monkeypatch):
 
     assert result["personId"] == 1
     assert calls == [("clip-reid-person", "appearance", 2, "weights-v7")]
+
+
+@pytest.mark.parametrize("raw", [float("nan"), float("inf"), float("-inf"), "nan"])
+def test_fuse_weight_non_finite_values_use_safe_default(raw):
+    assert mtmc_engine.normalize_fuse_weight_strong(raw) == 0.65
+
+
+def test_association_score_fusion_keeps_full_versioned_space_keys():
+    scores = {
+        ("clip-reid-person", 2, "v1"): 0.9,
+        ("clip-reid-person", 2, "v2"): 0.1,
+    }
+    result = MtmcAssociator._fuse_space_scores(scores, {"clip-reid-person": 1.0})
+    assert result == pytest.approx(0.5)
+
+
+def test_gallery_failure_is_structured_and_visible_in_runtime():
+    class Session:
+        def __init__(self):
+            self.runtime_status = {}
+
+    session = Session()
+    meta = {}
+    mtmc_engine._record_gallery_failure(session, meta, RuntimeError("index corrupt"))
+
+    assert meta["gallery"] == {"ready": False, "degraded": True, "error": "index corrupt"}
+    assert session.runtime_status["gallery"] == {
+        "ready": False, "degraded": True, "error": "index corrupt", "errorCount": 1,
+    }
+
+
+def test_recognize_and_search_forward_extracted_onnx_version(monkeypatch):
+    import inference
+    import person_reid_dnn
+
+    image = np.zeros((8, 4, 3), dtype=np.uint8)
+    monkeypatch.setattr(inference, "_decode_bgr", lambda _raw: image)
+    monkeypatch.setattr(
+        person_reid_dnn, "extract_feature",
+        lambda _root, _crop: (np.array([1.0, 0.0]), {"onnx": "person_reid_v7.onnx", "backend": "fake"}),
+    )
+    calls = []
+    monkeypatch.setattr(
+        reid_gallery, "match_embedding",
+        lambda emb, key, threshold, model_version=None: calls.append(("match", model_version)) or {
+            "personId": 1, "name": "Ada", "score": 1.0, "matched": True,
+        },
+    )
+    monkeypatch.setattr(
+        reid_gallery, "topk_match",
+        lambda emb, key, topk, model_version=None: calls.append(("topk", model_version)) or [{"personId": 1}],
+    )
+
+    recognized = inference.recognize_persons("root", "youtu", b"image", draw=False)
+    searched = inference.search_reid_gallery("root", "youtu", b"image")
+
+    assert recognized["detections"][0]["personId"] == 1
+    assert searched["matches"][0]["personId"] == 1
+    assert calls == [("match", "person_reid_v7.onnx"), ("topk", "person_reid_v7.onnx")]

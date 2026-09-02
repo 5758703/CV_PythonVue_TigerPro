@@ -5399,6 +5399,11 @@ def extract_reid_embedding(reid_root: str, image_bytes: bytes, *, full_body: boo
     return emb, img, meta
 
 
+def _reid_model_version(meta: dict | None) -> str | None:
+    value = (meta or {}).get("modelVersion") or (meta or {}).get("onnx")
+    return str(value).strip() if value else None
+
+
 def recognize_persons(
     reid_root: str,
     reid_model_key: str,
@@ -5503,7 +5508,10 @@ def recognize_persons(
                 try:
                     feat, _meta = extract_feature(reid_root, crop)
                     emb = l2_normalize(np.asarray(feat, dtype=np.float32))
-                    m = match_embedding(emb, reid_model_key, threshold=threshold)
+                    m = match_embedding(
+                        emb, reid_model_key, threshold=threshold,
+                        model_version=_reid_model_version(_meta),
+                    )
                     det.update({
                         "personId": m.get("personId"),
                         "facePersonId": m.get("facePersonId"),
@@ -5581,7 +5589,10 @@ def search_reid_gallery(
                 crop = c
     feat, meta = extract_feature(reid_root, crop)
     emb = l2_normalize(np.asarray(feat, dtype=np.float32))
-    hits = topk_match(emb, reid_model_key, topk=topk)
+    hits = topk_match(
+        emb, reid_model_key, topk=topk,
+        model_version=_reid_model_version(meta),
+    )
     return {
         "matches": hits,
         "count": len(hits),
@@ -5622,7 +5633,7 @@ def search_reid_in_video(
             c = _crop_person(img_q, best["bbox"])
             if c is not None:
                 crop_q = c
-    feat_q, _ = extract_feature(reid_root, crop_q)
+    feat_q, _query_meta = extract_feature(reid_root, crop_q)
     q_emb = l2_normalize(np.asarray(feat_q, dtype=np.float32))
 
     cap = cv2.VideoCapture(video_path)
@@ -5655,7 +5666,7 @@ def search_reid_in_video(
             if crop is None:
                 continue
             try:
-                feat, _ = extract_feature(reid_root, crop)
+                feat, frame_meta = extract_feature(reid_root, crop)
                 emb = l2_normalize(np.asarray(feat, dtype=np.float32))
                 score = float(np.dot(q_emb, emb))
             except Exception:  # noqa: BLE001
@@ -5664,7 +5675,10 @@ def search_reid_in_video(
                 continue
             # 可选：若命中底库也带上名字
             from services.reid_gallery import match_embedding
-            m = match_embedding(emb, reid_model_key, threshold=threshold)
+            m = match_embedding(
+                emb, reid_model_key, threshold=threshold,
+                model_version=_reid_model_version(frame_meta),
+            )
             hits.append({
                 "frameIndex": frame_idx,
                 "timeSec": round(t_sec, 2),

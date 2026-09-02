@@ -325,6 +325,7 @@ class MtmcSession:
             "vehicles": 0,
             "errors": 0,
         }
+        self.runtime_status: dict[str, dict] = {}
         self.cross_events: list[dict] = []
         self._global_last_cam: dict[str, int] = {}
         self._global_last_seen_ts: dict[str, float] = {}
@@ -361,6 +362,7 @@ class MtmcSession:
             "crossEvents": self.cross_events[-50:],
             "createdAt": self.created_at,
             "stats": dict(self.stats),
+            "runtime": dict(self.runtime_status),
             "globals": self.associator.snapshot(),
             "recentEvents": self.events[-50:],
             "recentPasses": self.passes[-50:],
@@ -822,7 +824,10 @@ def normalize_fuse_weight_strong(value, default: float = 0.65) -> float:
     """Preserve an explicit zero while keeping the public configuration bounded."""
     raw = default if value is None else value
     try:
-        return float(np.clip(float(raw), 0.0, 1.0))
+        parsed = float(raw)
+        if not np.isfinite(parsed):
+            return float(default)
+        return float(np.clip(parsed, 0.0, 1.0))
     except (TypeError, ValueError):
         return float(default)
 
@@ -900,6 +905,29 @@ def _match_gallery(
             "scoreByModelKey": dict(scores),
         }
     return best
+
+
+def _record_gallery_failure(session, meta: dict, error: Exception) -> None:
+    detail = {"ready": False, "degraded": True, "error": str(error)}
+    meta["gallery"] = detail
+    runtime = getattr(session, "runtime_status", None)
+    if runtime is None:
+        runtime = {}
+        session.runtime_status = runtime
+    previous = dict(runtime.get("gallery") or {})
+    runtime["gallery"] = {**detail, "errorCount": int(previous.get("errorCount") or 0) + 1}
+    log.warning("mtmc_gallery_degraded error=%s", error)
+
+
+def _record_gallery_ready(session, meta: dict) -> None:
+    detail = {"ready": True, "degraded": False, "error": None}
+    meta["gallery"] = detail
+    runtime = getattr(session, "runtime_status", None)
+    if runtime is None:
+        runtime = {}
+        session.runtime_status = runtime
+    previous = dict(runtime.get("gallery") or {})
+    runtime["gallery"] = {**detail, "errorCount": int(previous.get("errorCount") or 0)}
 
 
 def _speed_from_trail(trail, meters_per_pixel: float, fps: float) -> float | None:
@@ -1649,8 +1677,9 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                                 if key in gallery_embeddings
                             },
                         )
-                    except Exception:  # noqa: BLE001
-                        pass
+                        _record_gallery_ready(session, meta)
+                    except Exception as e:  # noqa: BLE001
+                        _record_gallery_failure(session, meta, e)
             builder.add_observation(
                 bbox=t.bbox,
                 conf=t.conf,
@@ -1714,6 +1743,7 @@ def _process_frame(session: MtmcSession, cam_state: CamState, frame, hub_meta: d
                     "availableModelSpaces": meta.get("availableModelSpaces", []),
                     "associationModelKey": meta.get("associationModelKey"),
                     "galleryModelKey": gallery.get("modelKey"),
+                    "galleryStatus": meta.get("gallery"),
                     "cameraId": cam_id,
                     "assocMode": getattr(g, "last_assoc_mode", None) if g else None,
                     "reidSkipped": not need_reid,

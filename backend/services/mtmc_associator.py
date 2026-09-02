@@ -152,6 +152,16 @@ class AssocEvidence:
 class MtmcAssociator:
     """跨摄像头全局关联（McByte++：短时粘性 / 长时选择性 ReID）。"""
 
+    @staticmethod
+    def _fuse_space_scores(scores: dict[tuple[str, int, str | None], float], weights: dict | None) -> float | None:
+        """Fuse scores while retaining the complete model-space identity."""
+        raw_weights = dict(weights or {})
+        space_weights = {
+            space: raw_weights.get(space, raw_weights.get(space[0], 1.0))
+            for space in scores
+        }
+        return fuse_similarity_scores(scores, space_weights)
+
     def __init__(
         self,
         *,
@@ -659,20 +669,21 @@ class MtmcAssociator:
             return None, {"topology": topo_w, "time": time_w, "reid": None, "final": None}
 
         same_cam = g.camera_id == camera_id
-        per_space_scores: dict[str, float] = {}
-        per_space_cross: dict[str, float] = {}
+        per_space_scores: dict[tuple[str, int, str | None], float] = {}
+        per_space_cross: dict[tuple[str, int, str | None], float] = {}
         for (model_key, _dim, model_version), vector in (embedding_spaces or {}).items():
-            prototype = g.embedding_spaces.get((model_key, int(vector.size), model_version))
+            space = (model_key, int(vector.size), model_version)
+            prototype = g.embedding_spaces.get(space)
             if prototype is not None:
-                per_space_scores[model_key] = _cos(vector, prototype)
+                per_space_scores[space] = _cos(vector, prototype)
             cross = self._gallery.max_similarity(
                 object_type, g.global_id, vector, exclude_camera_id=camera_id,
                 model_key=model_key, model_version=model_version,
             )
             if cross >= 0:
-                per_space_cross[model_key] = cross
-        centroid_cos = fuse_similarity_scores(per_space_scores, score_weights or {key: 1.0 for key in per_space_scores})
-        cross_proto = fuse_similarity_scores(per_space_cross, score_weights or {key: 1.0 for key in per_space_cross})
+                per_space_cross[space] = cross
+        centroid_cos = self._fuse_space_scores(per_space_scores, score_weights)
+        cross_proto = self._fuse_space_scores(per_space_cross, score_weights)
         centroid_cos = float(centroid_cos) if centroid_cos is not None else -1.0
         cross_proto = float(cross_proto) if cross_proto is not None else -1.0
 
