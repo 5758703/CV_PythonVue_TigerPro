@@ -152,7 +152,12 @@ python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
 
 启动时自动：建表 → 轻量迁移 → 写种子（默认账号 admin/admin123、tiger/123456；RBAC 菜单；示例模型）。
 
-健康检查：`GET http://127.0.0.1:5001/api/health` → `{"code":0,"message":"ok"}`。
+健康检查：`GET http://127.0.0.1:5001/api/health` → 返回 `{"status":"ok","code":0,"message":"ok"}`（HTTP 200，不加载任何重模型 / 推理库）。
+
+```bash
+curl http://127.0.0.1:5001/api/health
+# {"status":"ok","code":0,"message":"ok"}
+```
 
 单独初始化种子（可选）：`python seed.py`。
 

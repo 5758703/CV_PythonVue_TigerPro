@@ -22,7 +22,7 @@ def create_app():
 
     @app.get("/api/health")
     def health():
-        return jsonify(code=0, message="ok")
+        return jsonify(status="ok", code=0, message="ok")
 
     # JWT 异常 -> 统一 JSON
     @jwt.unauthorized_loader
