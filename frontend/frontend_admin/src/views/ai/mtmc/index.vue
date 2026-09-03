@@ -287,7 +287,7 @@
               <strong>运行飞行记录器</strong>
               <span>展示实际启用模型与有效策略，不以配置意图代替运行结果</span>
             </div>
-            <el-tag :type="runtimeOverallTone" effect="dark">{{ runtimeOverallLabel }}</el-tag>
+            <el-tag class="runtime-overall-tag" :type="runtimeOverallTone" effect="dark">{{ runtimeOverallLabel }}</el-tag>
           </header>
           <el-alert
             v-if="runtimeRiskText"
@@ -1708,7 +1708,9 @@ onBeforeUnmount(() => {
 .runtime-flight__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; color: #eaf3ff; background: #18304f; }
 .runtime-flight__head > div { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .runtime-flight__head strong { font-size: 14px; letter-spacing: .3px; }
-.runtime-flight__head span { color: #9fb5d1; font-size: 11px; }
+.runtime-flight__head > div > span { color: #b8c9df; font-size: 11px; }
+.runtime-overall-tag { flex: 0 0 auto; font-weight: 700; letter-spacing: .4px; box-shadow: 0 0 0 3px rgba(255,255,255,.08), 0 4px 12px rgba(4,18,36,.24); }
+.runtime-overall-tag.el-tag--success { --el-tag-bg-color: #20b978; --el-tag-border-color: #51d59b; --el-tag-text-color: #fff; }
 .runtime-risk { border-radius: 0; }
 .runtime-models { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; padding: 12px 14px; }
 .runtime-model { min-width: 0; padding: 10px 11px; border: 1px solid #dfe7f2; border-left: 3px solid #8a9aaf; border-radius: 7px; background: #fff; }
