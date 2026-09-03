@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+from flask import Flask, has_app_context
 
 from services.mtmc_associator import MtmcAssociator
 from services import mtmc_engine
@@ -277,6 +278,24 @@ def test_source_resolution_error_flushes_pending_tracklets():
         mtmc_engine._cam_worker(session, camera, "uploads")
 
     assert not cam_state.vehicle_builders
+
+
+def test_camera_worker_runs_gallery_work_inside_flask_application_context():
+    session, _cam_state = _session(person=True, vehicle=False)
+    session.app = Flask("mtmc-worker-context-test")
+    camera = SimpleNamespace(id=1, source_type="rtsp")
+    observed = []
+
+    def run_worker(_session, _camera, _upload_folder):
+        observed.append(has_app_context())
+
+    with (
+        patch("services.mtmc_engine._cam_worker_run", side_effect=run_worker),
+        patch("services.mtmc_engine._flush_camera_tracklets"),
+    ):
+        mtmc_engine._cam_worker(session, camera, "uploads")
+
+    assert observed == [True]
 
 
 def test_configured_gallery_space_missing_is_structured_and_degraded():

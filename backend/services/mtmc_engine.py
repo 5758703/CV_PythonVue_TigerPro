@@ -11,6 +11,7 @@ import os
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
@@ -3499,10 +3500,12 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
 
 def _cam_worker(session: MtmcSession, camera_row, upload_folder: str):
     cam_state = session.cams[int(camera_row.id)]
-    try:
-        _cam_worker_run(session, camera_row, upload_folder)
-    finally:
-        _flush_camera_tracklets(session, cam_state)
+    app_context = session.app.app_context() if session.app is not None else nullcontext()
+    with app_context:
+        try:
+            _cam_worker_run(session, camera_row, upload_folder)
+        finally:
+            _flush_camera_tracklets(session, cam_state)
 
 
 def _cam_worker_run(session: MtmcSession, camera_row, upload_folder: str):
