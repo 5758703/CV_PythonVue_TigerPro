@@ -309,6 +309,7 @@ import { pipelineApi } from '../../../api/pipeline'
 import PipelineNode from './PipelineNode.vue'
 import PipelineEdge from './PipelineEdge.vue'
 import { defaultHandlesForMeta, applyAutoRouteHandles } from './handleGeometry'
+import { applyNodeConfig } from './pipelineGraphState'
 
 const router = useRouter()
 const { screenToFlowCoordinate, updateNodeInternals } = useVueFlow({ id: 'eva-pipeline' })
@@ -569,10 +570,9 @@ function syncCameraIntoGraph() {
 
 function applyEditConfig() {
   if (!selectedId.value) return
-  nodes.value = nodes.value.map((n) => {
-    if (n.id !== selectedId.value) return n
-    return { ...n, data: { ...n.data, config: { ...editConfig } } }
-  })
+  const result = applyNodeConfig(nodes.value, selectedId.value, editConfig, form.cameraId)
+  nodes.value = result.nodes
+  form.cameraId = result.cameraId
 }
 
 function applyRuleIds() {
