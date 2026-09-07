@@ -1024,6 +1024,16 @@ def seed_ai_models():
         ),
         status="0",
     ))
+    created |= _ensure_ai_model("yolov8n-mobile-phone", dict(
+        model_name="手机使用检测（YOLOv8n）", category="安防检测",
+        task="object-detection", library="ultralytics", version="v8n",
+        source_url="https://huggingface.co/IndUSV/yolov8n-mobile-phone#pytorch_model.bin",
+        description=(
+            "YOLOv8n 手机目标检测模型（类别 mobile_phone），适合图片、视频与摄像头中的手机使用预警。"
+            "该模型只检测手机目标；打电话行为需结合画面位置与连续帧人工复核。推荐 imgsz=640、conf≥0.35。"
+        ),
+        status="0",
+    ))
     created |= _ensure_ai_model("ppe-detection", dict(
         model_name="PPE穿戴识别", category="安全防护",
         task="object-detection", library="ultralytics", version="v1",
@@ -2346,6 +2356,30 @@ def seed_alert_rules():
         "message_template": "立即核实现场并劝离；保存录像留证，必要时联动安保处置。",
         "overlay": smoking_overlay,
     }
+    phone_overlay = {
+        "enabled": True,
+        "priority": 4,
+        "fillColor": "#1677FF",
+        "borderColor": "#0958D9",
+        "textColor": "#FFFFFF",
+        "titleLines": ["PHONE USE"],
+        "subtitleLines": ["限制区域", "检测到手机使用"],
+        "panelWidthRatio": 0.72,
+        "panelHeightRatio": 0.36,
+        "opacity": 0.45,
+        "showTriangle": True,
+        "triangleFill": "#FFFFFF",
+        "triangleMark": "#0958D9",
+    }
+    phone_cfg = {
+        "classes": ["mobile_phone", "cellphone", "cell phone", "phone"],
+        "min_confidence": 0.35,
+        "consecutive_frames": 3,
+        "cooldown_sec": 45,
+        "title_template": "手机使用告警：检测到 {classes}",
+        "message_template": "请核实现场是否正在打电话或违规使用手机；保存录像留证并按管理制度处置。",
+        "overlay": phone_overlay,
+    }
     defaults = [
         dict(
             rule_key="fire-smoke",
@@ -2419,6 +2453,15 @@ def seed_alert_rules():
             severity="high",
             status="1",
         ),
+        dict(
+            rule_key="phone-use",
+            name="打电话/手机使用告警",
+            description="检测到 mobile_phone 等手机目标时触发（建议配合 yolov8n-mobile-phone 模型）",
+            rule_type="class_presence",
+            config_json=json.dumps(phone_cfg, ensure_ascii=False),
+            severity="high",
+            status="1",
+        ),
     ]
     created = False
     updated = False
@@ -2431,6 +2474,7 @@ def seed_alert_rules():
         "stranger-face": stranger_cfg,
         "fall-detection": fall_cfg,
         "smoking-detection": smoking_cfg,
+        "phone-use": phone_cfg,
     }
     for fields in defaults:
         existing = AlertRule.query.filter_by(rule_key=fields["rule_key"]).first()

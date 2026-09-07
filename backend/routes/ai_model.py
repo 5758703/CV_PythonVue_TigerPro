@@ -487,6 +487,25 @@ def _weight_hint_from_url(url):
 _WEIGHT_EXT = (".pt", ".onnx", ".pth")
 
 
+def _select_huggingface_weight(files, want=None, allow_ultralytics_bin=False):
+    candidates = [f for f in files if f.lower().endswith(_WEIGHT_EXT)]
+    if allow_ultralytics_bin:
+        candidates.extend(f for f in files if os.path.basename(f).lower() == "pytorch_model.bin")
+    if not candidates:
+        raise ValueError("仓库内未找到权重文件(.pt/.onnx/.pth)")
+    if want:
+        selected = next((f for f in candidates if os.path.basename(f).lower() == want.lower()), None)
+        if selected is None:
+            raise ValueError(f"仓库内未找到指定权重文件：{want}")
+    else:
+        candidates.sort(key=lambda f: (not f.lower().endswith("best.pt"), len(f)))
+        selected = candidates[0]
+    local_name = os.path.basename(selected)
+    if allow_ultralytics_bin and local_name.lower() == "pytorch_model.bin":
+        local_name = "pytorch_model.pt"
+    return selected, local_name
+
+
 def _pick_local_weight(folder):
     """从已下载目录里挑单文件权重（优先 best.pt，其次 .pt > .pth > .onnx，再路径最短）。"""
     cands = []
@@ -616,7 +635,7 @@ def _resolve_detect_runtime(m):
     raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
 
 
-def _fetch_huggingface(repo_id, folder, sub, is_dir_model, want=None):
+def _fetch_huggingface(repo_id, folder, sub, is_dir_model, want=None, allow_ultralytics_bin=False):
     """从 HuggingFace 拉取权重，返回 (rel_path, size)。
 
     want：可选的目标权重文件名（来源链接锚点），单仓多权重时精确选取。
@@ -631,22 +650,11 @@ def _fetch_huggingface(repo_id, folder, sub, is_dir_model, want=None):
     # ultralytics：单文件权重(.pt/.onnx/.pth)
     from huggingface_hub import list_repo_files, hf_hub_download
     files = list_repo_files(repo_id, token=token)
-    pts = [f for f in files if f.lower().endswith(_WEIGHT_EXT)]
-    if not pts:
-        raise ValueError("仓库内未找到权重文件(.pt/.onnx/.pth)")
-    match = None
-    if want:
-        match = next((f for f in pts if os.path.basename(f).lower() == want.lower()), None)
-        if match is None:
-            raise ValueError(f"仓库内未找到指定权重文件：{want}")
-    if match:
-        filename = match
-    else:
-        pts.sort(key=lambda f: (not f.lower().endswith("best.pt"), len(f)))
-        filename = pts[0]
+    filename, dest_name = _select_huggingface_weight(
+        files, want=want, allow_ultralytics_bin=allow_ultralytics_bin,
+    )
     cached = hf_hub_download(repo_id=repo_id, filename=filename, token=token)
     _ensure_dir(folder)
-    dest_name = os.path.basename(filename)
     shutil.copy2(cached, os.path.join(folder, dest_name))
     return f"models/{sub}/{dest_name}", os.path.getsize(os.path.join(folder, dest_name))
 
@@ -976,7 +984,8 @@ def fetch_weight(mid):
                 else:
                     is_dir_model = lib != "ultralytics"
                     rel, size = _fetch_huggingface(
-                        repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url))
+                        repo_id, folder, sub, is_dir_model, want=_weight_hint_from_url(m.source_url),
+                        allow_ultralytics_bin=lib == "ultralytics")
     except Exception as e:  # noqa: BLE001  网络/仓库错误统一回传
         msg = str(e)
         low = msg.lower()

@@ -645,6 +645,7 @@ const openEdit = (row) => {
   const defaultPri = ({
     'fire-smoke': 0,
     'smoking-detection': 3,
+    'phone-use': 4,
     'ppe-no-hardhat': 5,
     'stranger-face': 8,
     'crowd-gathering': 10,
@@ -654,6 +655,7 @@ const openEdit = (row) => {
   const defaultFill = ({
     'fire-smoke': '#FF1A1A',
     'smoking-detection': '#FA541C',
+    'phone-use': '#1677FF',
     'ppe-no-hardhat': '#FF7A00',
     'stranger-face': '#409EFF',
     'crowd-gathering': '#FFD400',

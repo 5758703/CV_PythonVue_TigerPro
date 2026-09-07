@@ -9,6 +9,8 @@ export const ALERT_DETECT_LIBS = new Set(['ultralytics', 'rfdetr', 'transformers
 /** 种子/常用告警相关模型（优先展示） */
 export const ALERT_PREFERRED_KEYS = new Set([
   'fire-smoke-detection',
+  'yolo26-smoking-detection',
+  'yolov8n-mobile-phone',
   'ppe-detection',
   'yolo26n',
   'yolo26s',
