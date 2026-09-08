@@ -377,6 +377,7 @@ class MtmcAssociator:
         identity_key: str | None,
         vehicle_class: str | None = None,
         camera_id: int | None = None,
+        has_visual_evidence: bool = False,
         target: GlobalTrack,
     ) -> bool:
         """硬冲突：高置信车牌不一致时拒绝合并。
@@ -394,7 +395,7 @@ class MtmcAssociator:
             return True
         ik = _valid_identity_key(identity_key)
         g_ik = _valid_identity_key(target.identity_key)
-        if ik and g_ik and ik != g_ik:
+        if not has_visual_evidence and ik and g_ik and ik != g_ik:
             if ik.startswith("NOPLATE|") or g_ik.startswith("NOPLATE|"):
                 pass
             else:
@@ -405,6 +406,8 @@ class MtmcAssociator:
         p = (plate or "").strip().upper()
         gp = (target.plate or "").strip().upper()
         if (
+            not has_visual_evidence
+            and
             plate_reliable(p)
             and plate_reliable(gp)
             and p != gp
@@ -561,7 +564,10 @@ class MtmcAssociator:
                 )
         with self._lock:
             self.topology = topo
-            self._topology_loaded = True
+            # An empty DB result means that no transition policy has been
+            # configured.  Treating it as an authoritative empty allow-list
+            # silently rejected every cross-camera association.
+            self._topology_loaded = bool(topo)
 
     def _new_gid(self, object_type: str) -> str:
         self._seq += 1
@@ -1100,7 +1106,8 @@ class MtmcAssociator:
         ):
             if self._hard_conflict(
                 object_type, plate=plate, identity_key=identity_key,
-                vehicle_class=vehicle_class, camera_id=camera_id, target=g,
+                vehicle_class=vehicle_class, camera_id=camera_id,
+                has_visual_evidence=bool(embedding_spaces), target=g,
             ):
                 continue
             score, breakdown = self._score_long_term(
@@ -1343,66 +1350,10 @@ class MtmcAssociator:
                 if sticky_gid and sticky_gid not in excluded:
                     g = self.tracks.get(sticky_gid)
                     if g is not None and g.object_type == object_type:
+                        # A live local tracker ID is the authoritative
+                        # short-term identity. Appearance/class/OCR fluctuate
+                        # frame-to-frame and must not tear down that binding.
                         skip_sticky = False
-                        if (
-                            object_type == "vehicle"
-                            and embedding is not None
-                            and g.confirmed
-                            and self.vehicle_sticky_warmup_sec > 0
-                        ):
-                            bind_at = self._local_bind_at.get(bkey)
-                            if bind_at is not None and (now - bind_at) < self.vehicle_sticky_warmup_sec:
-                                skip_sticky = True
-                        if (
-                            not skip_sticky
-                            and object_type == "vehicle"
-                            and vc
-                        ):
-                            peer_cls = self._peer_vehicle_class(g, camera_id)
-                            if vehicle_class_conflict(vc, peer_cls):
-                                skip_sticky = True
-                        if (
-                            not skip_sticky
-                            and object_type == "vehicle"
-                            and embedding is not None
-                            and association_space is not None
-                        ):
-                            current_prototype = g.embedding_spaces.get(association_space)
-                            cur_cos = _cos(embedding, current_prototype)
-                            drift_need = max(0.40, self.vehicle_appear_thresh - 0.08)
-                            if cur_cos >= 0 and cur_cos < drift_need:
-                                skip_sticky = True
-                            elif (
-                                self.use_faiss_gallery
-                                and self._gallery.size(object_type) > 0
-                                and self._gallery.faiss_available()
-                            ):
-                                best_cross = -1.0
-                                for alt_gid, _sim, returned_space in self._gallery.search(
-                                    object_type, embedding, topk=12,
-                                    model_key=association_space[0],
-                                    model_version=association_space[2],
-                                    include_space=True,
-                                ):
-                                    if returned_space != association_space:
-                                        continue
-                                    if alt_gid == g.global_id:
-                                        continue
-                                    cp = self._gallery.max_similarity(
-                                        object_type,
-                                        alt_gid,
-                                        embedding,
-                                        exclude_camera_id=camera_id,
-                                        model_key=association_space[0],
-                                        model_version=association_space[2],
-                                    )
-                                    if cp > best_cross:
-                                        best_cross = cp
-                                if (
-                                    best_cross >= self.vehicle_appear_thresh
-                                    and best_cross > cur_cos + 0.06
-                                ):
-                                    skip_sticky = True
                         camera_state = g.camera_observations.get(int(camera_id))
                         sticky_last_observed = (
                             camera_state.last_observed_at if camera_state is not None else g.last_seen

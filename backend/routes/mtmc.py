@@ -98,6 +98,7 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         vehicle_appear_thresh=float(data.get("vehicleAppearThresh") or 0),
         confirm_thresh=float(data.get("confirmThresh") or 0),
         candidate_thresh=float(data.get("candidateThresh") or 0),
+        min_match_margin=float(data.get("minMatchMargin") or 0),
         use_faiss_gallery=_form_bool(data.get("useFaissGallery"), True),
         gallery_model_key=(data.get("galleryModelKey") or "").strip() or None,
         time_window_sec=float(data.get("timeWindowSec") or 90),

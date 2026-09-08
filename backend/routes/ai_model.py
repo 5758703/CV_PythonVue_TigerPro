@@ -269,16 +269,21 @@ def _abs_model_path(m):
 
 
 def _weight_variants(m):
-    """模型的 pt / onnx 权重文件绝对路径（互为兄弟文件）；均可为 None。"""
+    """模型的 pt / onnx / torchscript 等兄弟权重绝对路径；均可为 None。"""
     main = _abs_weight(m)
-    pt = onnx = None
+    pt = onnx = torchscript = None
+    openvino_dir = None
     if main:
         ext = os.path.splitext(main)[1].lower()
         if ext in (".pt", ".pth"):
             pt = main
         elif ext == ".onnx":
             onnx = main
+        elif ext == ".torchscript":
+            torchscript = main
         stem = os.path.splitext(main)[0]
+        parent = os.path.dirname(main)
+        base = os.path.basename(stem)
         if pt and os.path.isfile(stem + ".onnx"):
             onnx = stem + ".onnx"
         if onnx and pt is None:
@@ -286,7 +291,17 @@ def _weight_variants(m):
                 if os.path.isfile(stem + cand_ext):
                     pt = stem + cand_ext
                     break
-    return pt, onnx
+        if os.path.isfile(stem + ".torchscript"):
+            torchscript = stem + ".torchscript"
+        ov_cand = os.path.join(parent, f"{base}_openvino_model")
+        if os.path.isdir(ov_cand):
+            openvino_dir = ov_cand
+    return {
+        "pt": pt,
+        "onnx": onnx,
+        "torchscript": torchscript,
+        "openvino": openvino_dir,
+    }
 
 
 @ai_model_bp.get("/<int:mid>/download")
@@ -294,13 +309,13 @@ def _weight_variants(m):
 def download_weight(mid):
     """下载本地权重文件到浏览器（仅单文件权重，目录型 transformers 模型不支持）。
 
-    可选 ?ext=onnx|pt 指定下载哪种权重（默认主权重）。
+    可选 ?ext=onnx|pt|torchscript 指定下载哪种权重（默认主权重）。
     """
     m = AiModel.query.get_or_404(mid)
     ext = (request.args.get("ext") or "").strip().lower()
-    if ext in ("pt", "onnx"):
-        pt, onnx = _weight_variants(m)
-        abs_path = pt if ext == "pt" else onnx
+    if ext in ("pt", "onnx", "torchscript"):
+        variants = _weight_variants(m)
+        abs_path = variants.get(ext)
         if abs_path is None:
             return jsonify(code=400, message=f"该模型没有 .{ext} 权重文件"), 400
     else:
@@ -313,26 +328,40 @@ def download_weight(mid):
                      download_name=os.path.basename(abs_path))
 
 
-@ai_model_bp.get("/<int:mid>/weight-info")
-@permission_required("ai:model:query")
-def weight_info(mid):
-    """权重文件明细：pt / onnx 是否存在、文件名与大小（供转换对话框展示）。"""
-    m = AiModel.query.get_or_404(mid)
-    pt, onnx = _weight_variants(m)
-
-    def _item(p):
-        if not p:
-            return None
-        try:
+def _weight_item(p):
+    if not p:
+        return None
+    try:
+        if os.path.isdir(p):
+            size = _dir_size(p)
+        else:
             size = os.path.getsize(p)
-        except OSError:
-            size = 0
-        return {"name": os.path.basename(p), "size": size}
+    except OSError:
+        size = 0
+    return {"name": os.path.basename(p), "size": size, "isDir": os.path.isdir(p)}
 
+
+@ai_model_bp.get("/<int:mid>/weight-info")
+@permission_required("ai:model:list")
+def weight_info(mid):
+    """权重文件明细与可选目标格式（供转换对话框展示）。"""
+    from services.model_convert import list_formats
+
+    m = AiModel.query.get_or_404(mid)
+    variants = _weight_variants(m)
+    src_ext = None
+    if variants.get("pt"):
+        src_ext = os.path.splitext(variants["pt"])[1]
+    elif variants.get("onnx"):
+        src_ext = ".onnx"
     return jsonify(code=0, data={
         "library": _detect_lib(m),
-        "pt": _item(pt),
-        "onnx": _item(onnx),
+        "pt": _weight_item(variants.get("pt")),
+        "onnx": _weight_item(variants.get("onnx")),
+        "torchscript": _weight_item(variants.get("torchscript")),
+        "openvino": _weight_item(variants.get("openvino")),
+        "formats": list_formats(src_ext),
+        "filePath": m.file_path,
     })
 
 
@@ -340,41 +369,23 @@ _convert_jobs = {}
 _convert_jobs_lock = threading.Lock()
 
 
-def _convert_worker(job_id: str, pt_path: str, opts: dict):
-    """pt → onnx 导出线程：Ultralytics export（内部 eval + no_grad 冻结前向图）。"""
+def _convert_worker(job_id: str, src_path: str, target: str, out_dir: str, opts: dict):
+    """通用格式转换线程。"""
     t0 = time.time()
     try:
-        from inference import _disable_ultralytics_autoinstall
-        _disable_ultralytics_autoinstall()
-        from ultralytics import YOLO
+        from services.model_convert import convert_file
 
-        model = YOLO(pt_path)
-        out = model.export(
-            format="onnx",
-            imgsz=int(opts.get("imgsz") or 640),
-            half=bool(opts.get("half")),
-            dynamic=bool(opts.get("dynamic")),
-            simplify=True,
-            opset=int(opts.get("opset") or 12),
-            device="cpu",
-            verbose=False,
-        )
-        out_path = str(out)
-        if not (out_path and os.path.isfile(out_path)):
-            raise RuntimeError("导出未生成 onnx 文件")
-        # 再保险：若导出仍高于 19，降级一次以兼容旧 ORT
-        try:
-            from onnx_compat import ensure_compatible_onnx
-            out_path = ensure_compatible_onnx(out_path)
-        except Exception:  # noqa: BLE001
-            pass
+        result = convert_file(src_path, target, out_dir=out_dir, opts=opts)
         with _convert_jobs_lock:
             j = _convert_jobs.get(job_id)
             if j:
                 j.update({
                     "status": "done",
-                    "output": os.path.basename(out_path),
-                    "outputSize": os.path.getsize(out_path),
+                    "output": result.get("outputName"),
+                    "outputPath": result.get("output"),
+                    "outputSize": result.get("outputSize") or 0,
+                    "isDir": bool(result.get("isDir")),
+                    "target": target,
                     "elapsed": round(time.time() - t0, 1),
                 })
     except Exception as e:  # noqa: BLE001
@@ -384,45 +395,251 @@ def _convert_worker(job_id: str, pt_path: str, opts: dict):
                 j.update({"status": "error", "error": str(e), "elapsed": round(time.time() - t0, 1)})
 
 
+def _start_convert_job(src_path: str, target: str, out_dir: str, opts: dict, extra: dict | None = None):
+    job_id = uuid.uuid4().hex
+    meta = {
+        "status": "running",
+        "output": None,
+        "outputPath": None,
+        "outputSize": 0,
+        "isDir": False,
+        "error": None,
+        "elapsed": 0,
+        "target": target,
+        "srcName": os.path.basename(src_path),
+    }
+    if extra:
+        meta.update(extra)
+    with _convert_jobs_lock:
+        _convert_jobs[job_id] = meta
+    threading.Thread(
+        target=_convert_worker,
+        args=(job_id, src_path, target, out_dir, opts),
+        daemon=True,
+    ).start()
+    return job_id
+
+
+def _as_bool(val, default=False):
+    """解析 JSON / multipart 表单中的布尔值（避免 bool('false')==True）。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    s = str(val).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off", ""):
+        return False
+    return default
+
+
+def _parse_convert_opts(data: dict) -> dict:
+    dynamic = _as_bool(data.get("dynamic"))
+    try:
+        imgsz = int(data.get("imgsz") or 640)
+    except (TypeError, ValueError):
+        imgsz = 640
+    try:
+        opset = int(data.get("opset") or 12)
+    except (TypeError, ValueError):
+        opset = 12
+    return {
+        "imgsz": imgsz,
+        "half": _as_bool(data.get("half")) and not dynamic,
+        "dynamic": dynamic,
+        "simplify": _as_bool(data.get("simplify"), True),
+        "opset": opset,
+        "device": data.get("device") or "cpu",
+    }
+
+
+@ai_model_bp.get("/convert/formats")
+@permission_required("ai:model:list")
+def convert_formats():
+    """列出支持的模型格式转换路径。"""
+    from services.model_convert import list_formats
+
+    source = (request.args.get("source") or "").strip()
+    return jsonify(code=0, data=list_formats(source or None))
+
+
+@ai_model_bp.post("/convert")
+@permission_required("ai:model:edit")
+def convert_standalone():
+    """独立模型格式转换。
+
+    支持三种输入（优先级：upload > modelId > serverPath）：
+      - multipart 上传权重文件
+      - JSON/form: modelId 使用已纳管模型权重
+      - JSON/form: serverPath 相对 uploads/ 的路径
+
+    输出位置 outMode: sibling | converted | custom（customSubdir）
+    """
+    from services.model_convert import detect_source_ext, list_formats, resolve_out_dir
+
+    upload_file = request.files.get("file")
+    has_upload = upload_file is not None and bool(upload_file.filename)
+    data = request.form.to_dict() if (has_upload or request.form) else (request.get_json(silent=True) or {})
+    # multipart 时 JSON body 为空；纯 JSON 时 form 为空
+    if not data and not has_upload:
+        data = request.get_json(silent=True) or {}
+
+    target = (data.get("target") or "onnx").strip().lower()
+    out_mode = (data.get("outMode") or "sibling").strip().lower()
+    custom_subdir = (data.get("customSubdir") or data.get("outDir") or "").strip()
+
+    src_path = None
+    cleanup_src = False
+    model_id = data.get("modelId")
+    try:
+        model_id = int(model_id) if model_id not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify(code=400, message="modelId 无效"), 400
+
+    upload_root = current_app.config["UPLOAD_FOLDER"]
+    models_root = current_app.config["MODEL_FOLDER"]
+
+    if has_upload:
+        filename = secure_filename(upload_file.filename)
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in current_app.config.get("MODEL_ALLOWED_EXT", {".pt", ".pth", ".onnx"}):
+            return jsonify(code=400, message=f"不支持的文件类型: {ext}"), 400
+        tmp_dir = os.path.join(models_root, "_convert_upload")
+        _ensure_dir(tmp_dir)
+        src_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_{filename}")
+        upload_file.save(src_path)
+        cleanup_src = False  # 保留上传文件，转换结果可参考
+        if out_mode == "sibling":
+            out_mode = "converted"
+    elif model_id is not None:
+        m = AiModel.query.get_or_404(model_id)
+        variants = _weight_variants(m)
+        if target in ("openvino-from-onnx",) or (
+            target == "openvino" and not variants.get("pt") and variants.get("onnx")
+        ):
+            src_path = variants.get("onnx")
+            if target == "openvino" and src_path:
+                target = "openvino-from-onnx"
+        else:
+            src_path = variants.get("pt") or variants.get("onnx")
+        if not src_path:
+            return jsonify(code=400, message="该模型没有可用于转换的本地权重（需 .pt/.pth 或 .onnx）"), 400
+    else:
+        rel = (data.get("serverPath") or "").strip().replace("\\", "/")
+        if not rel:
+            return jsonify(code=400, message="请上传权重、选择模型或填写服务器路径"), 400
+        if ".." in rel.split("/"):
+            return jsonify(code=400, message="非法路径"), 400
+        cand = os.path.normpath(os.path.join(upload_root, rel))
+        if not cand.startswith(os.path.normpath(upload_root)):
+            return jsonify(code=400, message="路径必须位于 uploads 目录内"), 400
+        if not os.path.isfile(cand):
+            return jsonify(code=400, message="服务器路径不是有效文件"), 400
+        src_path = cand
+
+    src_ext = detect_source_ext(src_path)
+    allowed = {x["value"] for x in list_formats(src_ext)}
+    # openvino 对 pt 与 onnx 均合法
+    if target == "openvino" and src_ext == ".onnx":
+        target = "openvino-from-onnx"
+    if target not in allowed and not (target == "openvino" and src_ext in (".pt", ".pth")):
+        return jsonify(
+            code=400,
+            message=f"源格式 {src_ext} 不支持转为 {target}，可选: {', '.join(sorted(allowed)) or '无'}",
+        ), 400
+
+    try:
+        out_dir = resolve_out_dir(
+            src_path,
+            mode=out_mode,
+            custom_subdir=custom_subdir,
+            models_root=models_root,
+        )
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+
+    opts = _parse_convert_opts(data)
+    job_id = _start_convert_job(
+        src_path, target, str(out_dir), opts,
+        extra={"cleanupSrc": cleanup_src, "outMode": out_mode},
+    )
+    return jsonify(code=0, message="转换任务已启动", data={"jobId": job_id})
+
+
+@ai_model_bp.get("/convert/progress/<job_id>")
+@permission_required("ai:model:list")
+def convert_standalone_progress(job_id):
+    with _convert_jobs_lock:
+        j = _convert_jobs.get(job_id)
+    if j is None:
+        return jsonify(code=404, message="任务不存在"), 404
+    return jsonify(code=0, data=j)
+
+
 @ai_model_bp.post("/<int:mid>/convert-weight")
 @permission_required("ai:model:edit")
 def convert_weight(mid):
-    """权重格式转换。当前支持 pt → onnx（Ultralytics export，输出与 pt 同目录同名 .onnx）。
+    """权重格式转换（模型列表内）。
 
-    onnx → pt 不支持：ONNX 是冻结的推理计算图，无法还原为可训练的 PyTorch checkpoint。
+    支持 pt → onnx / torchscript / openvino / ncnn / engine；onnx → openvino。
+    onnx → pt 不支持。
     """
+    from services.model_convert import list_formats, resolve_out_dir
+
     m = AiModel.query.get_or_404(mid)
     data = request.get_json(silent=True) or {}
     target = (data.get("target") or "onnx").strip().lower()
-    if target == "pt":
-        return jsonify(code=400, message="onnx → pt 不支持：ONNX 为冻结推理图，无法还原 PyTorch 训练权重；请使用原始 .pt"), 400
-    if target != "onnx":
-        return jsonify(code=400, message=f"不支持的目标格式：{target}"), 400
-    if _detect_lib(m) not in ("ultralytics", "yolo-master"):
-        return jsonify(code=400, message="仅 ultralytics / yolo-master（YOLO）模型支持 pt → onnx 转换"), 400
-    pt, onnx = _weight_variants(m)
-    if not pt:
-        return jsonify(code=400, message="该模型没有本地 .pt 权重，无法转换"), 400
+    if target in ("pt", "pth"):
+        return jsonify(
+            code=400,
+            message="onnx → pt 不支持：ONNX 为冻结推理图，无法还原 PyTorch 训练权重；请使用原始 .pt",
+        ), 400
 
-    job_id = uuid.uuid4().hex
-    with _convert_jobs_lock:
-        _convert_jobs[job_id] = {
-            "status": "running", "output": None, "outputSize": 0, "error": None, "elapsed": 0,
-            "existedBefore": bool(onnx),
-        }
-    dynamic = bool(data.get("dynamic"))
-    opts = {
-        "imgsz": data.get("imgsz") or 640,
-        # ONNX 导出 half 与 dynamic 互斥（ultralytics 限制），dynamic 时强制 FP32
-        "half": bool(data.get("half")) and not dynamic,
-        "dynamic": dynamic,
-    }
-    threading.Thread(target=_convert_worker, args=(job_id, pt, opts), daemon=True).start()
+    lib = _detect_lib(m)
+    variants = _weight_variants(m)
+    if target in ("openvino-from-onnx",) or (
+        target == "openvino" and not variants.get("pt") and variants.get("onnx")
+    ):
+        src = variants.get("onnx")
+        target = "openvino-from-onnx"
+    else:
+        src = variants.get("pt")
+        if lib not in ("ultralytics", "yolo-master") and target != "openvino-from-onnx":
+            return jsonify(code=400, message="仅 ultralytics / yolo-master（YOLO）模型支持 .pt 导出转换"), 400
+
+    if not src:
+        return jsonify(code=400, message="该模型没有可用于转换的本地权重"), 400
+
+    src_ext = os.path.splitext(src)[1].lower()
+    allowed = {x["value"] for x in list_formats(src_ext)}
+    if target not in allowed and not (target == "openvino" and src_ext in (".pt", ".pth")):
+        return jsonify(code=400, message=f"不支持的目标格式：{target}"), 400
+
+    out_mode = (data.get("outMode") or "sibling").strip().lower()
+    custom_subdir = (data.get("customSubdir") or data.get("outDir") or "").strip()
+    try:
+        out_dir = resolve_out_dir(
+            src,
+            mode=out_mode,
+            custom_subdir=custom_subdir,
+            models_root=current_app.config["MODEL_FOLDER"],
+        )
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
+
+    opts = _parse_convert_opts(data)
+    job_id = _start_convert_job(
+        src, target, str(out_dir), opts,
+        extra={"existedBefore": bool(variants.get("onnx")), "modelId": mid},
+    )
     return jsonify(code=0, message="转换任务已启动", data={"jobId": job_id})
 
 
 @ai_model_bp.get("/<int:mid>/convert-progress/<job_id>")
-@permission_required("ai:model:query")
+@permission_required("ai:model:list")
 def convert_progress(mid, job_id):
     with _convert_jobs_lock:
         j = _convert_jobs.get(job_id)

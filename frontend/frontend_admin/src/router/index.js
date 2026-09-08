@@ -12,7 +12,8 @@ const routes = [
     redirect: '/index',
     children: [
       { path: 'index', name: 'home', component: () => import('../views/Dashboard.vue'), meta: { title: '首页', icon: 'HomeFilled' } },
-      { path: 'ai/model', name: 'aiModel', component: () => import('../views/ai/model/index.vue'), meta: { title: '模型管理' } },
+      { path: 'ai/model/convert', name: 'aiModelConvert', component: () => import('../views/ai/model/convert.vue'), meta: { title: '模型转换' } },
+      { path: 'ai/model', name: 'aiModel', component: () => import('../views/ai/model/index.vue'), meta: { title: '模型列表' } },
       { path: 'ai/image', name: 'aiImage', component: () => import('../views/ai/image/index.vue'), meta: { title: '图片检测' } },
       { path: 'ai/video', name: 'aiVideo', component: () => import('../views/ai/video/index.vue'), meta: { title: '视频检测' } },
       { path: 'ai/track', name: 'aiTrack', component: () => import('../views/ai/track/index.vue'), meta: { title: '目标追踪' } },

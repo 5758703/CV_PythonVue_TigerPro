@@ -76,7 +76,7 @@
             <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath" @click="openTest(row)">测试</el-button>
             <el-button v-if="canDownloadWeight(row)" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
             <el-button v-if="canFetchWeight(row)" v-permission="'ai:model:add'" link type="warning" :icon="Download" :loading="fetchingId === row.id" @click="fetchWeight(row)">{{ row.filePath ? "重新拉取" : "拉取权重" }}</el-button>
-            <el-button v-if="row.filePath && ['ultralytics', 'yolo-master'].includes(row.library)" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
+            <el-button v-if="canConvertRow(row)" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
             <el-button v-permission="'ai:model:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-permission="'ai:model:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
@@ -113,7 +113,7 @@
     </el-card>
 
     <!-- 权重格式转换 -->
-    <el-dialog v-model="convDialog" :title="`权重转换 · ${convModel.modelName}`" width="540px" @closed="stopConvTimer">
+    <el-dialog v-model="convDialog" :title="`权重转换 · ${convModel.modelName}`" width="580px" @closed="stopConvTimer">
       <div v-loading="convInfoLoading">
         <div class="conv-row">
           <span class="conv-label">PyTorch (.pt)</span>
@@ -133,9 +133,47 @@
           </template>
           <el-tag v-else type="info" size="small">无</el-tag>
         </div>
+        <div class="conv-row">
+          <span class="conv-label">TorchScript</span>
+          <template v-if="convInfo.torchscript">
+            <el-tag type="success" size="small">{{ convInfo.torchscript.name }}</el-tag>
+            <span class="conv-size">{{ fmtSize(convInfo.torchscript.size) }}</span>
+            <el-button link type="primary" size="small" @click="downloadVariant('torchscript')">下载</el-button>
+          </template>
+          <el-tag v-else type="info" size="small">无</el-tag>
+        </div>
+        <div class="conv-row">
+          <span class="conv-label">OpenVINO</span>
+          <template v-if="convInfo.openvino">
+            <el-tag type="success" size="small">{{ convInfo.openvino.name }}</el-tag>
+            <span class="conv-size">{{ fmtSize(convInfo.openvino.size) }}</span>
+          </template>
+          <el-tag v-else type="info" size="small">无</el-tag>
+        </div>
 
-        <el-divider content-position="left">pt → onnx 导出参数</el-divider>
+        <el-divider content-position="left">转换参数</el-divider>
         <el-form label-width="130px" size="small" :disabled="convRunning" @submit.prevent>
+          <el-form-item label="目标格式">
+            <el-select v-model="convOpts.target" style="width: 220px">
+              <el-option
+                v-for="f in convFormats"
+                :key="f.value"
+                :label="f.label + (f.recommended ? '（推荐）' : '')"
+                :value="f.value"
+              />
+            </el-select>
+            <div v-if="convTargetNote" class="conv-hint block">{{ convTargetNote }}</div>
+          </el-form-item>
+          <el-form-item label="输出位置">
+            <el-radio-group v-model="convOpts.outMode">
+              <el-radio value="sibling">同目录</el-radio>
+              <el-radio value="converted">_converted/</el-radio>
+              <el-radio value="custom">自定义</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="convOpts.outMode === 'custom'" label="子目录">
+            <el-input v-model="convOpts.customSubdir" placeholder="相对 models/，如 exports/yolo" />
+          </el-form-item>
           <el-form-item label="输入尺寸 imgsz">
             <el-input-number v-model="convOpts.imgsz" :min="320" :max="1280" :step="32" />
           </el-form-item>
@@ -150,14 +188,19 @@
         </el-form>
 
         <el-alert
-          v-if="convInfo.onnx && !convDone && !convRunning"
+          v-if="convOpts.target === 'onnx' && convInfo.onnx && !convDone && !convRunning"
           type="info" :closable="false" show-icon class="conv-alert"
           title="已存在 onnx 权重，再次转换将覆盖导出"
         />
         <el-alert
-          v-if="!convInfo.pt && !convInfoLoading"
+          v-if="!convInfo.pt && convInfo.onnx && !convInfoLoading"
           type="warning" :closable="false" show-icon class="conv-alert"
-          title="该模型只有 onnx 权重。onnx → pt 不支持：ONNX 是冻结的推理计算图，无法还原为可训练的 PyTorch 权重。"
+          title="该模型只有 onnx 权重，可转为 OpenVINO；无法还原为可训练的 .pt。"
+        />
+        <el-alert
+          v-if="!convInfo.pt && !convInfo.onnx && !convInfoLoading"
+          type="warning" :closable="false" show-icon class="conv-alert"
+          title="未找到可转换的 .pt / .onnx 权重。"
         />
         <div v-if="convRunning" class="conv-running">
           <el-progress :percentage="100" :indeterminate="true" :duration="2.5" :show-text="false" />
@@ -167,13 +210,13 @@
         <el-alert
           v-if="convDone"
           type="success" :closable="false" show-icon class="conv-alert"
-          :title="`已生成 ${convOutput}（${fmtSize(convOutputSize)}）。检测/追踪将自动优先使用 ONNX Runtime 推理。`"
+          :title="`已生成 ${convOutput}（${fmtSize(convOutputSize)}）。${convOpts.target === 'onnx' ? '检测/追踪将自动优先使用 ONNX Runtime 推理。' : ''}`"
         />
       </div>
       <template #footer>
         <el-button @click="convDialog = false">关闭</el-button>
-        <el-button type="primary" :disabled="!convInfo.pt" :loading="convRunning" @click="startConvert">
-          {{ convRunning ? '转换中…' : 'pt → onnx 转换' }}
+        <el-button type="primary" :disabled="!canConvert" :loading="convRunning" @click="startConvert">
+          {{ convRunning ? '转换中…' : convertBtnLabel }}
         </el-button>
       </template>
     </el-dialog>
@@ -624,12 +667,20 @@ const fetchWeight = async (row) => {
   }
 };
 
-// ---------------- 权重格式转换（pt → onnx）
+// ---------------- 权重格式转换（多格式）
 const convDialog = ref(false);
 const convInfoLoading = ref(false);
-const convInfo = reactive({ pt: null, onnx: null, library: "" });
-const convModel = reactive({ id: null, modelName: "" });
-const convOpts = reactive({ imgsz: 640, dynamic: false, half: false });
+const convInfo = reactive({ pt: null, onnx: null, torchscript: null, openvino: null, library: "" });
+const convFormats = ref([]);
+const convModel = reactive({ id: null, modelName: "", library: "" });
+const convOpts = reactive({
+  target: "onnx",
+  outMode: "sibling",
+  customSubdir: "",
+  imgsz: 640,
+  dynamic: false,
+  half: false,
+});
 const convRunning = ref(false);
 const convError = ref("");
 const convDone = ref(false);
@@ -637,6 +688,29 @@ const convOutput = ref("");
 const convOutputSize = ref(0);
 const convElapsed = ref(0);
 let convTimer = null;
+
+const canConvertRow = (row) =>
+  !!row.filePath && ["ultralytics", "yolo-master"].includes(row.library);
+
+const convTargetNote = computed(() => {
+  const f = convFormats.value.find((x) => x.value === convOpts.target);
+  return f?.note || "";
+});
+
+const canConvert = computed(() => {
+  if (!convFormats.value.length) return false;
+  if (convOpts.target === "openvino-from-onnx" || (convOpts.target === "openvino" && !convInfo.pt)) {
+    return !!convInfo.onnx;
+  }
+  return !!convInfo.pt;
+});
+
+const convertBtnLabel = computed(() => {
+  if (convRunning.value) return "转换中…";
+  const f = convFormats.value.find((x) => x.value === convOpts.target);
+  const src = convInfo.pt ? "pt" : "onnx";
+  return `${src} → ${f?.label || convOpts.target}`;
+});
 
 const stopConvTimer = () => {
   if (convTimer) clearInterval(convTimer);
@@ -649,7 +723,13 @@ const loadConvInfo = async () => {
     const res = await modelApi.weightInfo(convModel.id);
     convInfo.pt = res.data?.pt || null;
     convInfo.onnx = res.data?.onnx || null;
+    convInfo.torchscript = res.data?.torchscript || null;
+    convInfo.openvino = res.data?.openvino || null;
     convInfo.library = res.data?.library || "";
+    convFormats.value = res.data?.formats || [];
+    if (convFormats.value.length && !convFormats.value.some((f) => f.value === convOpts.target)) {
+      convOpts.target = convFormats.value.find((f) => f.recommended)?.value || convFormats.value[0].value;
+    }
   } finally {
     convInfoLoading.value = false;
   }
@@ -658,10 +738,14 @@ const loadConvInfo = async () => {
 const openConvert = async (row) => {
   convModel.id = row.id;
   convModel.modelName = row.modelName;
+  convModel.library = row.library;
   convError.value = "";
   convDone.value = false;
   convRunning.value = false;
   convElapsed.value = 0;
+  convOpts.target = "onnx";
+  convOpts.outMode = "sibling";
+  convOpts.customSubdir = "";
   convDialog.value = true;
   await loadConvInfo();
 };
@@ -672,7 +756,14 @@ const startConvert = async () => {
   convRunning.value = true;
   convElapsed.value = 0;
   try {
-    const res = await modelApi.convertWeight(convModel.id, { target: "onnx", ...convOpts });
+    const res = await modelApi.convertWeight(convModel.id, {
+      target: convOpts.target,
+      outMode: convOpts.outMode,
+      customSubdir: convOpts.customSubdir,
+      imgsz: convOpts.imgsz,
+      dynamic: convOpts.dynamic,
+      half: convOpts.half,
+    });
     const jobId = res.data?.jobId;
     if (!jobId) throw new Error("无 jobId");
     convTimer = setInterval(async () => {
@@ -708,7 +799,7 @@ const startConvert = async () => {
 
 const downloadVariant = async (ext) => {
   const info = convInfo[ext];
-  if (!info) return;
+  if (!info || info.isDir) return;
   const blob = await modelApi.download(convModel.id, ext);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -903,6 +994,7 @@ onBeforeUnmount(() => {
 .conv-label { width: 110px; font-size: 13px; color: #606266; flex: none; }
 .conv-size { font-size: 12px; color: #909399; }
 .conv-hint { margin-left: 10px; font-size: 12px; color: #a5b1c5; }
+.conv-hint.block { display: block; margin-left: 0; margin-top: 4px; }
 .conv-alert { margin-top: 8px; }
 .conv-running { margin-top: 10px; }
 .toolbar {

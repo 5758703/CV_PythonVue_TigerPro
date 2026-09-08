@@ -136,7 +136,7 @@ def _regroup_ai_menus():
 
 
 def _regroup_model_menus():
-    """「模型管理」升级为根级目录（与 AI智能识别 同级、排在其上方）：下挂模型列表(2010) + 模型训练(260)。"""
+    """「模型管理」升级为根级目录：下挂模型列表(2010) + 模型转换(2020) + 模型训练(260)。"""
     changed = False
     m201 = Menu.query.get(201)
     if not m201:
@@ -192,10 +192,32 @@ def _regroup_model_menus():
                 role.menus = list(role.menus) + [m2010]
                 changed = True
 
+    # 模型转换（权重格式互转）
+    m2020 = Menu.query.get(2020)
+    if m2020:
+        if (
+            m2020.parent_id != 201
+            or m2020.path != "/ai/model/convert"
+            or m2020.component != "ai/model/convert"
+            or m2020.order_num != 2
+        ):
+            m2020.parent_id = 201
+            m2020.path = "/ai/model/convert"
+            m2020.component = "ai/model/convert"
+            m2020.perms = m2020.perms or "ai:model:list"
+            m2020.order_num = 2
+            m2020.icon = m2020.icon or "Switch"
+            changed = True
+        for role in Role.query.all():
+            ids = {m.id for m in role.menus}
+            if 201 in ids and 2020 not in ids:
+                role.menus = list(role.menus) + [m2020]
+                changed = True
+
     m260 = Menu.query.get(260)
-    if m260 and m260.parent_id != 201:
+    if m260 and (m260.parent_id != 201 or m260.order_num != 3):
         m260.parent_id = 201
-        m260.order_num = 2
+        m260.order_num = 3
         changed = True
 
     # 根级排序：模型管理(0) → AI智能识别(1) → EVA流水编排(2) → 视频监控(3) → 系统管理(4)
@@ -597,10 +619,14 @@ def seed_ai_menus():
     if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
         _m250.icon = "Pouring"
         db.session.commit()
-    # 模型训练（模型管理目录 201 下，order=2）
+    # 模型转换（模型管理目录 201 下，order=2）
+    _ensure_ai_menu(2020, 201, "模型转换", "C", "ai:model:list",
+                    path="/ai/model/convert", component="ai/model/convert", icon="Switch",
+                    order=2, grant_common=True)
+    # 模型训练（模型管理目录 201 下，order=3）
     _ensure_ai_menu(260, 201, "模型训练", "C", "ai:training:list",
                     path="/ai/training", component="ai/training/index", icon="Cpu",
-                    order=2, grant_common=True)
+                    order=3, grant_common=True)
     _ensure_ai_menu(2601, 260, "训练查询", "F", "ai:training:query", grant_common=True)
     _ensure_ai_menu(2602, 260, "训练新增", "F", "ai:training:add")
     _ensure_ai_menu(2603, 260, "训练修改", "F", "ai:training:edit")

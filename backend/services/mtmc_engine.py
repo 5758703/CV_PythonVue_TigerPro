@@ -144,6 +144,7 @@ class MtmcConfig:
     vehicle_appear_thresh: float = 0.0
     confirm_thresh: float = 0.0
     candidate_thresh: float = 0.0
+    min_match_margin: float = 0.04
     use_faiss_gallery: bool = True
     gallery_model_key: str | None = None
     time_window_sec: float = 90.0
@@ -3614,6 +3615,7 @@ def start_session(
         candidate_thresh=cfg.candidate_thresh or None,
         use_faiss_gallery=bool(cfg.use_faiss_gallery),
         gallery_model_key=cfg.gallery_model_key,
+        min_match_margin=cfg.min_match_margin,
     )
     if topology_edges is not None:
         associator.set_topology(topology_edges)
