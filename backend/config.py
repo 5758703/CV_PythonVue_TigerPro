@@ -64,6 +64,21 @@ class Config:
         )
     except ValueError:
         SCENARIO_MAX_GALLERY_IMAGES = 32
+    try:
+        SCENARIO_MAX_MULTIPART_PARTS = max(
+            1, int(os.getenv("SCENARIO_MAX_MULTIPART_PARTS") or "40")
+        )
+    except ValueError:
+        SCENARIO_MAX_MULTIPART_PARTS = 40
+    try:
+        SCENARIO_MAX_FILES = max(1, int(os.getenv("SCENARIO_MAX_FILES") or "33"))
+    except ValueError:
+        SCENARIO_MAX_FILES = 33
+    try:
+        _scenario_max_request_mb = int(os.getenv("SCENARIO_MAX_REQUEST_MB") or "396")
+    except ValueError:
+        _scenario_max_request_mb = 396
+    SCENARIO_MAX_REQUEST_BYTES = max(1, _scenario_max_request_mb) * 1024 * 1024
 
     try:
         OPENAPI_SIGNATURE_MAX_AGE_SECONDS = max(

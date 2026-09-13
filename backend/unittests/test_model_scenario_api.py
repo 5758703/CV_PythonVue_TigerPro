@@ -382,7 +382,80 @@ def test_p2_plate_generic_training_base_is_never_reported_api_ready(
     assert detail["weightsPresent"] is True
     assert detail["apiReady"] is False
     assert detail["ready"] is False
-    assert detail["reason"] == "plate-specific training completion is not verified"
+    assert detail["reason"] == "plate-specific production manifest is missing or invalid"
+
+
+def test_p2_plate_valid_production_manifest_enables_the_verified_artifact(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    (weights / "p2-plate.pt").write_bytes(b"trained")
+    (weights / "production-manifest.json").write_text(
+        '{"modelKey":"yolo26n-p2-plate","task":"object-detection",'
+        '"trainingComplete":true,"classes":["license_plate"]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+    with client.application.app_context():
+        db.session.add(_model(
+            key="yolo26n-p2-plate", task="object-detection",
+            library="ultralytics", file_path="p2-plate.pt",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/yolo26n-p2-plate", headers=headers,
+    ))["data"]
+    assert detail["apiReady"] is True
+    assert detail["reason"] is None
+
+
+def test_p2_plate_renamed_base_requires_a_production_manifest(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    (weights / "custom-trained-looking.pt").write_bytes(b"unverified")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+
+    with client.application.app_context():
+        db.session.add(_model(
+            key="yolo26n-p2-plate", task="object-detection",
+            library="ultralytics", file_path="custom-trained-looking.pt",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/yolo26n-p2-plate", headers=headers,
+    ))["data"]
+    assert detail["apiReady"] is False
+    assert detail["reason"] == "plate-specific production manifest is missing or invalid"
+
+
+def test_efficientsam_rejects_an_arbitrary_large_onnx_file(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    (weights / "unrelated-large-model.onnx").write_bytes(b"x" * 100_001)
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+
+    with client.application.app_context():
+        db.session.add(_model(
+            key="efficient-sam", task="interactive-segmentation",
+            library="opencv-sam", file_path="unrelated-large-model.onnx",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/efficient-sam", headers=headers,
+    ))["data"]
+    assert detail["apiReady"] is False
+    assert detail["reason"] == "model weights are incompatible with scenario runtime"
 
 
 @pytest.mark.parametrize(

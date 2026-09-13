@@ -21,10 +21,12 @@ _SIGNATURE_HEADERS = [
         "required": True,
         "description": (
             "Lowercase HMAC-SHA256 hex using the raw API key. Canonical text is "
-            "METHOD\\nPATH_WITHOUT_QUERY\\nTIMESTAMP\\nNONCE\\nPAYLOAD_SHA256. "
-            "GET/HEAD hash empty bytes. For multipart, hash sorted newline-separated "
-            "form:<url-encoded-name>=<url-encoded-value> and "
-            "file:<url-encoded-field>:<sha256-file-bytes> lines."
+            "METHOD\\nNORMALIZED_PATH\\nNORMALIZED_QUERY\\nTIMESTAMP\\nNONCE\\n"
+            "CONTENT_TYPE\\nPAYLOAD_SHA256. Query pairs retain duplicates and are sorted "
+            "by RFC3986-encoded name/value. GET/HEAD hash empty bytes. Multipart payload "
+            "lines retain original part indexes/order: index:form:name=value or "
+            "index:file:field:safe-filename:part-content-type:sha256(file-bytes). "
+            "The multipart Content-Type is normalized without its boundary."
         ),
         "schema": {"type": "string", "pattern": "^(sha256=)?[0-9a-fA-F]{64}$"},
     },
@@ -207,7 +209,10 @@ OPENAPI_SPEC = {
                                     "box": {"type": "string", "description": "JSON [x1,y1,x2,y2]"},
                                     "mode": {"type": "string", "enum": ["prompt", "auto"]},
                                     "precision": {"type": "string", "enum": ["fp32", "int8"]},
-                                    "conf": {"type": "number", "minimum": 0, "maximum": 1},
+                                    "conf": {
+                                        "type": "number", "minimum": 0, "maximum": 1,
+                                        "description": "Detection/OBB only; segmentation rejects this field.",
+                                    },
                                     "imgsz": {
                                         "type": "integer", "minimum": 32, "maximum": 4096,
                                     },
@@ -239,7 +244,7 @@ OPENAPI_SPEC = {
                     "400": {"description": "Unavailable scenario or invalid input"},
                     "401": {"description": "Invalid credentials"},
                     "403": {"description": "Missing model-scenario:infer scope"},
-                    "413": {"description": "Configured upload limit exceeded"},
+                    "413": {"description": "Per-file, aggregate request, file-count, part-count, or pixel limit exceeded"},
                     "409": {"description": "Request nonce replayed"},
                     "429": _RATE_LIMIT_RESPONSE,
                     "500": {"description": "Sanitized inference failure"},

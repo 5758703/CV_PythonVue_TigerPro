@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import hmac
 import json
 from pathlib import Path
 from typing import Callable
@@ -84,8 +86,10 @@ _CONTRACTS = {
 }
 
 _MIN_DIRECTORY_ONNX_BYTES = 100_000
-_GENERIC_P2_BASE_NAMES = frozenset((
-    "yolo26n.pt", "yolo26n.pth", "yolo26n.onnx", "yolo26n.engine",
+_EFFICIENT_SAM_ONNX_NAMES = frozenset((
+    "image_segmentation_efficientsam_ti_2025april.onnx",
+    "image_segmentation_efficientsam_ti_2025april_int8.onnx",
+    "image_segmentation_efficientsam_ti_2024may.onnx",
 ))
 
 
@@ -119,16 +123,23 @@ def _compatible_weight(model_key: str, path: Path, extensions: frozenset[str]) -
             if item.suffix.lower() == ".onnx" and item.stat().st_size > _MIN_DIRECTORY_ONNX_BYTES
         ]
     if model_key == "efficient-sam":
-        preferred = [
-            item for item in candidates
-            if "image_segmentation_efficientsam" in item.name.lower()
+        candidates = [
+            item for item in candidates if item.name.lower() in _EFFICIENT_SAM_ONNX_NAMES
         ]
-        candidates = preferred or candidates
     return candidates[0] if candidates else None
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _training_marker_confirms_plate(weight_path: Path) -> bool:
     marker_paths = (
+        weight_path.parent / "production-manifest.json",
         weight_path.with_suffix(weight_path.suffix + ".scenario.json"),
         weight_path.with_suffix(".scenario.json"),
     )
@@ -139,12 +150,28 @@ def _training_marker_confirms_plate(weight_path: Path) -> bool:
             data = json.loads(marker.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, ValueError, TypeError):
             continue
-        if (
+        classes = data.get("classes")
+        normalized_classes = {
+            str(item).strip().lower().replace("-", "_") for item in classes
+        } if isinstance(classes, list) else set()
+        if not (
             data.get("modelKey") == "yolo26n-p2-plate"
+            and data.get("task") == "object-detection"
             and data.get("trainingComplete") is True
+            and normalized_classes.intersection(("plate", "license_plate"))
         ):
-            return True
-    return weight_path.name.lower() not in _GENERIC_P2_BASE_NAMES
+            continue
+        expected_hash = data.get("artifactSha256")
+        if expected_hash is not None:
+            if not isinstance(expected_hash, str) or len(expected_hash) != 64:
+                continue
+            try:
+                if not hmac.compare_digest(_sha256(weight_path), expected_hash.lower()):
+                    continue
+            except OSError:
+                continue
+        return True
+    return False
 
 
 def evaluate_scenario_contract(
@@ -172,9 +199,9 @@ def evaluate_scenario_contract(
         and all(runtime_probe(module) for module in contract["runtime"])
     )
 
-    if not scenario.get("published", False):
+    if scenario.get("published") is not True:
         return ScenarioContractResult(weights_present, runtime_available, False, "scenario is not published")
-    if not scenario.get("apiEnabled", False):
+    if scenario.get("apiEnabled") is not True:
         return ScenarioContractResult(weights_present, runtime_available, False, "scenario API is disabled")
     if not adapter_matches:
         return ScenarioContractResult(weights_present, runtime_available, False, "scenario adapter is not supported")
@@ -201,7 +228,7 @@ def evaluate_scenario_contract(
     if model_key == "yolo26n-p2-plate" and not _training_marker_confirms_plate(selected):
         return ScenarioContractResult(
             True, runtime_available, False,
-            "plate-specific training completion is not verified", selected,
+            "plate-specific production manifest is missing or invalid", selected,
         )
     if not runtime_available:
         return ScenarioContractResult(

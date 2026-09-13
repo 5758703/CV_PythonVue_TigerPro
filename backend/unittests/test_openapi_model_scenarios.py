@@ -1,10 +1,11 @@
 import io
 import hashlib
 import hmac
+import mimetypes
 import time
 import uuid
 from datetime import datetime, timedelta
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote
 
 import pytest
 from flask import Flask
@@ -34,6 +35,9 @@ def openapi_app():
         SCENARIO_MAX_PIXELS=100,
         SCENARIO_MAX_PROMPTS=2,
         SCENARIO_MAX_GALLERY_IMAGES=2,
+        SCENARIO_MAX_MULTIPART_PARTS=8,
+        SCENARIO_MAX_FILES=3,
+        SCENARIO_MAX_REQUEST_BYTES=2048,
         OPENAPI_SIGNATURE_MAX_AGE_SECONDS=300,
         TRUST_PROXY=False,
     )
@@ -94,18 +98,36 @@ def _assert_open_error(response, status, err_type):
     return payload
 
 
+def _normalized_query(path):
+    query = path.partition("?")[2]
+    pairs = parse_qsl(query, keep_blank_values=True)
+    encoded = [(quote(k, safe="-._~"), quote(v, safe="-._~")) for k, v in pairs]
+    return "&".join(f"{k}={v}" for k, v in sorted(encoded))
+
+
 def _multipart_payload_hash(data):
     lines = []
-    for field, value in (data or {}).items():
+    source_items = list((data or {}).items())
+    # Werkzeug's multipart encoder emits ordinary fields before file fields.
+    items = [item for item in source_items if not isinstance(item[1], tuple)]
+    items += [item for item in source_items if isinstance(item[1], tuple)]
+    for index, (field, value) in enumerate(items):
         if isinstance(value, tuple):
             stream = value[0]
             raw = stream.getvalue()
-            lines.append(f"file:{quote(field, safe='')}:{hashlib.sha256(raw).hexdigest()}")
+            filename = value[1]
+            content_type = value[2] if len(value) > 2 else (
+                mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            )
+            lines.append(
+                f"{index}:file:{quote(field, safe='')}:{quote(filename, safe='-._~')}:"
+                f"{content_type.lower()}:{hashlib.sha256(raw).hexdigest()}"
+            )
         else:
             lines.append(
-                f"form:{quote(str(field), safe='')}={quote(str(value), safe='')}"
+                f"{index}:form:{quote(str(field), safe='')}={quote(str(value), safe='-._~')}"
             )
-    canonical_payload = "\n".join(sorted(lines)).encode()
+    canonical_payload = "\n".join(lines).encode()
     return hashlib.sha256(canonical_payload).hexdigest()
 
 
@@ -126,7 +148,10 @@ def _signed_headers(
         body_hash = _multipart_payload_hash(data)
     else:
         body_hash = hashlib.sha256(b"").hexdigest()
-    canonical = f"{method.upper()}\n{request_path}\n{timestamp}\n{nonce}\n{body_hash}"
+    canonical = (
+        f"{method.upper()}\n{quote(request_path, safe='/-._~')}\n{_normalized_query(path)}\n"
+        f"{timestamp}\n{nonce}\n{'multipart/form-data' if data is not None else ''}\n{body_hash}"
+    )
     expected = hmac.new(
         credentials["_raw"].encode(), canonical.encode(), hashlib.sha256,
     ).hexdigest()
@@ -178,6 +203,60 @@ def test_scenario_signature_rejects_tampering_and_expired_timestamps(openapi_app
         timestamp="9" * 5000,
     ))
     _assert_open_error(oversized_timestamp, 401, "signature")
+
+
+def test_signature_covers_query_values_and_repeated_query_keys(openapi_app):
+    app, read_headers, _ = openapi_app
+    signed_path = "/openapi/v1/model-scenarios?phase=1&tag=b&tag=a"
+    tampered_path = "/openapi/v1/model-scenarios?phase=2&tag=b&tag=a"
+    response = app.test_client().get(
+        tampered_path, headers=_signed_headers(read_headers, "GET", signed_path),
+    )
+    _assert_open_error(response, 401, "signature")
+
+
+def test_signature_covers_multipart_order_filename_and_content_type(openapi_app):
+    app, _, infer_headers = openapi_app
+    path = "/openapi/v1/model-scenarios/clip-reid-vehicle/infer"
+    signed = {
+        "query": (io.BytesIO(b"query"), "query.jpg", "image/jpeg"),
+        "gallery": (io.BytesIO(b"gallery"), "gallery.jpg", "image/jpeg"),
+        "threshold": "0.7",
+    }
+    headers = _signed_headers(infer_headers, "POST", path, signed)
+    tampered = {
+        "gallery": (io.BytesIO(b"gallery"), "renamed.jpg", "image/jpeg"),
+        "query": (io.BytesIO(b"query"), "query.jpg", "image/jpeg"),
+        "threshold": "0.7",
+    }
+    response = app.test_client().post(path, data=tampered, headers=headers)
+    _assert_open_error(response, 401, "signature")
+
+
+def test_signed_request_rejects_content_length_unknown_file_and_excess_parts(openapi_app):
+    app, _, infer_headers = openapi_app
+    path = "/openapi/v1/model-scenarios/yolo26n-obb/infer"
+    client = app.test_client()
+    oversized = client.post(
+        path,
+        data=b"x" * 2049,
+        content_type="application/octet-stream",
+        headers={**_signed_headers(infer_headers, "POST", path), "Content-Length": "2049"},
+    )
+    _assert_open_error(oversized, 413, "request_too_large")
+
+    unknown = {"leah": (io.BytesIO(b"x"), "x.jpg", "image/jpeg")}
+    unknown_response = client.post(
+        path, data=unknown, headers=_signed_headers(infer_headers, "POST", path, unknown),
+    )
+    _assert_open_error(unknown_response, 400, "validation")
+
+    too_many = {f"field{i}": str(i) for i in range(8)}
+    too_many["file"] = (io.BytesIO(b"x"), "x.jpg", "image/jpeg")
+    too_many_response = client.post(
+        path, data=too_many, headers=_signed_headers(infer_headers, "POST", path, too_many),
+    )
+    _assert_open_error(too_many_response, 413, "request_too_large")
 
 
 def test_scenario_nonce_is_persistent_and_replay_safe_across_clients(openapi_app):
@@ -359,6 +438,35 @@ def test_scenario_security_and_rate_failures_are_audited_without_sensitive_value
         assert signature not in serialized
 
 
+@pytest.mark.parametrize("failure_point", ["nonce", "rate"])
+def test_scenario_security_database_failures_use_open_error(
+    openapi_app, monkeypatch, failure_point,
+):
+    app, read_headers, _ = openapi_app
+    path = "/openapi/v1/model-scenarios"
+    target = "security_open._remember_nonce" if failure_point == "nonce" else "security_open._check_shared_rate_limit"
+    monkeypatch.setattr(target, lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db offline")))
+    response = app.test_client().get(
+        path, headers=_signed_headers(read_headers, "GET", path),
+    )
+    payload = _assert_open_error(response, 500, "internal")
+    assert "db offline" not in payload["message"]
+
+
+def test_audit_database_failure_does_not_replace_open_response(openapi_app, monkeypatch):
+    app, read_headers, _ = openapi_app
+    path = "/openapi/v1/model-scenarios"
+    monkeypatch.setattr(
+        "security_open.OpenApiCallLog",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("audit database offline")),
+    )
+    response = app.test_client().get(
+        path, headers=_signed_headers(read_headers, "GET", path, signature="0" * 64),
+    )
+    payload = _assert_open_error(response, 401, "signature")
+    assert "audit" not in payload["message"]
+
+
 def test_read_scope_lists_and_gets_public_scenarios_but_cannot_infer(openapi_app):
     app, read_headers, _infer_headers = openapi_app
     client = app.test_client()
@@ -460,8 +568,6 @@ def test_infer_scope_dispatches_to_shared_scenario_runner(openapi_app, monkeypat
     request_data = {
         "file": (io.BytesIO(b"image"), "sample.png"),
         "conf": "0.4",
-        "modelPath": "C:/attacker/model.pt",
-        "library": "attacker-runtime",
     }
     response = app.test_client().post(
         path,

@@ -44,7 +44,7 @@ Expected: FAIL because `services.model_scenarios` does not exist.
 
 - [ ] **Step 3: Implement immutable registry access**
 
-Define nine dictionary records matching the approved spec and `MODEL_USAGE_SCENARIOS.md`. Return `copy.deepcopy` values from public functions. Set defaults per ability: segmentation `precision/conf`; ReID `threshold`; plate/OBB `conf/imgsz`.
+Define nine dictionary records matching the approved spec and `MODEL_USAGE_SCENARIOS.md`. Return `copy.deepcopy` values from public functions. Set defaults per ability: segmentation `precision`/`mode` (SAM has no confidence threshold); ReID `threshold`; plate/OBB `conf/imgsz`.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -246,7 +246,7 @@ Test positive/negative points, box undo state, multiple ReID galleries, plate de
 
 - [ ] **Step 2: Implement shared result panel and segmentation workbench**
 
-Provide drag/drop input, image preview, canvas point/box prompts, undo/clear, precision/conf controls, busy state, mask preview, area/ratio/interaction metrics, JSON/image download and retained input after failure. Reuse interaction logic from the existing segment page without modifying that page.
+Provide drag/drop input, image preview, canvas point/box prompts, undo/clear, supported precision/mode controls, busy state, mask preview, area/ratio/interaction metrics, JSON/image download and retained input after failure. Reuse interaction logic from the existing segment page without modifying that page. Do not expose or send `conf` because the SAM runtimes do not consume it.
 
 - [ ] **Step 3: Implement ReID workbench**
 
@@ -305,7 +305,8 @@ Expected: Node tests PASS and Vite exits 0.
 
 Check all nine URLs, four workbench mappings, three management endpoints, three Open API endpoints, readiness states, download actions, responsive/focus/reduced-motion CSS and error handling against the spec. Run `git diff --check` and `git status --short`; distinguish pre-existing user changes from this feature.
 
+The diff check must run from the repository root and include all owned tracked and untracked files before staging; resolve every whitespace error before the final commit.
+
 - [ ] **Step 7: Commit documentation/navigation**
 
 Stage only files owned by this task and commit: `git commit -m "docs: document model scenario applications"`.
-

@@ -5,10 +5,12 @@ from __future__ import annotations
 import base64
 import binascii
 from collections import OrderedDict
+import io
 import json
 import math
 from pathlib import Path
 from time import perf_counter
+import warnings
 
 import cv2
 import numpy as np
@@ -159,11 +161,29 @@ def _read_image(upload, scenario: dict, *, label: str = "image") -> tuple[bytes,
     raw = b"".join(chunks)
     if len(raw) > max_size:
         raise ScenarioPayloadTooLarge(f"{label} exceeds the scenario image size limit")
+    max_pixels = int(current_app.config.get("SCENARIO_MAX_PIXELS", 40_000_000))
+    try:
+        from PIL import Image
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw)) as header:
+                width, height = header.size
+                if width <= 0 or height <= 0:
+                    raise ScenarioInputError("invalid image data")
+                if width * height > max_pixels:
+                    raise ScenarioPayloadTooLarge(f"{label} exceeds the scenario pixel limit")
+                header.verify()
+    except ScenarioInputError:
+        raise
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        raise ScenarioPayloadTooLarge(f"{label} exceeds the scenario pixel limit") from exc
+    except (OSError, SyntaxError, ValueError) as exc:
+        raise ScenarioInputError("invalid image data") from exc
     image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ScenarioInputError("invalid image data")
     height, width = image.shape[:2]
-    max_pixels = int(current_app.config.get("SCENARIO_MAX_PIXELS", 40_000_000))
     if width * height > max_pixels:
         raise ScenarioPayloadTooLarge(f"{label} exceeds the scenario pixel limit")
     return raw, image
@@ -509,6 +529,23 @@ def run_scenario(model_key: str, files, form) -> dict:
     if scenario is None:
         raise ScenarioInputError("model scenario not found")
     model, path = _resolve_model(scenario)
+    allowed_fields = {
+        "interactive-segmentation": frozenset(("points", "labels", "pointLabels", "box", "mode", "precision")),
+        "vehicle-reid": frozenset(("threshold",)),
+        "plate-detection": frozenset(("conf", "imgsz")),
+        "obb": frozenset(("conf", "imgsz")),
+    }.get(scenario["ability"], frozenset())
+    unknown_fields = sorted(set(form.keys()) - allowed_fields)
+    if unknown_fields:
+        raise ScenarioInputError(f"unknown form field: {unknown_fields[0]}")
+    allowed_files = (
+        frozenset(("query", "gallery"))
+        if scenario["ability"] == "vehicle-reid"
+        else frozenset(("file",))
+    )
+    unknown_files = sorted(set(files.keys()) - allowed_files)
+    if unknown_files:
+        raise ScenarioInputError(f"unknown file field: {unknown_files[0]}")
     ability = scenario["ability"]
     started = perf_counter()
     if ability == "vehicle-reid":

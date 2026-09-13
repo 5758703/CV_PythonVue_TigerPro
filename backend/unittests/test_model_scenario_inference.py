@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import base64
+import json
 import sys
 from importlib import import_module
 from pathlib import Path
@@ -75,6 +76,9 @@ def scenario_app(_scenario_env):
     with app.app_context():
         AiModel.query.delete()
         db.session.commit()
+    marker = model_folder / "production-manifest.json"
+    if marker.exists():
+        marker.unlink()
 
 
 def _png_bytes() -> bytes:
@@ -113,13 +117,24 @@ def _register_model(
         relative = f"{key}{weight_extension}"
         payload = b"x" * 100_001
     elif library in ("clip-reid", "transreid", "vit-reid", "opencv-sam"):
-        relative = f"{key}.onnx"
+        relative = (
+            "image_segmentation_efficientsam_ti_2025april.onnx"
+            if key == "efficient-sam"
+            else f"{key}.onnx"
+        )
         payload = b"x" * 100_001
     else:
         relative = f"{key}.pt"
         payload = b"weights"
     if with_weights:
         (model_folder / relative).write_bytes(payload)
+        if key == "yolo26n-p2-plate" and weight_extension is None:
+            (model_folder / "production-manifest.json").write_text(json.dumps({
+                "modelKey": key,
+                "task": "object-detection",
+                "trainingComplete": True,
+                "classes": ["license_plate"],
+            }), encoding="utf-8")
     else:
         for extension in (".pt", ".onnx"):
             candidate = model_folder / f"{key}{extension}"
@@ -166,12 +181,13 @@ def test_image_larger_than_configured_limit_is_rejected(scenario_app):
         _run(app, "yolo26n-obb", _files(image=_file(payload=b"x" * 1025)))
 
 
-def test_decoded_image_exceeding_pixel_limit_is_rejected(scenario_app):
+def test_image_header_pixel_limit_is_rejected_before_opencv_decode(scenario_app, monkeypatch):
     app, _headers, model_folder = scenario_app
     _register_model(app, model_folder)
     image = np.zeros((8, 9, 3), dtype=np.uint8)
     ok, encoded = cv2.imencode(".png", image)
     assert ok
+    monkeypatch.setattr(cv2, "imdecode", lambda *_args, **_kwargs: pytest.fail("unsafe OpenCV decode"))
 
     with pytest.raises(_dispatcher().ScenarioPayloadTooLarge, match="pixel limit"):
         _run(app, "yolo26n-obb", _files(image=_file(payload=encoded.tobytes())))
@@ -367,9 +383,22 @@ def test_p2_plate_inference_rejects_the_generic_yolo26n_training_base(scenario_a
 
     with pytest.raises(
         _dispatcher().ScenarioInputError,
-        match="plate-specific training completion is not verified",
+        match="plate-specific production manifest is missing or invalid",
     ):
         _run(app, "yolo26n-p2-plate", _files(image=_file()))
+
+
+def test_segmentation_rejects_detector_confidence_as_an_unknown_field(scenario_app):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app, model_folder, key="mobile-sam",
+        task="interactive-segmentation", library="mobilesam",
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="unknown form field: conf"):
+        _run(app, "mobile-sam", _files(image=_file()), {
+            "mode": "auto", "conf": "0.5",
+        })
 
 
 def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):

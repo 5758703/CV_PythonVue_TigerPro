@@ -24,8 +24,8 @@ X-Api-Key: <YOUR_API_KEY>
 这三个端点除应用凭据外，还必须携带 `X-Timestamp`、`X-Nonce`、`X-Signature`。签名密钥是创建应用时返回的**原始 API key**（不是数据库中的摘要），签名算法为 HMAC-SHA256：
 
 ```text
-payload_sha256 = SHA256(sorted(payload_lines).join("\n"))
-canonical = METHOD + "\n" + PATH_WITHOUT_QUERY + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + payload_sha256
+payload_sha256 = SHA256(payload_lines_in_original_part_order.join("\n"))
+canonical = METHOD + "\n" + NORMALIZED_PATH + "\n" + NORMALIZED_QUERY + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + NORMALIZED_CONTENT_TYPE + "\n" + payload_sha256
 signature = hex(HMAC-SHA256(raw_api_key, canonical))
 ```
 
@@ -46,7 +46,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote, urlsplit
 
 import requests
 
@@ -55,19 +55,33 @@ APP_ID = os.environ["TIGERPRO_APP_ID"]
 API_KEY = os.environ["TIGERPRO_API_KEY"]
 
 
+def enc(value):
+    return quote(str(value), safe="-._~")
+
+
+def normalized_query(path):
+    pairs = [(enc(k), enc(v)) for k, v in parse_qsl(urlsplit(path).query, keep_blank_values=True)]
+    return "&".join(f"{k}={v}" for k, v in sorted(pairs))
+
+
 def payload_hash(fields=(), files=()):
-    lines = [f"form:{quote(name, safe='')}={quote(value, safe='')}" for name, value in fields]
+    lines = [f"{i}:form:{enc(name)}={enc(value)}" for i, (name, value) in enumerate(fields)]
+    offset = len(lines)
     lines += [
-        f"file:{quote(field, safe='')}:{hashlib.sha256(content).hexdigest()}"
-        for field, (_filename, content, _content_type) in files
+        f"{offset+i}:file:{enc(field)}:{enc(filename)}:{content_type.lower()}:"
+        f"{hashlib.sha256(content).hexdigest()}"
+        for i, (field, (filename, content, content_type)) in enumerate(files)
     ]
-    return hashlib.sha256("\n".join(sorted(lines)).encode()).hexdigest()
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
 
 
-def signed_headers(method, path, digest):
+def signed_headers(method, path, digest, content_type=""):
     timestamp = str(int(time.time()))
     nonce = uuid.uuid4().hex
-    canonical = "\n".join((method.upper(), path, timestamp, nonce, digest))
+    parsed = urlsplit(path)
+    normalized_path = quote(parsed.path, safe="/-._~")
+    canonical = "\n".join((method.upper(), normalized_path, normalized_query(path), timestamp,
+                            nonce, content_type.lower(), digest))
     signature = hmac.new(API_KEY.encode(), canonical.encode(), hashlib.sha256).hexdigest()
     return {
         "X-App-Id": APP_ID,
@@ -80,10 +94,10 @@ def signed_headers(method, path, digest):
 
 # 场景列表：query 不进入 canonical path，GET payload 为空字节。
 path = "/openapi/v1/model-scenarios"
+path = "/openapi/v1/model-scenarios?phase=1"
 empty_digest = hashlib.sha256(b"").hexdigest()
 response = requests.get(
     BASE + path,
-    params={"phase": 1},
     headers=signed_headers("GET", path, empty_digest),
     timeout=30,
 )
@@ -99,11 +113,29 @@ response = requests.post(
     BASE + path,
     data=fields,
     files=files,
-    headers=signed_headers("POST", path, payload_hash(fields, files)),
+    headers=signed_headers("POST", path, payload_hash(fields, files), "multipart/form-data"),
     timeout=120,
 )
 response.raise_for_status()
 print(response.json())
+```
+
+签名规范：Query 保留重复键，按 RFC3986 编码后的键和值排序。multipart 行严格保留原始 part 顺序与索引：`index:form:name=value` 或 `index:file:field:safe-filename:content-type:sha256`。Content-Type 只签小写媒体类型，不含 boundary。SAM 分割不接受 `conf`。默认限制为 40 个 part、33 个文件、单图 12 MiB、总请求 396 MiB 和 4000 万像素。
+
+PowerShell 列表请求（query 参与签名）：
+
+```powershell
+$Path = "/openapi/v1/model-scenarios?phase=1"
+$Timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+$Nonce = [Guid]::NewGuid().ToString("N")
+$EmptyHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]]::new(0))).ToLower()
+$Canonical = "GET`n/openapi/v1/model-scenarios`nphase=1`n$Timestamp`n$Nonce`n`n$EmptyHash"
+$Mac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:TIGERPRO_API_KEY))
+$Signature = [Convert]::ToHexString($Mac.ComputeHash([Text.Encoding]::UTF8.GetBytes($Canonical))).ToLower()
+Invoke-RestMethod "http://127.0.0.1:5001$Path" -Headers @{
+  "X-App-Id"=$env:TIGERPRO_APP_ID; "X-Api-Key"=$env:TIGERPRO_API_KEY
+  "X-Timestamp"=$Timestamp; "X-Nonce"=$Nonce; "X-Signature"=$Signature
+}
 ```
 
 交互分割可增加 `points`、`labels`、`box`、`mode`、`precision=fp32|int8`；车辆 ReID 使用一个 `query` 和重复的 `gallery` 文件字段；检测使用 `conf` 与 `imgsz`。每次调用必须生成新 nonce。时间戳允许窗口由 `OPENAPI_SIGNATURE_MAX_AGE_SECONDS` 配置。

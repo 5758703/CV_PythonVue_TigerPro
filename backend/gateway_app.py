@@ -26,6 +26,8 @@ def create_gateway_app():
     with app.app_context():
         import models  # noqa: F401
         db.create_all()
+        from schema_migrations import migrate_schema
+        migrate_schema(db)
 
     return app
 

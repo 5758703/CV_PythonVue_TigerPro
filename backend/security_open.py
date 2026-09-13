@@ -9,12 +9,15 @@ import secrets
 import time
 import uuid
 from datetime import datetime, timedelta
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from functools import wraps
-from urllib.parse import quote
+from urllib.parse import parse_qsl, quote
 
 from flask import current_app, g, jsonify, request
 from sqlalchemy.exc import IntegrityError
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.utils import secure_filename
 
 from extensions import db
 from models.open_app import (
@@ -62,6 +65,10 @@ _HASH_CHUNK_BYTES = 64 * 1024
 
 
 class SignedPayloadTooLarge(ValueError):
+    pass
+
+
+class SignedPayloadInvalid(ValueError):
     pass
 
 
@@ -145,23 +152,89 @@ def _read_and_restore(stream, maximum: int) -> bytes:
     return raw
 
 
+def _normalized_path() -> str:
+    return quote(request.path, safe="/-._~")
+
+
+def _normalized_query() -> str:
+    pairs = parse_qsl(request.query_string.decode("ascii", "strict"), keep_blank_values=True)
+    encoded = [
+        (quote(key, safe="-._~"), quote(value, safe="-._~"))
+        for key, value in pairs
+    ]
+    return "&".join(f"{key}={value}" for key, value in sorted(encoded))
+
+
+def _normalized_content_type() -> str:
+    return (request.mimetype or "").strip().lower()
+
+
+_SIGNED_FORM_FIELDS = frozenset((
+    "points", "labels", "pointLabels", "box", "mode", "precision", "threshold", "conf", "imgsz",
+))
+_SIGNED_FILE_FIELDS = frozenset(("file", "query", "gallery"))
+
+
+def _multipart_manifest(raw: bytes) -> list[str]:
+    message = BytesParser(policy=email_policy).parsebytes(
+        b"Content-Type: " + request.content_type.encode("ascii", "strict") + b"\r\n\r\n" + raw
+    )
+    if not message.is_multipart():
+        raise SignedPayloadInvalid("malformed multipart request")
+    parts = list(message.iter_parts())
+    maximum_parts = int(current_app.config.get("SCENARIO_MAX_MULTIPART_PARTS", 40))
+    maximum_files = int(current_app.config.get("SCENARIO_MAX_FILES", 33))
+    if len(parts) > maximum_parts:
+        raise SignedPayloadTooLarge("multipart part count exceeds the scenario limit")
+    lines = []
+    file_count = 0
+    aggregate_file_bytes = 0
+    maximum_file = int(current_app.config.get("SCENARIO_MAX_IMAGE_BYTES", 12 * 1024 * 1024))
+    maximum_aggregate = int(current_app.config.get("SCENARIO_MAX_REQUEST_BYTES", maximum_file * 33))
+    for index, part in enumerate(parts):
+        field = part.get_param("name", header="content-disposition")
+        if not field:
+            raise SignedPayloadInvalid("multipart part is missing a field name")
+        filename = part.get_filename()
+        content = part.get_payload(decode=True) or b""
+        if filename is not None:
+            file_count += 1
+            if field not in _SIGNED_FILE_FIELDS:
+                raise SignedPayloadInvalid(f"unknown multipart file field: {field}")
+            safe_name = secure_filename(filename)
+            if not safe_name or safe_name != filename:
+                raise SignedPayloadInvalid("multipart filename is unsafe")
+            if len(content) > maximum_file:
+                raise SignedPayloadTooLarge("image exceeds the scenario image size limit")
+            aggregate_file_bytes += len(content)
+            if file_count > maximum_files or aggregate_file_bytes > maximum_aggregate:
+                raise SignedPayloadTooLarge("multipart files exceed the scenario aggregate limit")
+            digest = hashlib.sha256(content).hexdigest()
+            part_type = (part.get_content_type() or "application/octet-stream").lower()
+            lines.append(
+                f"{index}:file:{quote(field, safe='')}:{quote(safe_name, safe='-._~')}:"
+                f"{part_type}:{digest}"
+            )
+        else:
+            if field not in _SIGNED_FORM_FIELDS:
+                raise SignedPayloadInvalid(f"unknown multipart form field: {field}")
+            try:
+                value = content.decode(part.get_content_charset() or "utf-8", "strict")
+            except (LookupError, UnicodeDecodeError) as exc:
+                raise SignedPayloadInvalid("multipart form value is not valid text") from exc
+            lines.append(
+                f"{index}:form:{quote(field, safe='')}={quote(value, safe='-._~')}"
+            )
+    return lines
+
+
 def scenario_payload_hash() -> str:
-    """Hash a reproducible scenario payload without multipart boundary bytes."""
+    """Hash a bounded, ordered scenario payload without boundary bytes."""
     if request.method in ("GET", "HEAD"):
         return hashlib.sha256(b"").hexdigest()
     if request.mimetype == "multipart/form-data":
-        lines = []
-        for field, values in request.form.lists():
-            for value in values:
-                lines.append(
-                    f"form:{quote(str(field), safe='')}={quote(str(value), safe='')}"
-                )
-        maximum = int(current_app.config.get("SCENARIO_MAX_IMAGE_BYTES", 12 * 1024 * 1024))
-        for field, uploads in request.files.lists():
-            for upload in uploads:
-                digest = hashlib.sha256(_read_and_restore(upload.stream, maximum)).hexdigest()
-                lines.append(f"file:{quote(str(field), safe='')}:{digest}")
-        return hashlib.sha256("\n".join(sorted(lines)).encode("utf-8")).hexdigest()
+        raw = request.get_data(cache=True)
+        return hashlib.sha256("\n".join(_multipart_manifest(raw)).encode("utf-8")).hexdigest()
     maximum = int(current_app.config.get("SCENARIO_MAX_IMAGE_BYTES", 12 * 1024 * 1024))
     raw = request.get_data(cache=True)
     if len(raw) > maximum:
@@ -170,7 +243,10 @@ def scenario_payload_hash() -> str:
 
 
 def canonical_scenario_request(timestamp: str, nonce: str, payload_hash: str) -> str:
-    return "\n".join((request.method.upper(), request.path, timestamp, nonce, payload_hash))
+    return "\n".join((
+        request.method.upper(), _normalized_path(), _normalized_query(), timestamp, nonce,
+        _normalized_content_type(), payload_hash,
+    ))
 
 
 def _client_ip() -> str:
@@ -371,7 +447,10 @@ def log_open_call(*, capability: str, status_code: int, biz_code: int | None,
         db.session.add(entry)
         db.session.commit()
     except Exception:  # noqa: BLE001
-        db.session.rollback()
+        try:
+            db.session.rollback()
+        except Exception:  # noqa: BLE001 - audit is strictly best effort
+            pass
 
 
 def open_error(http_status: int, code: int, message: str, err_type: str = "error"):
@@ -406,7 +485,17 @@ def require_open_scope(scope: str, *, signed_request: bool = False):
             started = time.time()
             current_request_id()
             app_id, api_key = _extract_credentials()
-            app, key_row, err = resolve_open_app(app_id, api_key)
+            try:
+                app, key_row, err = resolve_open_app(app_id, api_key)
+            except Exception as exc:  # noqa: BLE001
+                msg = "request security validation failed"
+                resp = open_error(500, 500, msg, "internal")
+                log_open_call(
+                    capability=scope, status_code=500, biz_code=500,
+                    latency_ms=int((time.time() - started) * 1000),
+                    error_message=type(exc).__name__,
+                )
+                return resp
             if err:
                 resp = open_error(401, 401, err, "unauthorized")
                 log_open_call(
@@ -447,6 +536,12 @@ def require_open_scope(scope: str, *, signed_request: bool = False):
 
             if signed_request:
                 try:
+                    maximum_request = int(current_app.config.get(
+                        "SCENARIO_MAX_REQUEST_BYTES",
+                        int(current_app.config.get("SCENARIO_MAX_IMAGE_BYTES", 12 * 1024 * 1024)) * 33,
+                    ))
+                    if request.content_length is not None and request.content_length > maximum_request:
+                        raise SignedPayloadTooLarge("request exceeds the scenario aggregate size limit")
                     signature_err, signature_type = _verify_scenario_signature(app, api_key)
                 except (SignedPayloadTooLarge, RequestEntityTooLarge) as exc:
                     msg = (
@@ -460,6 +555,14 @@ def require_open_scope(scope: str, *, signed_request: bool = False):
                         biz_code=413,
                         latency_ms=int((time.time() - started) * 1000),
                         error_message=msg,
+                    )
+                    return resp
+                except SignedPayloadInvalid as exc:
+                    msg = str(exc)
+                    resp = open_error(400, 400, msg, "validation")
+                    log_open_call(
+                        capability=scope, status_code=400, biz_code=400,
+                        latency_ms=int((time.time() - started) * 1000), error_message=msg,
                     )
                     return resp
                 except Exception as exc:  # noqa: BLE001
@@ -486,10 +589,20 @@ def require_open_scope(scope: str, *, signed_request: bool = False):
                     return resp
 
             retry_after = None
-            if signed_request:
-                rate_err, retry_after = _check_shared_rate_limit(app)
-            else:
-                rate_err = _check_rate_limit(app)
+            try:
+                if signed_request:
+                    rate_err, retry_after = _check_shared_rate_limit(app)
+                else:
+                    rate_err = _check_rate_limit(app)
+            except Exception as exc:  # noqa: BLE001
+                msg = "request security validation failed"
+                resp = open_error(500, 500, msg, "internal")
+                log_open_call(
+                    capability=scope, status_code=500, biz_code=500,
+                    latency_ms=int((time.time() - started) * 1000),
+                    error_message=type(exc).__name__,
+                )
+                return resp
             if rate_err:
                 resp = open_error(429, 429, rate_err, "rate_limited")
                 if retry_after:

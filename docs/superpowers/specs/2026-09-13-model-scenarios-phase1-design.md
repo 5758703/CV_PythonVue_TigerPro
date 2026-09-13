@@ -73,7 +73,7 @@
 
 列表和详情要求已登录并具备模型查询权限；推理要求模型推理权限。接口统一返回 `{code, message, data}`。
 
-`infer` 使用 `multipart/form-data`：通用字段为 `file`；分割额外接受 `points`、`labels`、`box`；检测接受 `conf`、`imgsz`；ReID 接受 `query` 和一个或多个 `gallery`。服务端以场景注册表决定允许字段，不接受客户端指定任意权重路径或运行库。
+`infer` 使用 `multipart/form-data`：通用字段为 `file`；分割额外接受 `points`、`labels`、`box`（SAM 不使用且拒绝 `conf`）；检测接受 `conf`、`imgsz`；ReID 接受 `query` 和一个或多个 `gallery`。服务端以场景注册表决定允许字段，不接受客户端指定任意权重路径或运行库。签名前先按 `Content-Length` 限制请求总量，随后限制 40 个 part、33 个文件、单图 12 MiB、总文件 396 MiB 和 4000 万像素。
 
 ### 4.2 对外接口
 
