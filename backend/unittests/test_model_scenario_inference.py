@@ -320,9 +320,12 @@ def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
     assert result["result"] == {"masks": [1]}
 
 
-def test_mobilesam_box_prompt_uses_existing_helper_without_numpy_truth_error(
+def test_mobilesam_box_prompt_reaches_real_prompt_encoder_as_box(
     scenario_app, monkeypatch,
 ):
+    import torch
+    from mobile_sam import SamPredictor, sam_model_registry
+
     app, _headers, model_folder = scenario_app
     _register_model(
         app,
@@ -331,26 +334,43 @@ def test_mobilesam_box_prompt_uses_existing_helper_without_numpy_truth_error(
         task="interactive-segmentation",
         library="mobilesam",
     )
-    predict_calls = []
+    model = sam_model_registry["vit_t"](checkpoint=None)
+    predictor = SamPredictor(model)
+    prompt_calls = []
+    decoder_calls = []
 
-    class Predictor:
-        def set_image(self, _image):
-            return None
+    class MaskDecoder(torch.nn.Module):
+        def forward(self, **kwargs):
+            decoder_calls.append(kwargs)
+            return torch.zeros((1, 1, 256, 256)), torch.tensor([[0.9]])
 
-        def predict(self, **kwargs):
-            predict_calls.append(kwargs)
-            mask = np.zeros((1, 8, 8), dtype=bool)
-            mask[:, 1:7, 1:7] = True
-            return mask, np.array([0.9], dtype=np.float32), None
+    model.mask_decoder = MaskDecoder()
 
-    monkeypatch.setattr("inference._get_mobile_sam_predictor", lambda _path: Predictor())
-    result = _run(app, "mobile-sam", _files(image=_file()), {"box": "[1, 1, 6, 6]"})
+    def skip_image_encoder(image, _format="RGB"):
+        predictor.reset_image()
+        predictor.original_size = image.shape[:2]
+        predictor.input_size = image.shape[:2]
+        height, width = model.prompt_encoder.image_embedding_size
+        predictor.features = torch.zeros((1, model.prompt_encoder.embed_dim, height, width))
+        predictor.is_image_set = True
+
+    def record_prompt(_module, _args, kwargs):
+        prompt_calls.append(kwargs)
+
+    predictor.set_image = skip_image_encoder
+    handle = model.prompt_encoder.register_forward_pre_hook(record_prompt, with_kwargs=True)
+    monkeypatch.setattr("inference._get_mobile_sam_predictor", lambda _path: predictor)
+    try:
+        result = _run(app, "mobile-sam", _files(image=_file()), {"box": "[1, 1, 6, 6]"})
+    finally:
+        handle.remove()
 
     assert result["result"]["count"] == 1
-    assert len(predict_calls) == 1
-    assert predict_calls[0]["box"] is None
-    assert predict_calls[0]["point_coords"].tolist() == [[1.0, 1.0], [6.0, 6.0]]
-    assert predict_calls[0]["point_labels"].tolist() == [2, 3]
+    assert len(prompt_calls) == 1
+    assert prompt_calls[0]["points"] is None
+    assert tuple(prompt_calls[0]["boxes"].shape) == (1, 1, 4)
+    assert prompt_calls[0]["boxes"].tolist() == [[[128.0, 128.0, 768.0, 768.0]]]
+    assert decoder_calls[0]["multimask_output"] is False
 
 
 class _Tensor:
@@ -509,8 +529,33 @@ def test_reid_rejects_histogram_fallback(scenario_app, monkeypatch):
         lambda *_args: (np.array([1.0, 0.0]), {"backend": "hist-fallback", "onnxError": "secret"}),
     )
 
-    with pytest.raises(_dispatcher().ScenarioInputError, match="vehicle ReID runtime did not use configured weights"):
+    with pytest.raises(RuntimeError, match="vehicle ReID runtime did not use configured weights"):
         _run(app, key, _files(query=_file("query.png"), gallery=[_file("gallery.png")]))
+
+
+def test_reid_histogram_fallback_is_sanitized_as_runtime_500(scenario_app, monkeypatch):
+    app, headers, model_folder = scenario_app
+    key = "clip-reid-vehicle"
+    _register_model(app, model_folder, key=key, task="vehicle-reid", library="clip-reid")
+    monkeypatch.setattr(
+        "services.vehicle_reid_feat.extract_vehicle_embedding",
+        lambda *_args: (np.array([1.0, 0.0]), {
+            "backend": "hist-fallback",
+            "onnxError": "C:/secret/models/vehicle.onnx failed",
+        }),
+    )
+
+    response = app.test_client().post(
+        f"/api/ai/model-scenarios/{key}/infer",
+        headers=headers,
+        data=MultiDict([
+            ("query", (io.BytesIO(_png_bytes()), "query.png")),
+            ("gallery", (io.BytesIO(_png_bytes()), "gallery.png")),
+        ]),
+    )
+
+    assert response.status_code == 500
+    assert response.get_json() == {"code": 500, "message": "inference failed", "data": None}
 
 
 def test_reid_query_metadata_is_allowlisted(scenario_app, monkeypatch):

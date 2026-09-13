@@ -289,19 +289,73 @@ def _predict_detection(path: str, raw: bytes, *, conf: float, imgsz: int, obb: b
     }
 
 
+def _segment_mobilesam_prompt(
+    path: Path,
+    raw: bytes,
+    *,
+    points: list | None,
+    point_labels: list | None,
+    box: list | None,
+) -> dict:
+    """Run MobileSAM prompts while preserving the predictor's native box path."""
+    from inference import _blend_mask_detections, _encode_mask_b64, _get_mobile_sam_predictor
+
+    image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ScenarioInputError("invalid image data")
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    predictor = _get_mobile_sam_predictor(str(path))
+    predictor.set_image(rgb)
+    point_coords = np.asarray(points, dtype=np.float32) if points else None
+    labels = np.asarray(point_labels, dtype=np.int32) if point_labels else None
+    box_array = np.asarray(box, dtype=np.float32) if box else None
+    masks, scores, _ = predictor.predict(
+        point_coords=point_coords,
+        point_labels=labels,
+        box=box_array,
+        multimask_output=box_array is None,
+    )
+    best = int(np.argmax(scores))
+    mask = masks[best]
+    ys, xs = np.where(mask)
+    bbox = (
+        [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+        if len(xs)
+        else [0.0, 0.0, 0.0, 0.0]
+    )
+    detections = [{
+        "className": "segment",
+        "classId": 0,
+        "confidence": round(float(scores[best]), 4),
+        "bbox": [round(value, 1) for value in bbox],
+        "maskBase64": _encode_mask_b64(mask),
+    }]
+    plotted = _blend_mask_detections(image, detections)
+    ok, encoded = cv2.imencode(".jpg", plotted)
+    height, width = image.shape[:2]
+    return {
+        "detections": detections,
+        "count": 1,
+        "imageBase64": base64.b64encode(encoded.tobytes()).decode() if ok else None,
+        "width": width,
+        "height": height,
+    }
+
+
 def _segment(model: AiModel, path: Path, raw: bytes, form) -> dict:
     library = (model.library or "").strip().lower()
     if library == "mobilesam":
         from inference import segment_image_mobilesam
 
         points, point_labels, box = _segmentation_prompts(form, allow_auto=True)
-        if box is not None:
-            points = list(points or ()) + [[box[0], box[1]], [box[2], box[3]]]
-            point_labels = list(point_labels or ()) + [2, 3]
-            box = None
+        mode = (form.get("mode") or "prompt").strip().lower()
+        if mode != "auto":
+            return _segment_mobilesam_prompt(
+                path, raw, points=points, point_labels=point_labels, box=box,
+            )
         return segment_image_mobilesam(
             str(path), raw, points=points, point_labels=point_labels, box=box,
-            mode=(form.get("mode") or "prompt").strip().lower(), draw=True,
+            mode=mode, draw=True,
         )
     if library in ("opencv-sam", "efficientsam", "efficient-sam"):
         from inference import segment_image_efficientsam
@@ -331,7 +385,7 @@ def _vehicle_reid(path: Path, files, form, scenario: dict) -> dict:
 
     query_embedding, query_meta = extract_vehicle_embedding(str(path), query_image)
     if query_meta.get("backend") != "vehicle-onnx":
-        raise ScenarioInputError("vehicle ReID runtime did not use configured weights")
+        raise RuntimeError("vehicle ReID runtime did not use configured weights")
     safe_query_meta = {
         key: query_meta[key]
         for key in ("backend", "dim", "inputSize")
@@ -341,7 +395,7 @@ def _vehicle_reid(path: Path, files, form, scenario: dict) -> dict:
     for filename, image in gallery:
         embedding, meta = extract_vehicle_embedding(str(path), image)
         if meta.get("backend") != "vehicle-onnx":
-            raise ScenarioInputError("vehicle ReID runtime did not use configured weights")
+            raise RuntimeError("vehicle ReID runtime did not use configured weights")
         score = cosine(query_embedding, embedding)
         rounded = round(float(score), 4) if score is not None else None
         matches.append({
