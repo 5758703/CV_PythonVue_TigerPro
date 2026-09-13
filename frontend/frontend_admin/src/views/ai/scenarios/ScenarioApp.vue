@@ -78,13 +78,14 @@
           </div>
           <span class="scenario-workbench__mode">固定模型 · {{ fixedModelKey }}</span>
         </div>
-        <slot
-          name="workbench"
+        <component
+          :is="workbenchComponent"
+          v-if="workbenchComponent"
+          :key="scenario.modelKey"
           :scenario="scenario"
-          :workbench="workbench"
-          :ready="scenario.ready"
-        >
-          <div class="scenario-workbench__fallback">
+          @completed="onWorkbenchCompleted"
+        />
+        <div v-else class="scenario-workbench__fallback">
             <div class="scenario-canvas-placeholder" aria-hidden="true">
               <span></span><span></span><span></span>
               <b>VISION CANVAS</b>
@@ -95,8 +96,10 @@
               <p>场景外壳已锁定模型身份；工作台插槽可安全接入输入、运行与结构化结果区域。</p>
               <button class="scenario-button" type="button" disabled>运行推理</button>
             </div>
-          </div>
-        </slot>
+        </div>
+        <p v-if="lastCompletedKey" class="scenario-sr-status" aria-live="polite">
+          {{ lastCompletedKey }} 推理已完成。
+        </p>
       </section>
 
       <section class="scenario-operations" aria-label="生产说明">
@@ -156,6 +159,10 @@ import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { scenarioApi } from '../../../api/modelScenarios'
+import ObbDetectionWorkbench from './workbenches/ObbDetectionWorkbench.vue'
+import PlateDetectionWorkbench from './workbenches/PlateDetectionWorkbench.vue'
+import SegmentationWorkbench from './workbenches/SegmentationWorkbench.vue'
+import VehicleReidWorkbench from './workbenches/VehicleReidWorkbench.vue'
 import {
   buildScenarioApiDocumentation,
   isLatestScenarioRequest,
@@ -177,10 +184,17 @@ const scenario = ref(null)
 const loadError = ref('')
 const notFound = ref(false)
 const copied = ref(false)
+const lastCompletedKey = ref('')
 let requestSequence = 0
 
 const fixedModelKey = computed(() => resolveFixedModelKey(route) || props.modelKey || null)
 const workbench = computed(() => resolveWorkbench(scenario.value?.workbenchType))
+const workbenchComponent = computed(() => ({
+  segmentation: SegmentationWorkbench,
+  vehicle_reid: VehicleReidWorkbench,
+  plate_detection: PlateDetectionWorkbench,
+  obb_detection: ObbDetectionWorkbench,
+})[workbench.value] || null)
 
 const ABILITY_LABELS = {
   segmentation: '交互分割',
@@ -253,6 +267,10 @@ async function copyCurl() {
   }
 }
 
+function onWorkbenchCompleted(result) {
+  lastCompletedKey.value = result?.modelKey || fixedModelKey.value || ''
+}
+
 async function loadScenario() {
   const requestedKey = fixedModelKey.value
   const sequence = ++requestSequence
@@ -263,6 +281,7 @@ async function loadScenario() {
     fixedModelKey.value,
   )
   loading.value = true
+  lastCompletedKey.value = ''
   loadError.value = ''
   notFound.value = false
   scenario.value = null

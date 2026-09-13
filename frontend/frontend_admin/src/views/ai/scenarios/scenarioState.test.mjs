@@ -4,10 +4,15 @@ import test from 'node:test'
 import {
   PHASE_ONE_ROUTE_KEYS,
   buildScenarioApiDocumentation,
+  deriveMaskMetrics,
+  normalizeWorkbenchResult,
+  scaleDetectionGeometry,
   isLatestScenarioRequest,
   resolveFixedModelKey,
   resolveWorkbench,
   serializeScenarioForm,
+  undoSegmentationPrompt,
+  validateWorkbenchState,
 } from './scenarioState.js'
 
 test('resolves each supported workbench type', () => {
@@ -38,7 +43,7 @@ test('serializes segmentation file and prompts using backend field names', () =>
   assert.equal(form.get('labels'), '[1,0]')
   assert.equal(form.get('box'), '[1,2,30,40]')
   assert.equal(form.get('precision'), 'fast')
-  assert.equal(form.get('conf'), '0.25')
+  assert.equal(form.get('conf'), null)
   assert.equal(form.get('modelPath'), null)
   assert.equal(form.get('library'), null)
 })
@@ -181,4 +186,124 @@ test('accepts only the latest detail response for the current fixed route key', 
   assert.equal(isLatestScenarioRequest(2, 2, 'mobile-sam', 'mobile-sam'), true)
   assert.equal(isLatestScenarioRequest(1, 2, 'efficient-sam', 'mobile-sam'), false)
   assert.equal(isLatestScenarioRequest(2, 2, 'efficient-sam', 'mobile-sam'), false)
+})
+
+test('undoes the latest segmentation prompt without desynchronizing point labels', () => {
+  assert.deepEqual(undoSegmentationPrompt({
+    points: [[10, 20], [30, 40]],
+    pointLabels: [1, 0],
+    box: [5, 6, 50, 60],
+  }, 'point'), {
+    points: [[10, 20]],
+    pointLabels: [1],
+    box: [5, 6, 50, 60],
+  })
+  assert.deepEqual(undoSegmentationPrompt({
+    points: [[10, 20]],
+    pointLabels: [1],
+    box: [5, 6, 50, 60],
+  }, 'box'), {
+    points: [[10, 20]],
+    pointLabels: [1],
+    box: null,
+  })
+})
+
+test('validates each workbench form at its business input boundaries', () => {
+  const image = new Blob(['image'], { type: 'image/png' })
+  assert.deepEqual(validateWorkbenchState('segmentation', {
+    file: image,
+    mode: 'prompt',
+    points: [[1, 2]],
+    pointLabels: [1],
+  }), [])
+  assert.deepEqual(validateWorkbenchState('segmentation', {
+    file: image,
+    mode: 'prompt',
+    points: [[1, 2]],
+    pointLabels: [],
+  }), ['正负点标签必须与提示点一一对应。'])
+  assert.deepEqual(validateWorkbenchState('vehicle_reid', {
+    query: image,
+    gallery: [image, image],
+    threshold: 1.01,
+  }), ['相似度阈值必须在 0 到 1 之间。'])
+  assert.deepEqual(validateWorkbenchState('plate_detection', {
+    file: image,
+    conf: 0,
+    imgsz: 32,
+  }), [])
+  assert.deepEqual(validateWorkbenchState('obb_detection', {
+    file: image,
+    conf: 0.5,
+    imgsz: 4097,
+  }), ['推理尺寸必须是 32 到 4096 的整数。'])
+})
+
+test('rejects workbench uploads outside the declared image policy', () => {
+  const wrongFormat = new File(['image'], 'plate.gif', { type: 'image/gif' })
+  const tooLarge = new File([new Uint8Array(1049)], 'plate.png', { type: 'image/png' })
+  const policy = { formats: ['.jpg', '.png'], maxSizeMb: 0.001 }
+
+  assert.deepEqual(validateWorkbenchState('plate_detection', {
+    file: wrongFormat,
+    conf: 0.5,
+    imgsz: 640,
+  }, policy), ['图片格式不受支持，请使用 JPG / PNG。'])
+  assert.deepEqual(validateWorkbenchState('plate_detection', {
+    file: tooLarge,
+    conf: 0.5,
+    imgsz: 640,
+  }, policy), ['图片超过 0.001 MB 上传限制。'])
+})
+
+test('normalizes real ReID matches by similarity and leaves missing decisions missing', () => {
+  const normalized = normalizeWorkbenchResult('vehicle_reid', {
+    query: 'query.jpg',
+    backend: { backend: 'vehicle-onnx', dim: 768 },
+    matches: [
+      { filename: 'low.jpg', similarity: 0.2, matched: false },
+      { filename: 'unknown.jpg', similarity: null },
+      { filename: 'high.jpg', similarity: 0.91, matched: true },
+      { filename: 'bad.jpg', similarity: '0.8', matched: true },
+    ],
+  })
+
+  assert.deepEqual(normalized.matches.map((item) => item.filename), [
+    'high.jpg', 'low.jpg', 'unknown.jpg', 'bad.jpg',
+  ])
+  assert.equal(normalized.matches[2].matched, undefined)
+  assert.equal(normalized.matches[3].similarity, undefined)
+})
+
+test('keeps only finite drawable detector geometry and scales within canvas bounds', () => {
+  const normalized = normalizeWorkbenchResult('obb_detection', {
+    width: 200,
+    height: 100,
+    detections: [
+      { className: 'plate', confidence: 0.9, bbox: [-10, 5, 220, 95], quad: [[0, 0], [200, 0], [200, 100], [0, 100]] },
+      { className: 'bad', bbox: [0, 0, Number.NaN, 20], quad: [[0, 0]] },
+      { className: 'native-angle', angle: 37.5 },
+    ],
+  })
+  const shapes = scaleDetectionGeometry(normalized, 100, 50)
+
+  assert.deepEqual(shapes[0].bbox, [0, 2.5, 100, 47.5])
+  assert.deepEqual(shapes[0].quad, [[0, 0], [100, 0], [100, 50], [0, 50]])
+  assert.equal(shapes[0].angle, 0)
+  assert.equal(shapes[1].bbox, undefined)
+  assert.equal(shapes[1].quad, undefined)
+  assert.equal(shapes[1].angle, undefined)
+  assert.equal(shapes[2].angle, 37.5)
+})
+
+test('derives mask area and ratio only from actual RGBA mask pixels', () => {
+  const rgba = new Uint8ClampedArray([
+    0, 0, 0, 0,
+    255, 255, 255, 255,
+    5, 5, 5, 255,
+    0, 0, 0, 255,
+  ])
+  assert.deepEqual(deriveMaskMetrics(rgba, 2, 2), { area: 2, ratio: 0.5 })
+  assert.equal(deriveMaskMetrics(rgba, 0, 2), null)
 })
