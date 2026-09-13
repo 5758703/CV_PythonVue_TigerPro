@@ -87,8 +87,8 @@
         <article v-for="scenario in filteredScenarios" :key="scenario.modelKey" class="scenario-card">
           <div class="scenario-card__header">
             <span class="scenario-card__order">{{ String(scenario.order).padStart(2, '0') }}</span>
-            <span :class="['scenario-pill', scenario.ready ? 'is-ready' : 'is-pending']">
-              {{ scenario.ready ? '可运行' : '待准备' }}
+            <span :class="['scenario-pill', scenarioApiReady(scenario) ? 'is-ready' : 'is-pending']">
+              {{ scenarioApiReady(scenario) ? '可运行' : '待准备' }}
             </span>
           </div>
           <p class="scenario-card__ability">{{ abilityLabel(scenario.workbenchType) }}</p>
@@ -118,7 +118,7 @@
           </ol>
 
           <RouterLink class="scenario-card__link" :to="scenario.route">
-            {{ scenario.ready ? '进入工作台' : '查看准备步骤' }}
+            {{ scenarioApiReady(scenario) ? '进入工作台' : '查看准备步骤' }}
             <span aria-hidden="true">→</span>
           </RouterLink>
         </article>
@@ -174,8 +174,8 @@ const filteredScenarios = computed(() => {
     ].some((value) => String(value ?? '').toLocaleLowerCase('zh-CN').includes(keyword))
     const matchesAbility = abilityFilter.value === 'all' || scenario.workbenchType === abilityFilter.value
     const matchesStatus = statusFilter.value === 'all'
-      || (statusFilter.value === 'ready' && scenario.ready)
-      || (statusFilter.value === 'unready' && !scenario.ready)
+      || (statusFilter.value === 'ready' && scenarioApiReady(scenario))
+      || (statusFilter.value === 'unready' && !scenarioApiReady(scenario))
       || (statusFilter.value === 'unregistered' && !scenario.configured)
       || (statusFilter.value === 'weights' && scenario.configured && !scenario.weightsPresent)
       || (statusFilter.value === 'runtime' && scenario.weightsPresent && !scenario.runtimeAvailable)
@@ -187,12 +187,16 @@ function abilityLabel(type) {
   return ABILITIES.find((item) => item.key === type)?.label || '未知能力'
 }
 
+function scenarioApiReady(scenario) {
+  return Boolean(scenario?.apiReady ?? scenario?.ready)
+}
+
 function readinessStages(scenario) {
   return [
     { key: 'registered', label: '模型登记', value: Boolean(scenario.configured) },
     { key: 'weights', label: '权重', value: Boolean(scenario.weightsPresent) },
     { key: 'runtime', label: '运行库', value: Boolean(scenario.runtimeAvailable) },
-    { key: 'api', label: 'API', value: Boolean(scenario.ready) },
+    { key: 'api', label: 'API', value: scenarioApiReady(scenario) },
   ]
 }
 

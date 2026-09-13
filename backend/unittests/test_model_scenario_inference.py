@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import io
+import base64
+import sys
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -38,6 +41,10 @@ def _scenario_env(tmp_path_factory):
         MODEL_FOLDER=str(model_folder),
         UPLOAD_FOLDER=str(upload_folder),
         MAX_CONTENT_LENGTH=1024 * 1024,
+        SCENARIO_MAX_IMAGE_BYTES=1024,
+        SCENARIO_MAX_PIXELS=64,
+        SCENARIO_MAX_PROMPTS=2,
+        SCENARIO_MAX_GALLERY_IMAGES=2,
     )
     db.init_app(app)
     jwt.init_app(app)
@@ -155,8 +162,19 @@ def test_image_larger_than_configured_limit_is_rejected(scenario_app):
     app, _headers, model_folder = scenario_app
     _register_model(app, model_folder)
 
-    with pytest.raises(_dispatcher().ScenarioInputError, match="configured upload size limit"):
-        _run(app, "yolo26n-obb", _files(image=_file(payload=b"x" * (1024 * 1024 + 1))))
+    with pytest.raises(_dispatcher().ScenarioPayloadTooLarge, match="scenario image size limit"):
+        _run(app, "yolo26n-obb", _files(image=_file(payload=b"x" * 1025)))
+
+
+def test_decoded_image_exceeding_pixel_limit_is_rejected(scenario_app):
+    app, _headers, model_folder = scenario_app
+    _register_model(app, model_folder)
+    image = np.zeros((8, 9, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+
+    with pytest.raises(_dispatcher().ScenarioPayloadTooLarge, match="pixel limit"):
+        _run(app, "yolo26n-obb", _files(image=_file(payload=encoded.tobytes())))
 
 
 @pytest.mark.parametrize("value", ["-0.01", "1.01", "not-a-number"])
@@ -219,11 +237,55 @@ def test_segmentation_prompt_types_shapes_and_finite_values_are_validated(scenar
         _run(app, "efficient-sam", _files(image=_file()), form)
 
 
+@pytest.mark.parametrize(
+    "form",
+    [
+        {"mode": "unknown", "points": "[[1, 2]]", "labels": "[1]"},
+        {"precision": "fp16", "points": "[[1, 2]]", "labels": "[1]"},
+        {"points": "[[-1, 2]]", "labels": "[1]"},
+        {"points": "[[8, 2]]", "labels": "[1]"},
+        {"box": "[0, 0, 9, 7]"},
+        {"box": "[5, 5, 2, 2]"},
+    ],
+)
+def test_segmentation_mode_precision_and_prompt_coordinates_are_validated(
+    scenario_app, form,
+):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app,
+        model_folder,
+        key="efficient-sam",
+        task="interactive-segmentation",
+        library="opencv-sam",
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError):
+        _run(app, "efficient-sam", _files(image=_file()), form)
+
+
+def test_segmentation_prompt_count_is_bounded(scenario_app):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app,
+        model_folder,
+        key="efficient-sam",
+        task="interactive-segmentation",
+        library="opencv-sam",
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="at most 2 prompt points"):
+        _run(app, "efficient-sam", _files(image=_file()), {
+            "points": "[[1, 1], [2, 2], [3, 3]]",
+            "labels": "[1, 1, 0]",
+        })
+
+
 def test_registered_model_task_must_match_scenario_ability(scenario_app):
     app, _headers, model_folder = scenario_app
     _register_model(app, model_folder, task="object-detection")
 
-    with pytest.raises(_dispatcher().ScenarioInputError, match="does not match scenario ability"):
+    with pytest.raises(_dispatcher().ScenarioInputError, match="does not match scenario"):
         _run(app, "yolo26n-obb", _files(image=_file()))
 
 
@@ -242,7 +304,7 @@ def test_scenario_rejects_task_compatible_but_unowned_runtime_library(
     app, _headers, model_folder = scenario_app
     _register_model(app, model_folder, key=key, task=task, library=library)
 
-    with pytest.raises(_dispatcher().ScenarioInputError, match="unsupported runtime library for scenario"):
+    with pytest.raises(_dispatcher().ScenarioInputError, match="library does not match scenario contract"):
         _run(app, key, _files(image=_file(), query=_file("query.png"), gallery=[_file("gallery.png")]))
 
 
@@ -289,8 +351,30 @@ def test_missing_weights_are_rejected_without_downloading(scenario_app):
         _run(app, "yolo26n-obb", _files(image=_file()))
 
 
+def test_p2_plate_inference_rejects_the_generic_yolo26n_training_base(scenario_app):
+    app, _headers, model_folder = scenario_app
+    (model_folder / "yolo26n.pt").write_bytes(b"generic base")
+    with app.app_context():
+        db.session.add(AiModel(
+            model_name="P2 scaffold",
+            model_key="yolo26n-p2-plate",
+            task="object-detection",
+            library="ultralytics",
+            file_path="models/yolo26n.pt",
+            status="0",
+        ))
+        db.session.commit()
+
+    with pytest.raises(
+        _dispatcher().ScenarioInputError,
+        match="plate-specific training completion is not verified",
+    ):
+        _run(app, "yolo26n-p2-plate", _files(image=_file()))
+
+
 def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
     app, _headers, model_folder = scenario_app
+    monkeypatch.setitem(app.config, "SCENARIO_MAX_PROMPTS", 3)
     key = "efficient-sam"
     _register_model(
         app,
@@ -318,6 +402,80 @@ def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
     assert calls[0][2]["point_labels"] == [1, 0]
     assert calls[0][2]["box"] == [0, 0, 7, 7]
     assert result["result"] == {"masks": [1]}
+
+
+def test_efficientsam_keeps_variant_directory_for_precision_selection(
+    scenario_app, monkeypatch,
+):
+    app, _headers, model_folder = scenario_app
+    weights = model_folder / "efficient-variants"
+    weights.mkdir()
+    for name in (
+        "image_segmentation_efficientsam_ti_2025april.onnx",
+        "image_segmentation_efficientsam_ti_2025april_int8.onnx",
+    ):
+        (weights / name).write_bytes(b"x" * 100_001)
+    with app.app_context():
+        db.session.add(AiModel(
+            model_name="efficient variants",
+            model_key="efficient-sam",
+            task="interactive-segmentation",
+            library="opencv-sam",
+            file_path="models/efficient-variants",
+            status="0",
+        ))
+        db.session.commit()
+
+    calls = []
+
+    def segment_call(path, _raw, **kwargs):
+        calls.append((path, kwargs))
+        return {"detections": []}
+
+    monkeypatch.setattr("inference.segment_image_efficientsam", segment_call)
+
+    _run(app, "efficient-sam", _files(image=_file()), {
+        "points": "[[1, 2]]",
+        "labels": "[1]",
+        "precision": "int8",
+    })
+
+    assert Path(calls[0][0]).is_dir()
+    assert calls[0][1]["precision"] == "int8"
+
+
+def test_segmentation_returns_area_metrics_computed_from_the_real_mask(
+    scenario_app, monkeypatch,
+):
+    app, _headers, model_folder = scenario_app
+    key = "efficient-sam"
+    _register_model(
+        app,
+        model_folder,
+        key=key,
+        task="interactive-segmentation",
+        library="opencv-sam",
+    )
+    mask = np.array([[0, 255], [255, 0]], dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", mask)
+    assert ok
+    mask_b64 = base64.b64encode(encoded.tobytes()).decode()
+    monkeypatch.setattr(
+        "inference.segment_image_efficientsam",
+        lambda *_args, **_kwargs: {
+            "width": 8,
+            "height": 8,
+            "detections": [{"className": "segment", "maskBase64": mask_b64}],
+        },
+    )
+
+    result = _run(app, key, _files(image=_file()), {
+        "points": "[[1, 1]]", "labels": "[1]", "precision": "fp32",
+    })
+
+    detection = result["result"]["detections"][0]
+    assert detection["areaPixels"] == 2
+    assert detection["areaRatio"] == pytest.approx(0.5)
 
 
 def test_mobilesam_box_prompt_reaches_real_prompt_encoder_as_box(
@@ -401,6 +559,7 @@ def test_plate_detection_uses_model_predict_and_returns_bbox_without_ocr(scenari
             return [SimpleNamespace(boxes=[box], names=self.names, plot=lambda: image)]
 
     monkeypatch.setattr("inference._get_model", lambda _path: Model())
+    monkeypatch.setattr(_dispatcher(), "_get_obb_model", lambda _path: Model(), raising=False)
     result = _run(app, key, _files(image=_file()), {"conf": "0.42", "imgsz": "960"})
 
     assert calls[0][1]["conf"] == 0.42
@@ -428,12 +587,14 @@ def test_obb_detection_uses_model_predict_and_returns_quad(scenario_app, monkeyp
             obb = SimpleNamespace(
                 xyxy=_Tensor([[1, 2, 5, 6]]),
                 xyxyxyxy=_Tensor([[[1, 2], [5, 2], [5, 6], [1, 6]]]),
+                xywhr=_Tensor([[3, 4, 4, 4, np.pi / 4]]),
                 conf=_Tensor([0.91]),
                 cls=_Tensor([0]),
             )
             return [SimpleNamespace(obb=obb, boxes=None, names=self.names, plot=lambda: image)]
 
     monkeypatch.setattr("inference._get_model", lambda _path: Model())
+    monkeypatch.setattr(_dispatcher(), "_get_obb_model", lambda _path: Model(), raising=False)
     result = _run(app, key, _files(image=_file()), {"conf": "0.35", "imgsz": "736"})
 
     assert calls[0]["conf"] == 0.35
@@ -442,8 +603,47 @@ def test_obb_detection_uses_model_predict_and_returns_quad(scenario_app, monkeyp
         "className": "vehicle", "classId": 0, "confidence": 0.91,
         "bbox": [1.0, 2.0, 5.0, 6.0],
         "quad": [[1.0, 2.0], [5.0, 2.0], [5.0, 6.0], [1.0, 6.0]],
+        "angle": 45.0,
+        "angleUnit": "degrees",
     }]
     assert "text" not in result["result"]
+
+
+@pytest.mark.parametrize("extension", [".pt", ".onnx"])
+def test_obb_uses_a_task_aware_loader_for_pt_and_onnx(monkeypatch, tmp_path, extension):
+    dispatcher = _dispatcher()
+    weight = tmp_path / f"model{extension}"
+    weight.write_bytes(b"weight")
+    calls = []
+
+    class Model:
+        names = {}
+
+        def predict(self, image, **kwargs):
+            return [SimpleNamespace(
+                obb=SimpleNamespace(
+                    xyxy=_Tensor([]), xyxyxyxy=_Tensor([]), xywhr=_Tensor([]),
+                    conf=_Tensor([]), cls=_Tensor([]),
+                ),
+                names={},
+                plot=lambda: image,
+            )]
+
+    def load(path, *, task):
+        calls.append((path, task))
+        return Model()
+
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=load))
+    monkeypatch.setattr(
+        "inference._get_model",
+        lambda _path: pytest.fail("OBB must not use the task-agnostic shared loader"),
+    )
+    dispatcher._clear_obb_model_cache()
+    dispatcher._predict_detection(
+        str(weight), _png_bytes(), conf=0.4, imgsz=640, obb=True,
+    )
+
+    assert calls == [(str(weight.resolve()), "obb")]
 
 
 def test_detection_adapter_forwards_imgsz_to_legacy_yolov5(monkeypatch):
@@ -515,9 +715,96 @@ def test_reid_compares_query_with_each_gallery_image(scenario_app, monkeypatch):
 
     assert len(calls) == 3
     assert result["result"]["matches"] == [
-        {"filename": "same.png", "similarity": 1.0, "matched": True},
-        {"filename": "other.png", "similarity": 0.0, "matched": False},
+        {
+            "filename": "same.png", "similarity": 1.0, "distance": 0.0,
+            "matched": True, "sourceIndex": 0, "rank": 1,
+        },
+        {
+            "filename": "other.png", "similarity": 0.0, "distance": 1.0,
+            "matched": False, "sourceIndex": 1, "rank": 2,
+        },
     ]
+
+
+def test_reid_uses_raw_similarity_for_decisions_then_stably_ranks_results(
+    scenario_app, monkeypatch,
+):
+    app, _headers, model_folder = scenario_app
+    key = "clip-reid-vehicle"
+    _register_model(app, model_folder, key=key, task="vehicle-reid", library="clip-reid")
+    monkeypatch.setattr(
+        "services.vehicle_reid_feat.extract_vehicle_embedding",
+        lambda *_args: (np.array([1.0, 0.0]), {"backend": "vehicle-onnx", "dim": 2}),
+    )
+    scores = iter((0.70003, 0.70004))
+    monkeypatch.setattr("services.vehicle_reid_feat.cosine", lambda *_args: next(scores))
+
+    result = _run(
+        app,
+        key,
+        _files(query=_file("query.png"), gallery=[_file("low.png"), _file("high.png")]),
+        {"threshold": "0.700035"},
+    )
+
+    assert result["result"]["matches"] == [
+        {
+            "filename": "high.png", "similarity": 0.7, "distance": 0.3,
+            "matched": True, "sourceIndex": 1, "rank": 1,
+        },
+        {
+            "filename": "low.png", "similarity": 0.7, "distance": 0.3,
+            "matched": False, "sourceIndex": 0, "rank": 2,
+        },
+    ]
+
+
+def test_reid_gallery_count_is_bounded_before_decoding(scenario_app):
+    app, _headers, model_folder = scenario_app
+    key = "clip-reid-vehicle"
+    _register_model(app, model_folder, key=key, task="vehicle-reid", library="clip-reid")
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="at most 2 gallery images"):
+        _run(app, key, _files(
+            query=_file("query.png"),
+            gallery=[_file("one.png"), _file("two.png"), _file("three.png")],
+        ))
+
+
+def test_reid_decodes_and_embeds_each_gallery_image_incrementally(
+    scenario_app, monkeypatch,
+):
+    app, _headers, model_folder = scenario_app
+    key = "clip-reid-vehicle"
+    _register_model(app, model_folder, key=key, task="vehicle-reid", library="clip-reid")
+    events = []
+
+    class RecordingStream(io.BytesIO):
+        def __init__(self, label):
+            super().__init__(_png_bytes())
+            self.label = label
+
+        def read(self, *args, **kwargs):
+            events.append(f"read:{self.label}")
+            return super().read(*args, **kwargs)
+
+    files = _files(
+        query=FileStorage(stream=RecordingStream("query"), filename="query.png"),
+        gallery=[
+            FileStorage(stream=RecordingStream("one"), filename="one.png"),
+            FileStorage(stream=RecordingStream("two"), filename="two.png"),
+        ],
+    )
+
+    def extract(_path, image):
+        events.append("extract")
+        return np.array([1.0, 0.0]), {"backend": "vehicle-onnx", "dim": 2}
+
+    monkeypatch.setattr("services.vehicle_reid_feat.extract_vehicle_embedding", extract)
+    _run(app, key, files)
+
+    first_gallery_read = events.index("read:one")
+    second_gallery_read = events.index("read:two")
+    assert "extract" in events[first_gallery_read + 1:second_gallery_read]
 
 
 def test_reid_rejects_histogram_fallback(scenario_app, monkeypatch):
@@ -581,7 +868,9 @@ def test_reid_query_metadata_is_allowlisted(scenario_app, monkeypatch):
     }
 
 
-def test_infer_route_returns_management_envelope_and_sanitizes_failures(scenario_app, monkeypatch):
+def test_infer_route_returns_management_envelope_and_sanitizes_failures(
+    scenario_app, monkeypatch, caplog,
+):
     app, headers, model_folder = scenario_app
     _register_model(app, model_folder)
     monkeypatch.setattr(
@@ -591,12 +880,15 @@ def test_infer_route_returns_management_envelope_and_sanitizes_failures(scenario
 
     response = app.test_client().post(
         "/api/ai/model-scenarios/yolo26n-obb/infer",
-        headers=headers,
+        headers={**headers, "X-Request-Id": "scenario-failure-1"},
         data={"file": (io.BytesIO(_png_bytes()), "sample.png")},
     )
 
     assert response.status_code == 500
     assert response.get_json() == {"code": 500, "message": "inference failed", "data": None}
+    assert response.headers["X-Request-Id"] == "scenario-failure-1"
+    assert "scenario-failure-1" in caplog.text
+    assert "secret path" not in caplog.text
 
 
 def test_infer_route_maps_scenario_input_error_to_400(scenario_app):
@@ -611,6 +903,7 @@ def test_infer_route_maps_scenario_input_error_to_400(scenario_app):
 
     assert response.status_code == 400
     assert response.get_json() == {"code": 400, "message": "image is required", "data": None}
+    assert response.headers["X-Request-Id"]
 
 
 def test_infer_route_returns_success_management_envelope(scenario_app, monkeypatch):
@@ -626,16 +919,56 @@ def test_infer_route_returns_success_management_envelope(scenario_app, monkeypat
 
     assert response.status_code == 200
     assert response.get_json() == {"code": 0, "message": "ok", "data": data}
+    assert response.headers["X-Request-Id"]
 
 
-def test_infer_route_preserves_request_too_large_as_413(scenario_app):
+def test_infer_route_preserves_request_too_large_as_413(scenario_app, monkeypatch):
     app, headers, _model_folder = scenario_app
+
+    def too_large(*_args, **_kwargs):
+        raise _dispatcher().ScenarioPayloadTooLarge(
+            "image exceeds the scenario image size limit"
+        )
+
+    monkeypatch.setattr("routes.model_scenario.run_scenario", too_large)
 
     response = app.test_client().post(
         "/api/ai/model-scenarios/yolo26n-obb/infer",
         headers=headers,
-        data={"file": (io.BytesIO(b"x" * (1024 * 1024 + 1)), "sample.png")},
+        data={"file": (io.BytesIO(b"image"), "sample.png")},
     )
 
     assert response.status_code == 413
-    assert response.get_json() == {"code": 413, "message": "request entity too large", "data": None}
+    assert response.get_json() == {
+        "code": 413, "message": "image exceeds the scenario image size limit", "data": None,
+    }
+    assert response.headers["X-Request-Id"]
+
+
+@pytest.mark.parametrize(
+    ("path", "target"),
+    [
+        ("/api/ai/model-scenarios?phase=1", "routes.model_scenario.list_scenarios"),
+        ("/api/ai/model-scenarios/yolo26n-obb", "routes.model_scenario.get_scenario"),
+    ],
+)
+def test_management_reads_log_and_sanitize_unexpected_failures(
+    scenario_app, monkeypatch, caplog, path, target,
+):
+    app, headers, _model_folder = scenario_app
+    monkeypatch.setattr(
+        target,
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("C:/secret/model.pt")),
+    )
+
+    response = app.test_client().get(
+        path, headers={**headers, "X-Request-Id": "scenario-read-failure"},
+    )
+
+    assert response.status_code == 500
+    assert response.get_json() == {
+        "code": 500, "message": "model scenario lookup failed", "data": None,
+    }
+    assert response.headers["X-Request-Id"] == "scenario-read-failure"
+    assert "scenario-read-failure" in caplog.text
+    assert "secret/model.pt" not in caplog.text

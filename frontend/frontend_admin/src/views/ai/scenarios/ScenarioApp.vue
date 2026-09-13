@@ -30,11 +30,11 @@
           <p>{{ scenario.description }}</p>
           <code>{{ fixedModelKey }}</code>
         </div>
-        <div :class="['scenario-health', scenario.ready ? 'is-ready' : 'is-pending']">
+        <div :class="['scenario-health', apiReady ? 'is-ready' : 'is-pending']">
           <span aria-hidden="true"></span>
           <div>
-            <strong>{{ scenario.ready ? '生产可运行' : '等待环境准备' }}</strong>
-            <small>{{ scenario.ready ? '模型、权重、运行库与 API 均已就绪' : readinessReason }}</small>
+            <strong>{{ apiReady ? '生产可运行' : '等待环境准备' }}</strong>
+            <small>{{ apiReady ? '模型、权重、运行库与 API 均已就绪' : readinessReason }}</small>
           </div>
         </div>
       </header>
@@ -46,7 +46,7 @@
         </li>
       </ol>
 
-      <aside v-if="!scenario.ready" class="scenario-readiness-note" aria-labelledby="preparation-title">
+      <aside v-if="!apiReady" class="scenario-readiness-note" aria-labelledby="preparation-title">
         <div>
           <p class="scenario-kicker">PREPARATION REQUIRED</p>
           <h2 id="preparation-title">该场景尚未就绪</h2>
@@ -204,20 +204,22 @@ const ABILITY_LABELS = {
 }
 
 const abilityLabel = computed(() => ABILITY_LABELS[workbench.value] || '未知能力')
+const apiReady = computed(() => Boolean(scenario.value?.apiReady ?? scenario.value?.ready))
 
 const readinessStages = computed(() => [
   { key: 'registered', label: '模型登记', detail: scenario.value?.configured ? '登记完成' : '尚未登记', value: Boolean(scenario.value?.configured) },
   { key: 'weights', label: '权重资产', detail: scenario.value?.weightsPresent ? '文件可用' : '等待准备', value: Boolean(scenario.value?.weightsPresent) },
   { key: 'runtime', label: '运行环境', detail: scenario.value?.runtimeAvailable ? '依赖可用' : '依赖缺失', value: Boolean(scenario.value?.runtimeAvailable) },
-  { key: 'api', label: '推理 API', detail: scenario.value?.ready ? '允许执行' : '暂不可执行', value: Boolean(scenario.value?.ready) },
+  { key: 'api', label: '推理 API', detail: apiReady.value ? '允许执行' : '暂不可执行', value: apiReady.value },
 ])
 
 const readinessReason = computed(() => {
+  if (scenario.value?.reason) return scenario.value.reason
   if (!scenario.value?.configured) return '模型尚未在系统中登记'
   if (!scenario.value?.enabled) return '模型已停用'
   if (!scenario.value?.weightsPresent) return '模型权重尚未准备'
   if (!scenario.value?.runtimeAvailable) return '模型运行库尚不可用'
-  return scenario.value?.reason || '推理 API 尚未开放'
+  return '推理 API 尚未开放'
 })
 
 const preparationSteps = computed(() => {
@@ -233,7 +235,13 @@ const preparationSteps = computed(() => {
 const inputLimit = computed(() => {
   const formats = scenario.value?.input?.formats?.map((item) => item.replace('.', '').toUpperCase()).join(' / ') || '图片'
   const size = scenario.value?.input?.maxSizeMb
-  return `${formats}${size ? ` · 单次不超过 ${size} MB` : ''}`
+  const pixels = scenario.value?.input?.maxPixels
+  const prompts = scenario.value?.input?.maxPrompts
+  const gallery = scenario.value?.input?.maxGalleryImages
+  return `${formats}${size ? ` · 单图不超过 ${size} MB` : ''}`
+    + `${pixels ? ` · 最多 ${pixels.toLocaleString()} 像素` : ''}`
+    + `${prompts ? ` · 最多 ${prompts} 个提示` : ''}`
+    + `${gallery ? ` · gallery 最多 ${gallery} 张` : ''}`
 })
 
 const apiDocumentation = computed(() => scenario.value

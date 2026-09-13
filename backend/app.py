@@ -87,6 +87,7 @@ def _migrate(db):
         ("source_path", "ADD COLUMN source_path VARCHAR(500) NULL"),
     ])
     add_columns("open_app", [
+        ("ip_allowlist", "ADD COLUMN ip_allowlist TEXT NULL"),
         ("webhook_url", "ADD COLUMN webhook_url VARCHAR(500) NULL"),
         ("webhook_secret", "ADD COLUMN webhook_secret VARCHAR(128) NULL"),
         ("webhook_events", "ADD COLUMN webhook_events TEXT NULL"),

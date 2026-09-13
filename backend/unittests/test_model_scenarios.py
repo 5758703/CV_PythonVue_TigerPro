@@ -52,11 +52,14 @@ def test_each_phase_one_scenario_has_complete_user_facing_metadata():
         "defaults",
         "input",
         "apiPath",
+        "adapter",
     )
 
     for scenario in list_scenarios(phase=1):
         for field in required_fields:
             assert scenario[field], f"{scenario['modelKey']} is missing {field}"
+        assert scenario["published"] is True
+        assert scenario["apiEnabled"] is True
 
 
 def test_registry_exposes_the_callable_open_api_inference_paths():
@@ -73,12 +76,24 @@ def test_registry_exposes_the_callable_open_api_inference_paths():
     ]
 
 
-def test_image_inputs_match_existing_upload_format_and_size_constraints():
-    max_size_mb = Config.MAX_CONTENT_LENGTH // (1024 * 1024)
+def test_image_inputs_use_the_independent_scenario_resource_policy():
+    max_size_mb = Config.SCENARIO_MAX_IMAGE_BYTES // (1024 * 1024)
 
     for scenario in list_scenarios(phase=1):
         assert ".webp" in scenario["input"]["formats"]
         assert scenario["input"]["maxSizeMb"] == max_size_mb
+        assert scenario["input"]["maxPixels"] == Config.SCENARIO_MAX_PIXELS
+
+    for key in ("efficient-sam", "mobile-sam"):
+        assert get_scenario(key)["input"]["maxPrompts"] > 0
+    for key in ("clip-reid-vehicle", "transreid-vehicle", "vehicle-vit-reid"):
+        assert get_scenario(key)["input"]["maxGalleryImages"] == Config.SCENARIO_MAX_GALLERY_IMAGES
+
+
+def test_segmentation_registry_does_not_advertise_an_ignored_confidence_threshold():
+    for key in ("efficient-sam", "mobile-sam"):
+        scenario = get_scenario(key)
+        assert "conf" not in scenario["defaults"]
 
 
 def test_unknown_model_key_has_no_scenario():
@@ -87,10 +102,10 @@ def test_unknown_model_key_has_no_scenario():
 
 def test_returned_scenarios_are_defensive_copies():
     listed = list_scenarios(phase=1)
-    listed[0]["defaults"]["conf"] = 0.01
+    listed[0]["defaults"]["precision"] = "mutated"
     listed[0]["input"]["formats"].append(".mutated")
 
     retrieved = get_scenario("efficient-sam")
 
-    assert retrieved["defaults"]["conf"] != 0.01
+    assert retrieved["defaults"]["precision"] == "fp32"
     assert ".mutated" not in retrieved["input"]["formats"]

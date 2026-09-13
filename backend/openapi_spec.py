@@ -1,5 +1,46 @@
 """OpenAPI 3.0 规范文档（静态生成，供 /openapi/v1/openapi.json 与 /docs）。"""
 
+_SIGNATURE_HEADERS = [
+    {
+        "name": "X-Timestamp",
+        "in": "header",
+        "required": True,
+        "description": "Current Unix timestamp in seconds.",
+        "schema": {"type": "string", "pattern": "^[0-9]{10,12}$"},
+    },
+    {
+        "name": "X-Nonce",
+        "in": "header",
+        "required": True,
+        "description": "Unique 16-128 character request nonce; a replay returns 409.",
+        "schema": {"type": "string", "minLength": 16, "maxLength": 128},
+    },
+    {
+        "name": "X-Signature",
+        "in": "header",
+        "required": True,
+        "description": (
+            "Lowercase HMAC-SHA256 hex using the raw API key. Canonical text is "
+            "METHOD\\nPATH_WITHOUT_QUERY\\nTIMESTAMP\\nNONCE\\nPAYLOAD_SHA256. "
+            "GET/HEAD hash empty bytes. For multipart, hash sorted newline-separated "
+            "form:<url-encoded-name>=<url-encoded-value> and "
+            "file:<url-encoded-field>:<sha256-file-bytes> lines."
+        ),
+        "schema": {"type": "string", "pattern": "^(sha256=)?[0-9a-fA-F]{64}$"},
+    },
+]
+
+_RATE_LIMIT_RESPONSE = {
+    "description": "Shared QPS or daily quota exceeded",
+    "headers": {
+        "Retry-After": {
+            "description": "Seconds until the client may retry with a new nonce.",
+            "schema": {"type": "string"},
+        },
+    },
+}
+
+
 OPENAPI_SPEC = {
     "openapi": "3.0.3",
     "info": {
@@ -56,7 +97,8 @@ OPENAPI_SPEC = {
                 "summary": "List model scenarios",
                 "description": "Returns public scenario metadata and runtime readiness.",
                 "x-required-scope": "model-scenario:read",
-                "parameters": [{
+                "x-signature-required": True,
+                "parameters": _SIGNATURE_HEADERS + [{
                     "name": "phase",
                     "in": "query",
                     "required": False,
@@ -76,6 +118,7 @@ OPENAPI_SPEC = {
                                         "workbenchType": "obb_detection",
                                         "configured": True,
                                         "ready": True,
+                                        "apiReady": True,
                                         "reason": None,
                                         "apiPath": (
                                             "/openapi/v1/model-scenarios/"
@@ -89,6 +132,8 @@ OPENAPI_SPEC = {
                     "400": {"description": "Invalid phase"},
                     "401": {"description": "Invalid credentials"},
                     "403": {"description": "Missing model-scenario:read scope"},
+                    "409": {"description": "Request nonce replayed"},
+                    "429": _RATE_LIMIT_RESPONSE,
                     "500": {"description": "Sanitized scenario lookup failure"},
                 },
             }
@@ -98,7 +143,8 @@ OPENAPI_SPEC = {
                 "summary": "Get model scenario",
                 "description": "Returns public capability metadata, input rules, and readiness.",
                 "x-required-scope": "model-scenario:read",
-                "parameters": [{
+                "x-signature-required": True,
+                "parameters": _SIGNATURE_HEADERS + [{
                     "name": "modelKey",
                     "in": "path",
                     "required": True,
@@ -109,6 +155,8 @@ OPENAPI_SPEC = {
                     "401": {"description": "Invalid credentials"},
                     "403": {"description": "Missing model-scenario:read scope"},
                     "404": {"description": "Unknown model scenario"},
+                    "409": {"description": "Request nonce replayed"},
+                    "429": _RATE_LIMIT_RESPONSE,
                     "500": {"description": "Sanitized scenario lookup failure"},
                 },
             }
@@ -121,7 +169,8 @@ OPENAPI_SPEC = {
                     "path or runtime library from the caller."
                 ),
                 "x-required-scope": "model-scenario:infer",
-                "parameters": [{
+                "x-signature-required": True,
+                "parameters": _SIGNATURE_HEADERS + [{
                     "name": "modelKey",
                     "in": "path",
                     "required": True,
@@ -157,7 +206,7 @@ OPENAPI_SPEC = {
                                     "labels": {"type": "string", "description": "JSON point-label array"},
                                     "box": {"type": "string", "description": "JSON [x1,y1,x2,y2]"},
                                     "mode": {"type": "string", "enum": ["prompt", "auto"]},
-                                    "precision": {"type": "string"},
+                                    "precision": {"type": "string", "enum": ["fp32", "int8"]},
                                     "conf": {"type": "number", "minimum": 0, "maximum": 1},
                                     "imgsz": {
                                         "type": "integer", "minimum": 32, "maximum": 4096,
@@ -191,6 +240,8 @@ OPENAPI_SPEC = {
                     "401": {"description": "Invalid credentials"},
                     "403": {"description": "Missing model-scenario:infer scope"},
                     "413": {"description": "Configured upload limit exceeded"},
+                    "409": {"description": "Request nonce replayed"},
+                    "429": _RATE_LIMIT_RESPONSE,
                     "500": {"description": "Sanitized inference failure"},
                 },
             }

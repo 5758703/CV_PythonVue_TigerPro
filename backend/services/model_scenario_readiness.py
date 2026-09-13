@@ -7,6 +7,7 @@ from pathlib import Path
 
 from flask import current_app
 from models import AiModel
+from services.model_scenario_contract import evaluate_scenario_contract
 
 
 _LIBRARY_MODULES = {
@@ -119,31 +120,28 @@ def scenario_with_readiness(scenario: dict) -> dict:
             weightsPresent=False,
             runtimeAvailable=False,
             ready=False,
+            apiReady=False,
             reason="model is not registered",
         )
         return result
 
     weight_path = _weight_path(model.file_path)
     enabled = model.status == "0"
-    weights_present = _weights_present(weight_path, model.library)
-    runtime_available = _runtime_available(model.library)
-    ready = enabled and weights_present and runtime_available
-    if not enabled:
-        reason = "model is disabled"
-    elif not weights_present:
-        reason = "model weights are missing"
-    elif not runtime_available:
-        reason = "runtime library is unavailable"
-    else:
-        reason = None
+    contract = evaluate_scenario_contract(
+        scenario,
+        model,
+        weight_path,
+        runtime_probe=lambda module: _find_module_spec(module) is not None,
+    )
 
     result.update(
         model=model.to_dict(),
         configured=True,
         enabled=enabled,
-        weightsPresent=weights_present,
-        runtimeAvailable=runtime_available,
-        ready=ready,
-        reason=reason,
+        weightsPresent=contract.weights_present,
+        runtimeAvailable=contract.runtime_available,
+        ready=contract.api_ready,
+        apiReady=contract.api_ready,
+        reason=contract.reason,
     )
     return result

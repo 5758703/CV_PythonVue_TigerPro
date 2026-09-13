@@ -45,6 +45,36 @@ class Config:
     except ValueError:
         _max_mb = 4096
     MAX_CONTENT_LENGTH = max(500, _max_mb) * 1024 * 1024  # 默认 4GB（跨镜双视频联调）
+    try:
+        _scenario_max_image_mb = int(os.getenv("SCENARIO_MAX_IMAGE_MB") or "12")
+    except ValueError:
+        _scenario_max_image_mb = 12
+    SCENARIO_MAX_IMAGE_BYTES = max(1, _scenario_max_image_mb) * 1024 * 1024
+    try:
+        SCENARIO_MAX_PIXELS = max(1, int(os.getenv("SCENARIO_MAX_PIXELS") or "40000000"))
+    except ValueError:
+        SCENARIO_MAX_PIXELS = 40_000_000
+    try:
+        SCENARIO_MAX_PROMPTS = max(1, int(os.getenv("SCENARIO_MAX_PROMPTS") or "6"))
+    except ValueError:
+        SCENARIO_MAX_PROMPTS = 6
+    try:
+        SCENARIO_MAX_GALLERY_IMAGES = max(
+            1, int(os.getenv("SCENARIO_MAX_GALLERY_IMAGES") or "32")
+        )
+    except ValueError:
+        SCENARIO_MAX_GALLERY_IMAGES = 32
+
+    try:
+        OPENAPI_SIGNATURE_MAX_AGE_SECONDS = max(
+            30, int(os.getenv("OPENAPI_SIGNATURE_MAX_AGE_SECONDS") or "300")
+        )
+    except ValueError:
+        OPENAPI_SIGNATURE_MAX_AGE_SECONDS = 300
+    TRUST_PROXY = (os.getenv("TRUST_PROXY") or "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
     MODEL_ALLOWED_EXT = {".pt", ".pth", ".onnx", ".engine", ".weights"}
     VIDEO_ALLOWED_EXT = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
     AUDIO_ALLOWED_EXT = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}

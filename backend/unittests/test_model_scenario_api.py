@@ -49,10 +49,14 @@ def scenario_api_client(tmp_path, monkeypatch):
         db.drop_all()
 
 
-def _model(*, key: str, library: str, file_path: str | None, status: str = "0") -> AiModel:
+def _model(
+    *, key: str, library: str, file_path: str | None,
+    task: str = "object-detection", status: str = "0",
+) -> AiModel:
     return AiModel(
         model_name=f"Configured {key}",
         model_key=key,
+        task=task,
         library=library,
         file_path=file_path,
         status=status,
@@ -92,7 +96,7 @@ def test_phase_one_catalog_returns_nine_entries_and_requires_authentication(scen
     }
 
 
-def test_detail_joins_the_exact_registered_model_key(scenario_api_client):
+def test_detail_joins_the_exact_registered_model_key(scenario_api_client, monkeypatch):
     """A catalog detail must use its own key, not a similarly named database row."""
     client, headers, tmp_path = scenario_api_client
     weights = _model_folder(client)
@@ -101,10 +105,17 @@ def test_detail_joins_the_exact_registered_model_key(scenario_api_client):
 
     with client.application.app_context():
         db.session.add_all([
-            _model(key="yolo26n-obb", library="os", file_path="models/obb.pt"),
-            _model(key="yolo26n-obb-shadow", library="os", file_path="missing.pt"),
+            _model(
+                key="yolo26n-obb", task="obb", library="ultralytics",
+                file_path="models/obb.pt",
+            ),
+            _model(
+                key="yolo26n-obb-shadow", task="obb", library="ultralytics",
+                file_path="missing.pt",
+            ),
         ])
         db.session.commit()
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
 
     payload = _assert_envelope(client.get("/api/ai/model-scenarios/yolo26n-obb", headers=headers))
     detail = payload["data"]
@@ -115,6 +126,7 @@ def test_detail_joins_the_exact_registered_model_key(scenario_api_client):
     assert detail["weightsPresent"] is True
     assert detail["runtimeAvailable"] is True
     assert detail["ready"] is True
+    assert detail["apiReady"] is True
     assert detail["reason"] is None
 
 
@@ -134,39 +146,48 @@ def test_unknown_catalog_key_is_not_found(scenario_api_client):
     ("key", "library", "file_path", "status", "expected"),
     [
         (
-            "mobile-sam", "os", "mobile.pt", "1",
+            "mobile-sam", "mobilesam", "mobile.pt", "1",
             {"enabled": False, "weightsPresent": True, "runtimeAvailable": True, "reason": "model is disabled"},
         ),
         (
-            "transreid-vehicle", "os", "missing.pt", "0",
+            "transreid-vehicle", "transreid", "missing.onnx", "0",
             {"enabled": True, "weightsPresent": False, "runtimeAvailable": True, "reason": "model weights are missing"},
         ),
         (
-            "vehicle-vit-reid", "runtime_that_does_not_exist_9d9b", "vehicle.pt", "0",
+            "vehicle-vit-reid", "vit-reid", "vehicle.onnx", "0",
             {"enabled": True, "weightsPresent": True, "runtimeAvailable": False, "reason": "runtime library is unavailable"},
         ),
     ],
 )
 def test_readiness_exposes_boolean_checks_and_the_blocking_reason(
-    scenario_api_client, key, library, file_path, status, expected,
+    scenario_api_client, monkeypatch, key, library, file_path, status, expected,
 ):
     """Removing any readiness prerequisite must leave a truthful, explicit state."""
     client, headers, _tmp_path = scenario_api_client
     weights = _model_folder(client)
     weights.mkdir()
     if expected["weightsPresent"]:
-        (weights / file_path).write_bytes(b"weight")
+        (weights / file_path).write_bytes(b"x" * 100_001)
+
+    monkeypatch.setattr(
+        readiness,
+        "_find_module_spec",
+        lambda module: None if key == "vehicle-vit-reid" and module == "onnxruntime" else object(),
+    )
 
     with client.application.app_context():
-        db.session.add(_model(key=key, library=library, file_path=file_path, status=status))
+        task = "interactive-segmentation" if key == "mobile-sam" else "vehicle-reid"
+        db.session.add(_model(
+            key=key, task=task, library=library, file_path=file_path, status=status,
+        ))
         db.session.commit()
 
     payload = _assert_envelope(client.get(f"/api/ai/model-scenarios/{key}", headers=headers))
-    readiness = payload["data"]
-    assert readiness["configured"] is True
-    assert readiness["ready"] is False
+    state = payload["data"]
+    assert state["configured"] is True
+    assert state["ready"] is False
     for field, value in expected.items():
-        assert readiness[field] == value
+        assert state[field] == value
 
 
 def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client, monkeypatch):
@@ -184,7 +205,8 @@ def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client,
 
     with client.application.app_context():
         db.session.add(_model(
-            key="clip-reid-vehicle", library="clip-reid", file_path="clip-reid",
+            key="clip-reid-vehicle", task="vehicle-reid",
+            library="clip-reid", file_path="clip-reid",
         ))
         db.session.commit()
 
@@ -192,6 +214,7 @@ def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client,
     assert payload["data"]["weightsPresent"] is True
     assert payload["data"]["runtimeAvailable"] is True
     assert payload["data"]["ready"] is True
+    assert payload["data"]["apiReady"] is True
 
 
 @pytest.mark.parametrize(
@@ -218,8 +241,9 @@ def test_missing_optional_asset_adapter_returns_not_ready_detail(
     monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: None)
 
     with client.application.app_context():
+        task = "interactive-segmentation" if key == "efficient-sam" else "vehicle-reid"
         db.session.add(_model(
-            key=key, library=library, file_path=folder,
+            key=key, task=task, library=library, file_path=folder,
         ))
         db.session.commit()
 
@@ -264,7 +288,10 @@ def test_empty_weight_directory_is_not_ready(scenario_api_client):
     (_model_folder(client) / "empty-assets").mkdir(parents=True)
 
     with client.application.app_context():
-        db.session.add(_model(key="vehicle-vit-reid", library="os", file_path="empty-assets"))
+        db.session.add(_model(
+            key="vehicle-vit-reid", task="vehicle-reid", library="vit-reid",
+            file_path="empty-assets",
+        ))
         db.session.commit()
 
     payload = _assert_envelope(client.get("/api/ai/model-scenarios/vehicle-vit-reid", headers=headers))
@@ -273,7 +300,7 @@ def test_empty_weight_directory_is_not_ready(scenario_api_client):
     assert payload["data"]["reason"] == "model weights are missing"
 
 
-def test_weight_path_uses_the_current_application_model_folder(scenario_api_client):
+def test_weight_path_uses_the_current_application_model_folder(scenario_api_client, monkeypatch):
     """A deployment-specific MODEL_FOLDER must override the process-level default."""
     client, headers, tmp_path = scenario_api_client
     active_folder = tmp_path / "deployment-models"
@@ -282,9 +309,109 @@ def test_weight_path_uses_the_current_application_model_folder(scenario_api_clie
     client.application.config["MODEL_FOLDER"] = str(active_folder)
 
     with client.application.app_context():
-        db.session.add(_model(key="yolo26n-obb", library="os", file_path="obb.pt"))
+        db.session.add(_model(
+            key="yolo26n-obb", task="obb", library="ultralytics", file_path="obb.pt",
+        ))
         db.session.commit()
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
 
     payload = _assert_envelope(client.get("/api/ai/model-scenarios/yolo26n-obb", headers=headers))
     assert payload["data"]["weightsPresent"] is True
     assert payload["data"]["ready"] is True
+
+
+@pytest.mark.parametrize(
+    ("key", "task", "library", "suffix", "reason"),
+    [
+        (
+            "yolo26n-obb", "object-detection", "ultralytics", ".pt",
+            "registered model task does not match scenario contract",
+        ),
+        (
+            "yolo26n-obb", "obb", "os", ".pt",
+            "registered model library does not match scenario contract",
+        ),
+        (
+            "yolo26n-obb", "obb", "ultralytics", ".weights",
+            "model weights are incompatible with scenario runtime",
+        ),
+    ],
+)
+def test_readiness_enforces_the_same_exact_contract_as_inference(
+    scenario_api_client, monkeypatch, key, task, library, suffix, reason,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    (weights / f"asset{suffix}").write_bytes(b"weight")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+
+    with client.application.app_context():
+        db.session.add(_model(
+            key=key, task=task, library=library, file_path=f"asset{suffix}",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(
+        client.get(f"/api/ai/model-scenarios/{key}", headers=headers),
+    )["data"]
+    assert detail["ready"] is False
+    assert detail["apiReady"] is False
+    assert detail["reason"] == reason
+
+
+def test_p2_plate_generic_training_base_is_never_reported_api_ready(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    (weights / "yolo26n.pt").write_bytes(b"generic base")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+
+    with client.application.app_context():
+        db.session.add(_model(
+            key="yolo26n-p2-plate", task="object-detection",
+            library="ultralytics", file_path="yolo26n.pt",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/yolo26n-p2-plate", headers=headers,
+    ))["data"]
+    assert detail["weightsPresent"] is True
+    assert detail["apiReady"] is False
+    assert detail["ready"] is False
+    assert detail["reason"] == "plate-specific training completion is not verified"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("published", False, "scenario is not published"),
+        ("apiEnabled", False, "scenario API is disabled"),
+        ("adapter", "wrong-adapter", "scenario adapter is not supported"),
+    ],
+)
+def test_readiness_enforces_explicit_publication_and_adapter_contract(
+    scenario_api_client, monkeypatch, field, value, reason,
+):
+    _client, _headers, _tmp_path = scenario_api_client
+    weights = _model_folder(_client)
+    weights.mkdir()
+    (weights / "obb.pt").write_bytes(b"weight")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+
+    with _client.application.app_context():
+        db.session.add(_model(
+            key="yolo26n-obb", task="obb", library="ultralytics", file_path="obb.pt",
+        ))
+        db.session.commit()
+        from services.model_scenarios import get_scenario
+        scenario = get_scenario("yolo26n-obb")
+        scenario[field] = value
+        detail = readiness.scenario_with_readiness(scenario)
+
+    assert detail["apiReady"] is False
+    assert detail["ready"] is False
+    assert detail["reason"] == reason

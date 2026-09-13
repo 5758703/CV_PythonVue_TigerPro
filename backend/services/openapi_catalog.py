@@ -80,7 +80,7 @@ _ROUTE_RE = re.compile(
     re.M,
 )
 _OPEN_SCOPE_RE = re.compile(
-    r'^@require_open_scope\(\s*["\']([^"\']*)["\']\s*\)',
+    r'^@require_open_scope\(\s*["\']([^"\']*)["\'](?:\s*,\s*[^)]*)?\s*\)',
 )
 
 

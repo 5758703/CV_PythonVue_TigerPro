@@ -18,7 +18,9 @@ from security_open import (
 from services import job_store
 from services import metrics_registry as metrics
 from services import openapi_handlers as handlers
-from services.model_scenario_inference import ScenarioInputError, run_scenario
+from services.model_scenario_inference import (
+    ScenarioInputError, ScenarioPayloadTooLarge, run_scenario,
+)
 from services.model_scenario_readiness import scenario_with_readiness
 from services.model_scenarios import get_scenario, list_scenarios
 from services.object_store import store_upload
@@ -128,7 +130,8 @@ _PUBLIC_SCENARIO_FIELDS = (
     "phase", "order", "modelKey", "name", "category", "ability",
     "workbenchType", "project", "description", "workflow", "outputs",
     "metrics", "risks", "defaults", "input", "configured", "enabled",
-    "weightsPresent", "runtimeAvailable", "ready", "reason",
+    "weightsPresent", "runtimeAvailable", "ready", "apiReady", "reason",
+    "adapter", "published", "apiEnabled",
 )
 
 
@@ -142,7 +145,7 @@ def _public_scenario(scenario):
 
 
 @openapi_v1_bp.get("/model-scenarios")
-@require_open_scope("model-scenario:read")
+@require_open_scope("model-scenario:read", signed_request=True)
 def list_open_model_scenarios():
     raw_phase = request.args.get("phase")
     try:
@@ -157,7 +160,7 @@ def list_open_model_scenarios():
 
 
 @openapi_v1_bp.get("/model-scenarios/<string:model_key>")
-@require_open_scope("model-scenario:read")
+@require_open_scope("model-scenario:read", signed_request=True)
 def get_open_model_scenario(model_key: str):
     try:
         scenario = get_scenario(model_key)
@@ -170,13 +173,17 @@ def get_open_model_scenario(model_key: str):
 
 
 @openapi_v1_bp.post("/model-scenarios/<string:model_key>/infer")
-@require_open_scope("model-scenario:infer")
+@require_open_scope("model-scenario:infer", signed_request=True)
 def infer_open_model_scenario(model_key: str):
     try:
         result = run_scenario(model_key, request.files, request.form)
-    except RequestEntityTooLarge:
+    except (ScenarioPayloadTooLarge, RequestEntityTooLarge) as exc:
+        message = (
+            str(exc) if isinstance(exc, ScenarioPayloadTooLarge)
+            else "request entity too large"
+        )
         return open_error(
-            413, 413, "request entity too large", "request_too_large",
+            413, 413, message, "request_too_large",
         )
     except ScenarioInputError as exc:
         return open_error(400, 400, str(exc), "validation")

@@ -100,10 +100,11 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 
 import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
-import { isAcceptedImageCandidate, normalizeWorkbenchResult, scaleDetectionGeometry, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
+import { createAsyncRequestGuard, isAcceptedImageCandidate, normalizeWorkbenchResult, scaleDetectionGeometry, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
 
 const props = defineProps({ scenario: { type: Object, required: true } })
 const emit = defineEmits(['completed'])
+const requestGuard = createAsyncRequestGuard()
 
 const file = ref(null)
 const previewUrl = ref('')
@@ -123,7 +124,7 @@ const selectedIndex = ref(0)
 const inputHint = computed(() => `${props.scenario.input?.formats?.join(', ') || '图片'} · 最大 ${props.scenario.input?.maxSizeMb || '配置'} MB`)
 const validationErrors = computed(() => validateWorkbenchState('plate_detection', { file: file.value, conf: conf.value, imgsz: imgsz.value }, props.scenario.input))
 const validationMessage = computed(() => file.value ? validationErrors.value[0] || '' : '')
-const canRun = computed(() => props.scenario.ready && !busy.value && validationErrors.value.length === 0)
+const canRun = computed(() => (props.scenario.apiReady ?? props.scenario.ready) && !busy.value && validationErrors.value.length === 0)
 const resultImageUrl = computed(() => normalizedResult.value.imageBase64 ? `data:image/jpeg;base64,${normalizedResult.value.imageBase64}` : '')
 const hasOcr = computed(() => normalizedResult.value.detections.some((item) => Boolean(ocrText(item))))
 
@@ -242,27 +243,33 @@ function resetParameters() {
 
 async function runInference() {
   if (!canRun.value) return
+  const requestToken = requestGuard.begin()
   busy.value = true
   error.value = ''
   resetResult()
   try {
     const form = serializeScenarioForm('plate_detection', { file: file.value, conf: conf.value, imgsz: imgsz.value })
     const response = await scenarioApi.infer(props.scenario.modelKey, form)
+    if (!requestGuard.isCurrent(requestToken)) return
     runOutput.value = response.data
     elapsedMs.value = Number.isFinite(response.data?.elapsedMs) ? response.data.elapsedMs : null
     normalizedResult.value = normalizeWorkbenchResult('plate_detection', response.data?.result)
     await nextTick()
+    if (!requestGuard.isCurrent(requestToken)) return
     drawOverlay()
     createCrops()
     emit('completed', response.data)
   } catch (requestError) {
-    error.value = requestError?.response?.data?.message || requestError?.message || '车牌检测失败，请检查输入与运行环境。'
+    if (requestGuard.isCurrent(requestToken)) {
+      error.value = requestError?.response?.data?.message || requestError?.message || '车牌检测失败，请检查输入与运行环境。'
+    }
   } finally {
-    busy.value = false
+    if (requestGuard.isCurrent(requestToken)) busy.value = false
   }
 }
 
 onBeforeUnmount(() => {
+  requestGuard.dispose()
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
 })
 </script>

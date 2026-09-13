@@ -16,6 +16,7 @@ class OpenApp(db.Model):
     scopes = db.Column(db.Text, default="[]")
     qps_limit = db.Column(db.Integer, default=10)  # 每秒请求上限；0=不限
     daily_limit = db.Column(db.Integer, default=10000)  # 日调用上限；0=不限
+    ip_allowlist = db.Column(db.Text, nullable=True)
     remark = db.Column(db.String(255))
     # 归属业务域（与 openapi_catalog 域 id 对齐，便于分类管理）
     domain_id = db.Column(db.String(64), index=True)
@@ -53,6 +54,23 @@ class OpenApp(db.Model):
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
 
+    def ip_allowlist_entries(self):
+        raw = (self.ip_allowlist or "").strip()
+        if not raw:
+            return []
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            decoded = None
+        values = decoded if isinstance(decoded, list) else raw.replace(",", "\n").splitlines()
+        return [str(value).strip() for value in values if str(value).strip()]
+
+    def set_ip_allowlist(self, values):
+        if isinstance(values, str):
+            values = values.replace(",", "\n").splitlines()
+        cleaned = sorted({str(value).strip() for value in (values or []) if str(value).strip()})
+        self.ip_allowlist = json.dumps(cleaned, ensure_ascii=False) if cleaned else None
+
     def set_webhook_events(self, events):
         cleaned = sorted({str(s).strip() for s in (events or []) if str(s).strip()})
         self.webhook_events = json.dumps(cleaned, ensure_ascii=False)
@@ -66,6 +84,7 @@ class OpenApp(db.Model):
             "scopes": self.scope_list(),
             "qpsLimit": self.qps_limit,
             "dailyLimit": self.daily_limit,
+            "ipAllowlist": self.ip_allowlist_entries(),
             "remark": self.remark,
             "domainId": self.domain_id,
             "category": self.category,
@@ -141,3 +160,44 @@ class OpenApiCallLog(db.Model):
             "errorMessage": self.error_message,
             "createTime": self.create_time.isoformat() if self.create_time else None,
         }
+
+
+class OpenApiNonce(db.Model):
+    __tablename__ = "open_api_nonce"
+    __table_args__ = (
+        db.UniqueConstraint("app_pk", "nonce", name="uq_open_api_nonce_app_value"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    app_pk = db.Column(
+        db.Integer,
+        db.ForeignKey("open_app.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    nonce = db.Column(db.String(128), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    create_time = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class OpenApiRateBucket(db.Model):
+    __tablename__ = "open_api_rate_bucket"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "app_pk", "bucket_kind", "bucket_key",
+            name="uq_open_api_rate_bucket_window",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    app_pk = db.Column(
+        db.Integer,
+        db.ForeignKey("open_app.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    bucket_kind = db.Column(db.String(16), nullable=False)
+    bucket_key = db.Column(db.String(32), nullable=False)
+    count = db.Column(db.Integer, nullable=False, default=0)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    update_time = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

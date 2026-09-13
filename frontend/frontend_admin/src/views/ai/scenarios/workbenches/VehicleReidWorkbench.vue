@@ -111,10 +111,11 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 
 import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
-import { isAcceptedImageCandidate, normalizeWorkbenchResult, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
+import { createAsyncRequestGuard, isAcceptedImageCandidate, normalizeWorkbenchResult, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
 
 const props = defineProps({ scenario: { type: Object, required: true } })
 const emit = defineEmits(['completed'])
+const requestGuard = createAsyncRequestGuard()
 
 const queryFile = ref(null)
 const queryPreview = ref('')
@@ -128,14 +129,17 @@ const elapsedMs = ref(null)
 let gallerySequence = 0
 
 const rankedMatches = computed(() => normalizedResult.value.matches || [])
-const inputHint = computed(() => `${props.scenario.input?.formats?.join(', ') || '图片'} · 单张最大 ${props.scenario.input?.maxSizeMb || '配置'} MB`)
+const inputHint = computed(() => (
+  `${props.scenario.input?.formats?.join(', ') || '图片'} · 单张最大 ${props.scenario.input?.maxSizeMb || '配置'} MB`
+  + ` · gallery 最多 ${props.scenario.input?.maxGalleryImages || '配置'} 张`
+))
 const validationErrors = computed(() => validateWorkbenchState('vehicle_reid', {
   query: queryFile.value,
   gallery: galleryItems.value.map((item) => item.file),
   threshold: threshold.value,
 }, props.scenario.input))
 const validationMessage = computed(() => queryFile.value || galleryItems.value.length ? validationErrors.value[0] || '' : '')
-const canRun = computed(() => props.scenario.ready && !busy.value && validationErrors.value.length === 0)
+const canRun = computed(() => (props.scenario.apiReady ?? props.scenario.ready) && !busy.value && validationErrors.value.length === 0)
 const matchedCount = computed(() => rankedMatches.value.filter((item) => item.matched === true).length)
 const rejectedCount = computed(() => rankedMatches.value.filter((item) => item.matched === false).length)
 const topScore = computed(() => typeof rankedMatches.value[0]?.similarity === 'number'
@@ -222,6 +226,7 @@ function resetParameters() {
 
 async function runInference() {
   if (!canRun.value) return
+  const requestToken = requestGuard.begin()
   busy.value = true
   error.value = ''
   runOutput.value = null
@@ -234,18 +239,22 @@ async function runInference() {
       threshold: threshold.value,
     })
     const response = await scenarioApi.infer(props.scenario.modelKey, form)
+    if (!requestGuard.isCurrent(requestToken)) return
     runOutput.value = response.data
     elapsedMs.value = Number.isFinite(response.data?.elapsedMs) ? response.data.elapsedMs : null
     normalizedResult.value = normalizeWorkbenchResult('vehicle_reid', response.data?.result)
     emit('completed', response.data)
   } catch (requestError) {
-    error.value = requestError?.response?.data?.message || requestError?.message || '车辆 ReID 推理失败，请检查输入与运行环境。'
+    if (requestGuard.isCurrent(requestToken)) {
+      error.value = requestError?.response?.data?.message || requestError?.message || '车辆 ReID 推理失败，请检查输入与运行环境。'
+    }
   } finally {
-    busy.value = false
+    if (requestGuard.isCurrent(requestToken)) busy.value = false
   }
 }
 
 onBeforeUnmount(() => {
+  requestGuard.dispose()
   if (queryPreview.value) URL.revokeObjectURL(queryPreview.value)
   galleryItems.value.forEach((item) => URL.revokeObjectURL(item.url))
 })

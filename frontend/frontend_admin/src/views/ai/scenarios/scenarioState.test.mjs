@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import * as scenarioState from './scenarioState.js'
 
 import {
   PHASE_ONE_ROUTE_KEYS,
@@ -91,6 +92,35 @@ test('exposes exactly the approved phase-one model route keys', () => {
   ])
 })
 
+test('builds the nine real fixed router records from the shared manifest', () => {
+  const component = () => Promise.resolve('ScenarioApp')
+  assert.equal(typeof scenarioState.createScenarioRouteRecords, 'function')
+  const records = scenarioState.createScenarioRouteRecords(component)
+
+  assert.equal(records.length, 9)
+  assert.deepEqual(records.map((record) => record.path), PHASE_ONE_ROUTE_KEYS.map(
+    (key) => `ai/scenarios/${key}`,
+  ))
+  for (const record of records) {
+    assert.equal(record.component, component)
+    assert.equal(record.props.modelKey, record.meta.modelKey)
+    assert.equal(record.path, `ai/scenarios/${record.meta.modelKey}`)
+  }
+})
+
+test('invalidates stale inference completions after a newer run or unmount', () => {
+  assert.equal(typeof scenarioState.createAsyncRequestGuard, 'function')
+  const guard = scenarioState.createAsyncRequestGuard()
+  const first = guard.begin()
+  const second = guard.begin()
+  assert.equal(guard.isCurrent(first), false)
+  assert.equal(guard.isCurrent(second), true)
+
+  guard.dispose()
+  assert.equal(guard.isCurrent(second), false)
+  assert.equal(guard.begin(), null)
+})
+
 test('keeps the route model key fixed when a query tries to switch models', () => {
   assert.equal(
     resolveFixedModelKey({
@@ -113,6 +143,9 @@ test('builds curl against the real Open API inference route', () => {
     /^curl -X POST "https:\/\/vision\.example\/openapi\/v1\/model-scenarios\/yolo26n-obb\/infer"/,
   )
   assert.doesNotMatch(documentation.curl, /\/api\/open\/v1/)
+  assert.match(documentation.curl, /X-Timestamp: <UNIX_SECONDS>/)
+  assert.match(documentation.curl, /X-Nonce: <UNIQUE_NONCE>/)
+  assert.match(documentation.curl, /X-Signature: <HMAC_SHA256>/)
 })
 
 test('documents fixed-model segmentation fields without ignored parameters', () => {
@@ -167,7 +200,7 @@ test('matches the Open API success envelope and normalized result field names', 
     'count', 'detections', 'height', 'imageBase64', 'width',
   ])
   assert.deepEqual(Object.keys(docs.segmentation.response.data.result.detections[0]).sort(), [
-    'bbox', 'classId', 'className', 'confidence', 'maskBase64',
+    'areaPixels', 'areaRatio', 'bbox', 'classId', 'className', 'confidence', 'maskBase64',
   ])
   assert.deepEqual(Object.keys(docs.vehicle_reid.response.data.result).sort(), [
     'backend', 'matches', 'query',
@@ -175,13 +208,13 @@ test('matches the Open API success envelope and normalized result field names', 
   assert.equal(docs.vehicle_reid.response.data.result.backend.inputSize, '256x256')
   assert.equal(typeof docs.vehicle_reid.response.data.result.backend.inputSize, 'string')
   assert.deepEqual(Object.keys(docs.vehicle_reid.response.data.result.matches[0]).sort(), [
-    'filename', 'matched', 'similarity',
+    'distance', 'filename', 'matched', 'rank', 'similarity', 'sourceIndex',
   ])
   assert.deepEqual(Object.keys(docs.plate_detection.response.data.result.detections[0]).sort(), [
     'bbox', 'classId', 'className', 'confidence',
   ])
   assert.deepEqual(Object.keys(docs.obb_detection.response.data.result.detections[0]).sort(), [
-    'bbox', 'classId', 'className', 'confidence', 'quad',
+    'angle', 'angleUnit', 'bbox', 'classId', 'className', 'confidence', 'quad',
   ])
 })
 
@@ -238,6 +271,17 @@ test('validates each workbench form at its business input boundaries', () => {
     gallery: [image, image],
     threshold: 1.01,
   }), ['相似度阈值必须在 0 到 1 之间。'])
+  assert.equal(validateWorkbenchState('vehicle_reid', {
+    query: image,
+    gallery: [image, image, image],
+    threshold: 0.7,
+  }, { maxGalleryImages: 2 })[0].includes('2'), true)
+  assert.equal(validateWorkbenchState('segmentation', {
+    file: image,
+    mode: 'prompt',
+    points: [[1, 1], [2, 2], [3, 3]],
+    pointLabels: [1, 1, 0],
+  }, { maxPrompts: 2 })[0].includes('2'), true)
   assert.deepEqual(validateWorkbenchState('plate_detection', {
     file: image,
     conf: 0,
@@ -289,13 +333,14 @@ test('normalizes real ReID matches by similarity and leaves missing decisions mi
 test('keeps ReID gallery indices stable for duplicate names and equal scores', () => {
   const normalized = normalizeWorkbenchResult('vehicle_reid', {
     matches: [
-      { filename: 'same.jpg', similarity: 0.8, matched: true },
-      { filename: 'same.jpg', similarity: 0.9, matched: true },
-      { filename: 'other.jpg', similarity: 0.9, matched: true },
+      { filename: 'other.jpg', similarity: 0.9, distance: 0.1, matched: true, sourceIndex: 2, rank: 1 },
+      { filename: 'same.jpg', similarity: 0.9, distance: 0.1, matched: true, sourceIndex: 1, rank: 2 },
+      { filename: 'same.jpg', similarity: 0.8, distance: 0.2, matched: true, sourceIndex: 0, rank: 3 },
     ],
   })
 
-  assert.deepEqual(normalized.matches.map((item) => item.galleryIndex), [1, 2, 0])
+  assert.deepEqual(normalized.matches.map((item) => item.galleryIndex), [2, 1, 0])
+  assert.deepEqual(normalized.matches.map((item) => item.rank), [1, 2, 3])
 })
 
 test('keeps only finite drawable detector geometry and scales within canvas bounds', () => {

@@ -125,6 +125,7 @@ import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
 import {
   clampImagePoint,
+  createAsyncRequestGuard,
   deriveMaskMetrics,
   isAcceptedImageCandidate,
   isCurrentPreviewRequest,
@@ -136,6 +137,7 @@ import {
 
 const props = defineProps({ scenario: { type: Object, required: true } })
 const emit = defineEmits(['completed'])
+const requestGuard = createAsyncRequestGuard()
 
 const file = ref(null)
 const previewUrl = ref('')
@@ -165,7 +167,7 @@ let maskRequestGeneration = 0
 const isMobileSam = computed(() => props.scenario.modelKey === 'mobile-sam')
 const inputHint = computed(() => {
   const formats = props.scenario.input?.formats?.join(', ') || '常见图片格式'
-  return `${formats} · 最大 ${props.scenario.input?.maxSizeMb || '配置'} MB`
+  return `${formats} · 最大 ${props.scenario.input?.maxSizeMb || '配置'} MB · 提示最多 ${props.scenario.input?.maxPrompts || '配置'} 个`
 })
 const interactionCount = computed(() => points.value.length + (box.value ? 1 : 0))
 const validationErrors = computed(() => validateWorkbenchState('segmentation', {
@@ -176,7 +178,7 @@ const validationErrors = computed(() => validateWorkbenchState('segmentation', {
   box: box.value,
 }, props.scenario.input))
 const validationMessage = computed(() => file.value ? validationErrors.value[0] || '' : '')
-const canRun = computed(() => props.scenario.ready && !busy.value && validationErrors.value.length === 0)
+const canRun = computed(() => (props.scenario.apiReady ?? props.scenario.ready) && !busy.value && validationErrors.value.length === 0)
 const canvasStatus = computed(() => {
   if (mode.value === 'auto') return '全自动模式无需提示'
   if (tool.value === 'box') return '拖动绘制提示框'
@@ -380,6 +382,11 @@ async function measureSelectedMask() {
   const generation = ++maskRequestGeneration
   const requestedUrl = maskImageUrl.value
   maskMetrics.value = null
+  const selected = normalizedResult.value.detections[selectedMaskIndex.value]
+  if (Number.isFinite(selected?.areaPixels) && Number.isFinite(selected?.areaRatio)) {
+    maskMetrics.value = { area: selected.areaPixels, ratio: selected.areaRatio }
+    return
+  }
   if (!requestedUrl) return
   const image = new Image()
   image.onload = () => {
@@ -403,6 +410,7 @@ async function measureSelectedMask() {
 
 async function runInference() {
   if (!canRun.value) return
+  const requestToken = requestGuard.begin()
   busy.value = true
   error.value = ''
   runOutput.value = null
@@ -421,21 +429,26 @@ async function runInference() {
       precision: isMobileSam.value ? undefined : precision.value,
     })
     const response = await scenarioApi.infer(props.scenario.modelKey, form)
+    if (!requestGuard.isCurrent(requestToken)) return
     runOutput.value = response.data
     elapsedMs.value = Number.isFinite(response.data?.elapsedMs) ? response.data.elapsedMs : null
     normalizedResult.value = normalizeWorkbenchResult('segmentation', response.data?.result)
     selectedMaskIndex.value = maskOptions.value[0]?.index ?? 0
     await nextTick()
+    if (!requestGuard.isCurrent(requestToken)) return
     measureSelectedMask()
     emit('completed', response.data)
   } catch (requestError) {
-    error.value = requestError?.response?.data?.message || requestError?.message || '分割推理失败，请检查输入与运行环境。'
+    if (requestGuard.isCurrent(requestToken)) {
+      error.value = requestError?.response?.data?.message || requestError?.message || '分割推理失败，请检查输入与运行环境。'
+    }
   } finally {
-    busy.value = false
+    if (requestGuard.isCurrent(requestToken)) busy.value = false
   }
 }
 
 onBeforeUnmount(() => {
+  requestGuard.dispose()
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
 })
 </script>

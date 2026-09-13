@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import binascii
+from collections import OrderedDict
 import json
 import math
 from pathlib import Path
@@ -13,7 +15,8 @@ import numpy as np
 from flask import current_app
 
 from models import AiModel
-from services.model_scenario_readiness import _weight_path, _weights_present
+from services.model_scenario_contract import evaluate_scenario_contract
+from services.model_scenario_readiness import _find_module_spec, _weight_path
 from services.model_scenarios import get_scenario
 
 
@@ -21,30 +24,14 @@ class ScenarioInputError(ValueError):
     """A client-correctable scenario inference error."""
 
 
-_EXPECTED_TASKS = {
-    "interactive-segmentation": frozenset(("interactive-segmentation",)),
-    "vehicle-reid": frozenset(("vehicle-reid",)),
-    "plate-detection": frozenset(("object-detection",)),
-    "obb": frozenset(("obb",)),
-}
-_ABILITY_LIBRARIES = {
-    "interactive-segmentation": frozenset(("mobilesam", "opencv-sam", "efficientsam", "efficient-sam")),
-    "vehicle-reid": frozenset(("clip-reid", "transreid", "vit-reid")),
-    "plate-detection": frozenset(("ultralytics",)),
-    "obb": frozenset(("ultralytics",)),
-}
-_SCENARIO_LIBRARIES = {
-    "efficient-sam": frozenset(("opencv-sam", "efficientsam", "efficient-sam")),
-    "mobile-sam": frozenset(("mobilesam",)),
-    "clip-reid-vehicle": frozenset(("clip-reid",)),
-    "transreid-vehicle": frozenset(("transreid",)),
-    "vehicle-vit-reid": frozenset(("vit-reid",)),
-    "keremberke-yolov5m-license-plate": frozenset(("ultralytics",)),
-    "keremberke-yolov5n-license-plate": frozenset(("ultralytics",)),
-    "yolo26n-p2-plate": frozenset(("ultralytics",)),
-    "yolo26n-obb": frozenset(("ultralytics",)),
-}
 _DETECTION_EXTENSIONS = frozenset((".pt", ".pth", ".onnx", ".engine"))
+_READ_CHUNK_BYTES = 64 * 1024
+_OBB_MODEL_CACHE: OrderedDict[tuple[str, int, int], object] = OrderedDict()
+_MAX_OBB_CACHE_ITEMS = 4
+
+
+class ScenarioPayloadTooLarge(ScenarioInputError):
+    """A scenario-specific request resource limit was exceeded."""
 
 
 def _number(form, name: str, default: float) -> float:
@@ -90,7 +77,13 @@ def _is_finite_number(value) -> bool:
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
-def _segmentation_prompts(form, *, allow_auto: bool) -> tuple[list | None, list | None, list | None]:
+def _segmentation_prompts(
+    form,
+    *,
+    allow_auto: bool,
+    width: int,
+    height: int,
+) -> tuple[list | None, list | None, list | None]:
     points = _json_value(form, "points")
     labels = _json_value(form, "labels", "pointLabels")
     box = _json_value(form, "box")
@@ -124,10 +117,26 @@ def _segmentation_prompts(form, *, allow_auto: bool) -> tuple[list | None, list 
     if not (valid_points and valid_labels and valid_box and labels_match):
         raise ScenarioInputError("invalid segmentation prompts")
     mode = (form.get("mode") or "prompt").strip().lower()
+    if mode not in ("prompt", "auto"):
+        raise ScenarioInputError("mode must be prompt or auto")
     if not allow_auto and mode == "auto":
-        raise ScenarioInputError("invalid segmentation prompts")
+        raise ScenarioInputError("auto mode is not supported by this scenario")
     if mode != "auto" and not points and not box:
         raise ScenarioInputError("invalid segmentation prompts")
+    maximum = int(current_app.config.get("SCENARIO_MAX_PROMPTS", 6))
+    prompt_count = len(points or ()) + (1 if box else 0)
+    if prompt_count > maximum:
+        raise ScenarioInputError(f"at most {maximum} prompt points are allowed")
+    if points and any(
+        point[0] < 0 or point[0] >= width or point[1] < 0 or point[1] >= height
+        for point in points
+    ):
+        raise ScenarioInputError("segmentation prompt coordinates must be inside the image")
+    if box and not (
+        0 <= box[0] < box[2] <= width
+        and 0 <= box[1] < box[3] <= height
+    ):
+        raise ScenarioInputError("segmentation box must be ordered and inside the image")
     return points, labels, box
 
 
@@ -138,13 +147,25 @@ def _read_image(upload, scenario: dict, *, label: str = "image") -> tuple[bytes,
     allowed = frozenset(item.lower() for item in scenario["input"]["formats"])
     if extension not in allowed:
         raise ScenarioInputError("unsupported image extension")
-    raw = upload.read()
-    max_size = int(current_app.config["MAX_CONTENT_LENGTH"])
+    max_size = int(current_app.config.get("SCENARIO_MAX_IMAGE_BYTES", 12 * 1024 * 1024))
+    chunks = []
+    remaining = max_size + 1
+    while remaining > 0:
+        chunk = upload.read(min(_READ_CHUNK_BYTES, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
     if len(raw) > max_size:
-        raise ScenarioInputError("image exceeds the configured upload size limit")
+        raise ScenarioPayloadTooLarge(f"{label} exceeds the scenario image size limit")
     image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ScenarioInputError("invalid image data")
+    height, width = image.shape[:2]
+    max_pixels = int(current_app.config.get("SCENARIO_MAX_PIXELS", 40_000_000))
+    if width * height > max_pixels:
+        raise ScenarioPayloadTooLarge(f"{label} exceeds the scenario pixel limit")
     return raw, image
 
 
@@ -152,21 +173,17 @@ def _resolve_model(scenario: dict) -> tuple[AiModel, Path]:
     model = AiModel.query.filter_by(model_key=scenario["modelKey"]).first()
     if model is None:
         raise ScenarioInputError("model is not registered")
-    allowed_tasks = _EXPECTED_TASKS[scenario["ability"]]
-    if (model.task or "").strip().lower() not in allowed_tasks:
-        raise ScenarioInputError("registered model task does not match scenario ability")
-    if model.status != "0":
-        raise ScenarioInputError("model is disabled")
-    library = (model.library or "").strip().lower()
-    if (
-        library not in _ABILITY_LIBRARIES[scenario["ability"]]
-        or library not in _SCENARIO_LIBRARIES[scenario["modelKey"]]
-    ):
-        raise ScenarioInputError("unsupported runtime library for scenario")
-    path = _weight_path(model.file_path)
-    if not _weights_present(path, model.library):
-        raise ScenarioInputError("model weights are missing")
-    assert path is not None
+    configured_path = _weight_path(model.file_path)
+    contract = evaluate_scenario_contract(
+        scenario,
+        model,
+        configured_path,
+        runtime_probe=lambda module: _find_module_spec(module) is not None,
+    )
+    if not contract.api_ready:
+        raise ScenarioInputError(contract.reason or "model scenario is unavailable")
+    assert contract.weight_path is not None
+    path = contract.weight_path
     if scenario["ability"] == "vehicle-reid":
         from services.vehicle_reid_feat import resolve_vehicle_onnx
 
@@ -175,16 +192,16 @@ def _resolve_model(scenario: dict) -> tuple[AiModel, Path]:
     elif scenario["modelKey"] == "efficient-sam":
         from efficient_sam_dnn import resolve_onnx
 
+        adapter_path = (
+            configured_path
+            if configured_path is not None and configured_path.is_dir()
+            else path
+        )
         try:
-            resolve_onnx(str(path))
+            resolve_onnx(str(adapter_path))
         except (FileNotFoundError, OSError):
             raise ScenarioInputError("model weights are incompatible with scenario runtime") from None
-    elif scenario["modelKey"] == "mobile-sam" and (
-        not path.is_file() or path.suffix.lower() not in (".pt", ".pth")
-    ):
-        raise ScenarioInputError("model weights are incompatible with scenario runtime")
-    elif scenario["ability"] in ("plate-detection", "obb"):
-        _detection_weight(path)
+        path = adapter_path
     return model, path
 
 
@@ -209,6 +226,7 @@ def _obb_detections(result, model) -> list[dict]:
         return []
     xyxy = obb.xyxy.cpu().numpy() if getattr(obb, "xyxy", None) is not None else []
     quads = obb.xyxyxyxy.cpu().numpy() if getattr(obb, "xyxyxyxy", None) is not None else []
+    xywhr = obb.xywhr.cpu().numpy() if getattr(obb, "xywhr", None) is not None else []
     scores = obb.conf.cpu().numpy() if getattr(obb, "conf", None) is not None else None
     classes = obb.cls.cpu().numpy() if getattr(obb, "cls", None) is not None else None
     from inference import _safe_class_name
@@ -227,6 +245,10 @@ def _obb_detections(result, model) -> list[dict]:
                 [round(float(value), 1) for value in point]
                 for point in quads[index].tolist()
             ]
+        if len(xywhr) > index and len(xywhr[index]) >= 5:
+            angle = math.degrees(float(xywhr[index][4])) % 180.0
+            item["angle"] = round(angle, 2)
+            item["angleUnit"] = "degrees"
         items.append(item)
     return items
 
@@ -252,6 +274,35 @@ def _legacy_yolov5_detections(results, model, conf: float) -> list[dict]:
     return detections
 
 
+def _clear_obb_model_cache() -> None:
+    _OBB_MODEL_CACHE.clear()
+
+
+def _get_obb_model(path: str):
+    """Load PT/ONNX OBB assets with an explicit task and bounded local cache."""
+    resolved = Path(path).resolve()
+    try:
+        stat = resolved.stat()
+    except OSError as exc:
+        raise ScenarioInputError("model weights are missing") from exc
+    signature = (str(resolved), int(stat.st_mtime_ns), int(stat.st_size))
+    cached = _OBB_MODEL_CACHE.get(signature)
+    if cached is not None:
+        _OBB_MODEL_CACHE.move_to_end(signature)
+        return cached
+
+    from ultralytics import YOLO
+
+    model = YOLO(str(resolved), task="obb")
+    for key in tuple(_OBB_MODEL_CACHE):
+        if key[0] == str(resolved):
+            _OBB_MODEL_CACHE.pop(key, None)
+    _OBB_MODEL_CACHE[signature] = model
+    while len(_OBB_MODEL_CACHE) > _MAX_OBB_CACHE_ITEMS:
+        _OBB_MODEL_CACHE.popitem(last=False)
+    return model
+
+
 def _predict_detection(path: str, raw: bytes, *, conf: float, imgsz: int, obb: bool) -> dict:
     """Narrow adapter around the existing Ultralytics inference primitives."""
     from inference import (
@@ -265,8 +316,8 @@ def _predict_detection(path: str, raw: bytes, *, conf: float, imgsz: int, obb: b
     image = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise ScenarioInputError("invalid image data")
-    model = _get_model(path)
-    if _is_legacy_yolov5_weight(path):
+    model = _get_obb_model(path) if obb else _get_model(path)
+    if not obb and _is_legacy_yolov5_weight(path):
         model.conf = conf
         result = model(image, size=imgsz)
         detections = _legacy_yolov5_detections(result, model, conf)
@@ -342,29 +393,63 @@ def _segment_mobilesam_prompt(
     }
 
 
-def _segment(model: AiModel, path: Path, raw: bytes, form) -> dict:
+def _add_mask_metrics(result: dict) -> dict:
+    """Annotate returned masks from their encoded pixels, never a proxy box."""
+    for detection in result.get("detections") or ():
+        encoded = detection.get("maskBase64") if isinstance(detection, dict) else None
+        if not encoded:
+            continue
+        try:
+            mask_bytes = base64.b64decode(encoded, validate=True)
+            mask = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+        except (binascii.Error, ValueError, TypeError):
+            mask = None
+        if mask is None or mask.size == 0:
+            continue
+        if mask.ndim == 3:
+            active = np.any(mask != 0, axis=2)
+        else:
+            active = mask != 0
+        area = int(np.count_nonzero(active))
+        total = int(active.shape[0] * active.shape[1])
+        detection["areaPixels"] = area
+        detection["areaRatio"] = area / total if total else 0.0
+    return result
+
+
+def _segment(model: AiModel, path: Path, raw: bytes, image: np.ndarray, form) -> dict:
     library = (model.library or "").strip().lower()
+    height, width = image.shape[:2]
     if library == "mobilesam":
         from inference import segment_image_mobilesam
 
-        points, point_labels, box = _segmentation_prompts(form, allow_auto=True)
+        if form.get("precision") not in (None, ""):
+            raise ScenarioInputError("precision is not supported by this scenario")
+        points, point_labels, box = _segmentation_prompts(
+            form, allow_auto=True, width=width, height=height,
+        )
         mode = (form.get("mode") or "prompt").strip().lower()
         if mode != "auto":
-            return _segment_mobilesam_prompt(
+            return _add_mask_metrics(_segment_mobilesam_prompt(
                 path, raw, points=points, point_labels=point_labels, box=box,
-            )
-        return segment_image_mobilesam(
+            ))
+        return _add_mask_metrics(segment_image_mobilesam(
             str(path), raw, points=points, point_labels=point_labels, box=box,
             mode=mode, draw=True,
-        )
-    if library in ("opencv-sam", "efficientsam", "efficient-sam"):
+        ))
+    if library == "opencv-sam":
         from inference import segment_image_efficientsam
 
-        points, point_labels, box = _segmentation_prompts(form, allow_auto=False)
-        return segment_image_efficientsam(
-            str(path), raw, points=points, point_labels=point_labels, box=box,
-            draw=True, precision=(form.get("precision") or "fp32").strip().lower(),
+        points, point_labels, box = _segmentation_prompts(
+            form, allow_auto=False, width=width, height=height,
         )
+        precision = (form.get("precision") or "fp32").strip().lower()
+        if precision not in ("fp32", "int8"):
+            raise ScenarioInputError("precision must be fp32 or int8")
+        return _add_mask_metrics(segment_image_efficientsam(
+            str(path), raw, points=points, point_labels=point_labels, box=box,
+            draw=True, precision=precision,
+        ))
     raise ScenarioInputError(f"unsupported segmentation runtime: {library or 'unknown'}")
 
 
@@ -375,11 +460,10 @@ def _vehicle_reid(path: Path, files, form, scenario: dict) -> dict:
         raise ScenarioInputError("query image is required")
     if not gallery_uploads:
         raise ScenarioInputError("at least one gallery image is required")
+    maximum = int(current_app.config.get("SCENARIO_MAX_GALLERY_IMAGES", 32))
+    if len(gallery_uploads) > maximum:
+        raise ScenarioInputError(f"at most {maximum} gallery images are allowed")
     _query_raw, query_image = _read_image(query_upload, scenario, label="query image")
-    gallery = [
-        (upload.filename, _read_image(upload, scenario, label="gallery image")[1])
-        for upload in gallery_uploads
-    ]
     threshold = _number(form, "threshold", float(scenario["defaults"].get("threshold", 0.7)))
     from services.vehicle_reid_feat import cosine, extract_vehicle_embedding
 
@@ -392,17 +476,30 @@ def _vehicle_reid(path: Path, files, form, scenario: dict) -> dict:
         if key in query_meta
     }
     matches = []
-    for filename, image in gallery:
+    for source_index, upload in enumerate(gallery_uploads):
+        _gallery_raw, image = _read_image(upload, scenario, label="gallery image")
         embedding, meta = extract_vehicle_embedding(str(path), image)
         if meta.get("backend") != "vehicle-onnx":
             raise RuntimeError("vehicle ReID runtime did not use configured weights")
         score = cosine(query_embedding, embedding)
-        rounded = round(float(score), 4) if score is not None else None
+        raw_score = float(score) if score is not None else None
+        rounded = round(raw_score, 4) if raw_score is not None else None
         matches.append({
-            "filename": filename,
+            "filename": upload.filename,
             "similarity": rounded,
-            "matched": rounded is not None and rounded >= threshold,
+            "distance": round(1.0 - raw_score, 4) if raw_score is not None else None,
+            "matched": raw_score is not None and raw_score >= threshold,
+            "sourceIndex": source_index,
+            "_rawSimilarity": raw_score,
         })
+        del image
+    matches.sort(
+        key=lambda item: -item["_rawSimilarity"]
+        if item["_rawSimilarity"] is not None else float("inf")
+    )
+    for rank, item in enumerate(matches, start=1):
+        item.pop("_rawSimilarity", None)
+        item["rank"] = rank
     return {"query": query_upload.filename, "backend": safe_query_meta, "matches": matches}
 
 
@@ -417,9 +514,9 @@ def run_scenario(model_key: str, files, form) -> dict:
     if ability == "vehicle-reid":
         result = _vehicle_reid(path, files, form, scenario)
     else:
-        raw, _image = _read_image(files.get("file"), scenario)
+        raw, image = _read_image(files.get("file"), scenario)
         if ability == "interactive-segmentation":
-            result = _segment(model, path, raw, form)
+            result = _segment(model, path, raw, image, form)
         else:
             conf = _number(form, "conf", float(scenario["defaults"].get("conf", 0.5)))
             size = _imgsz(form, int(scenario["defaults"].get("imgsz", 640)))

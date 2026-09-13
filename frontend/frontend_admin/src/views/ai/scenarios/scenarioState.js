@@ -17,6 +17,47 @@ export const PHASE_ONE_ROUTE_KEYS = [
   'yolo26n-p2-plate',
 ]
 
+const ROUTE_META = [
+  ['aiScenarioEfficientSam', 'EfficientSAM 场景'],
+  ['aiScenarioMobileSam', 'MobileSAM 场景'],
+  ['aiScenarioClipReidVehicle', 'CLIP-ReID Vehicle 场景'],
+  ['aiScenarioYolov5mLicensePlate', 'YOLOv5m 车牌场景'],
+  ['aiScenarioYolov5nLicensePlate', 'YOLOv5n 车牌场景'],
+  ['aiScenarioTransReidVehicle', 'TransReID Vehicle 场景'],
+  ['aiScenarioVehicleVitReid', 'Vehicle ViT ReID 场景'],
+  ['aiScenarioYolo26nObb', 'YOLO26n OBB 场景'],
+  ['aiScenarioYolo26nP2Plate', 'YOLO26n-P2 车牌场景'],
+]
+
+export function createScenarioRouteRecords(component) {
+  return PHASE_ONE_ROUTE_KEYS.map((modelKey, index) => ({
+    path: `ai/scenarios/${modelKey}`,
+    name: ROUTE_META[index][0],
+    component,
+    props: { modelKey },
+    meta: { title: ROUTE_META[index][1], modelKey },
+  }))
+}
+
+export function createAsyncRequestGuard() {
+  let generation = 0
+  let active = true
+  return {
+    begin() {
+      if (!active) return null
+      generation += 1
+      return generation
+    },
+    isCurrent(token) {
+      return active && token !== null && token === generation
+    },
+    dispose() {
+      active = false
+      generation += 1
+    },
+  }
+}
+
 export function resolveWorkbench(type) {
   return SUPPORTED_WORKBENCHES.has(type) ? type : null
 }
@@ -104,7 +145,10 @@ function normalizedResult(workbenchType) {
     return {
       query: 'query.jpg',
       backend: { backend: 'vehicle-onnx', dim: 768, inputSize: '256x256' },
-      matches: [{ filename: 'candidate-01.jpg', similarity: 0.86, matched: true }],
+      matches: [{
+        filename: 'candidate-01.jpg', similarity: 0.86, distance: 0.14,
+        matched: true, sourceIndex: 0, rank: 1,
+      }],
     }
   }
   const detection = {
@@ -113,9 +157,15 @@ function normalizedResult(workbenchType) {
     confidence: workbenchType === 'obb_detection' ? 0.91 : 0.88,
     bbox: [120, 80, 420, 260],
   }
-  if (workbenchType === 'segmentation') detection.maskBase64 = '<BASE64_PNG>'
+  if (workbenchType === 'segmentation') {
+    detection.maskBase64 = '<BASE64_PNG>'
+    detection.areaPixels = 48320
+    detection.areaRatio = 0.0524
+  }
   if (workbenchType === 'obb_detection') {
     detection.quad = [[130, 70], [430, 100], [410, 270], [110, 240]]
+    detection.angle = 5.71
+    detection.angleUnit = 'degrees'
   }
   return {
     detections: [detection],
@@ -136,6 +186,9 @@ export function buildScenarioApiDocumentation(
   const curl = [
     `curl -X POST "${prefix}${endpoint}" \\`,
     '  -H "Authorization: Bearer <YOUR_API_KEY>" \\',
+    '  -H "X-Timestamp: <UNIX_SECONDS>" \\',
+    '  -H "X-Nonce: <UNIQUE_NONCE>" \\',
+    '  -H "X-Signature: <HMAC_SHA256>" \\',
     ...formFields.map((field, index) => `  ${field}${index < formFields.length - 1 ? ' \\' : ''}`),
   ].join('\n')
   return {
@@ -230,6 +283,10 @@ export function validateWorkbenchState(type, state = {}, inputPolicy = {}) {
   if (type === 'vehicle_reid') {
     if (!state.query) errors.push('请选择查询车辆图片。')
     if (!Array.isArray(state.gallery) || state.gallery.length === 0) errors.push('请至少选择一张候选车辆图片。')
+    const maxGalleryImages = Number(inputPolicy.maxGalleryImages)
+    if (maxGalleryImages > 0 && (state.gallery || []).length > maxGalleryImages) {
+      errors.push(`候选图片最多 ${maxGalleryImages} 张。`)
+    }
     const queryError = imagePolicyError(state.query, inputPolicy)
     if (queryError) errors.push(queryError)
     const galleryError = (state.gallery || []).map((file) => imagePolicyError(file, inputPolicy)).find(Boolean)
@@ -245,6 +302,10 @@ export function validateWorkbenchState(type, state = {}, inputPolicy = {}) {
     const points = Array.isArray(state.points) ? state.points : []
     const labels = Array.isArray(state.pointLabels) ? state.pointLabels : []
     if (points.length !== labels.length) errors.push('正负点标签必须与提示点一一对应。')
+    const maxPrompts = Number(inputPolicy.maxPrompts)
+    if (maxPrompts > 0 && points.length + (state.box ? 1 : 0) > maxPrompts) {
+      errors.push(`提示最多 ${maxPrompts} 个。`)
+    }
     if (state.mode !== 'auto' && points.length === 0 && !state.box) {
       errors.push('请添加至少一个提示点或框选区域。')
     }
@@ -311,18 +372,28 @@ function normalizeDetection(item) {
 export function normalizeWorkbenchResult(type, value) {
   const source = value && typeof value === 'object' ? value : {}
   if (type === 'vehicle_reid') {
-    const matches = Array.isArray(source.matches)
-      ? source.matches.map((item, galleryIndex) => {
+    const sourceMatches = Array.isArray(source.matches) ? source.matches : []
+    const hasServerRanks = sourceMatches.length > 0 && sourceMatches.every(
+      (item) => Number.isInteger(item?.rank) && item.rank > 0,
+    )
+    const matches = sourceMatches
+      .map((item, fallbackIndex) => {
         const match = item && typeof item === 'object' ? { ...item } : {}
         if (!isFiniteNumber(item?.similarity)) delete match.similarity
+        if (!isFiniteNumber(item?.distance)) delete match.distance
         if (typeof item?.matched !== 'boolean') delete match.matched
-        return { ...match, galleryIndex }
+        if (!Number.isInteger(item?.rank) || item.rank < 1) delete match.rank
+        if (!Number.isInteger(item?.sourceIndex) || item.sourceIndex < 0) delete match.sourceIndex
+        return {
+          ...match,
+          galleryIndex: Number.isInteger(match.sourceIndex) ? match.sourceIndex : fallbackIndex,
+        }
       }).sort((left, right) => {
+        if (hasServerRanks) return left.rank - right.rank
         const leftScore = isFiniteNumber(left.similarity) ? left.similarity : -Infinity
         const rightScore = isFiniteNumber(right.similarity) ? right.similarity : -Infinity
         return rightScore - leftScore || left.galleryIndex - right.galleryIndex
       })
-      : []
     return { ...source, matches }
   }
   return {

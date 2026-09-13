@@ -131,6 +131,7 @@ def _create_app_record(data: dict, *, default_scopes=None):
         category=category,
     )
     app.set_scopes(scopes)
+    app.set_ip_allowlist(data.get("ipAllowlist") or [])
     _apply_webhook_fields(app, data)
     db.session.add(app)
     db.session.flush()
@@ -322,6 +323,8 @@ def update_app(aid):
         app.qps_limit = int(data.get("qpsLimit") or 0)
     if "dailyLimit" in data:
         app.daily_limit = int(data.get("dailyLimit") or 0)
+    if "ipAllowlist" in data:
+        app.set_ip_allowlist(data.get("ipAllowlist") or [])
     if "remark" in data:
         app.remark = (data.get("remark") or "").strip() or None
     if "domainId" in data:

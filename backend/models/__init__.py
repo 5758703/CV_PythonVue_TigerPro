@@ -253,6 +253,8 @@ from .mtmc import (  # noqa: E402  跨镜 MTMC
 )
 from .pipeline import AiPipeline, AiPipelineRun, AiPipelineVersion  # noqa: E402  视频分析流水线
 
+from .open_app import OpenApiNonce, OpenApiRateBucket  # noqa: E402
+
 __all__ = [
     "db",
     "User", "Role", "Dept", "Job", "Menu", "AiModel", "Camera",
@@ -260,7 +262,7 @@ __all__ = [
     "FacePerson", "FaceEmbedding",
     "ReidPerson", "ReidEmbedding",
     "AlertRule", "AlertEvent",
-    "OpenApp", "OpenApiKey", "OpenApiCallLog", "OpenJob",
+    "OpenApp", "OpenApiKey", "OpenApiCallLog", "OpenApiNonce", "OpenApiRateBucket", "OpenJob",
     "CameraTopology", "MtmcAssociationEdge", "MtmcCandidatePair", "MtmcCrossCameraEvent",
     "MtmcGlobalPerson", "MtmcGlobalVehicle", "MtmcSearchJob",
     "MtmcTrackEvent", "MtmcTracklet", "MtmcVehiclePass",

@@ -77,9 +77,9 @@
 
 ### 4.2 对外接口
 
-- `GET /api/open/v1/model-scenarios`：返回调用方获授权的场景目录。
-- `GET /api/open/v1/model-scenarios/<model_key>`：返回场景能力、状态和参数规范。
-- `POST /api/open/v1/model-scenarios/<model_key>/infer`：执行单次场景推理。
+- `GET /openapi/v1/model-scenarios`：返回调用方获授权的场景目录。
+- `GET /openapi/v1/model-scenarios/<model_key>`：返回场景能力、状态和参数规范。
+- `POST /openapi/v1/model-scenarios/<model_key>/infer`：执行单次场景推理。
 
 对外接口复用 `OpenApp` 鉴权签名、时间戳/随机数防重放、应用状态、IP 白名单、权限 scope、速率和日配额、请求日志。新增 scope `model-scenario:read` 与 `model-scenario:infer`。响应沿用开放 API 的 request id 和错误码约定。
 
@@ -143,4 +143,3 @@ OBB 支持旋转四点框叠加、角度和坐标表、选中目标裁剪/透视
 ## 9. 非目标与后续阶段
 
 本阶段不下载缺失权重、不承诺所有登记模型已生产就绪、不新建完整 MTMC 编排器、不改造现有通用检测页面，也不提前实现第 10—90 个模型。第一阶段注册表和工作台映射必须允许后续阶段追加配置，避免修改已发布 URL 和 API 契约。
-
