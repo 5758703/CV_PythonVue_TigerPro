@@ -59,6 +59,20 @@ def test_each_phase_one_scenario_has_complete_user_facing_metadata():
             assert scenario[field], f"{scenario['modelKey']} is missing {field}"
 
 
+def test_registry_exposes_the_callable_open_api_inference_paths():
+    assert [item["apiPath"] for item in list_scenarios(phase=1)] == [
+        "/openapi/v1/model-scenarios/efficient-sam/infer",
+        "/openapi/v1/model-scenarios/mobile-sam/infer",
+        "/openapi/v1/model-scenarios/clip-reid-vehicle/infer",
+        "/openapi/v1/model-scenarios/keremberke-yolov5m-license-plate/infer",
+        "/openapi/v1/model-scenarios/keremberke-yolov5n-license-plate/infer",
+        "/openapi/v1/model-scenarios/transreid-vehicle/infer",
+        "/openapi/v1/model-scenarios/vehicle-vit-reid/infer",
+        "/openapi/v1/model-scenarios/yolo26n-obb/infer",
+        "/openapi/v1/model-scenarios/yolo26n-p2-plate/infer",
+    ]
+
+
 def test_image_inputs_match_existing_upload_format_and_size_constraints():
     max_size_mb = Config.MAX_CONTENT_LENGTH // (1024 * 1024)
 

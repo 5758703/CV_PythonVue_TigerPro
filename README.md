@@ -175,6 +175,7 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 | **项目门户** | `frontend_home`（:5174）+ 控制台深链；Cookie `tiger_ai_token` 登录态互通 | http://localhost:5174 |
 | **Windows 屏幕 RTSP** | 本机桌面推流接入摄像头管理 / 监控墙，便于无实体摄像头联调 | [操作说明](docs/camera-screen-rtsp.md) |
 | **模型管理独立目录** | 侧栏根级「模型管理」（模型列表 + 模型训练），与「AI智能识别」同级并置顶 | `/ai/model` · `/ai/training` |
+| **生产模型场景（第一阶段）** | 9 个固定模型路由、4 类工作台、动态就绪状态，以及管理端/Open API 同源推理 | `/ai/scenarios` · [调用示例](backend/docs/openapi_examples.md#生产模型场景) |
 
 更完整的功能解读见：[平台近期新增功能说明](docs/articles/平台近期新增功能说明.md)。
 
@@ -245,6 +246,7 @@ python app.py            # http://127.0.0.1:5001 （启动自动建表 + 灌种�
 | 部门 | `/api/system/dept` | 树 + CRUD |
 | 岗位 | `/api/system/job` | CRUD |
 | 菜单 | `/api/system/menu` | 树 + CRUD |
+| 模型场景 | `/api/ai/model-scenarios` | 第一阶段列表 / 详情 / multipart 推理 |
 | 人脸 | `/api/ai/face` | 底库 CRUD / enroll / recognize |
 | 行人重识别 | `/api/ai/reid` | 底库 CRUD / enroll / recognize / search / search-video |
 | 健康 | `GET /api/health` | 健康检查 |
@@ -315,6 +317,7 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 | [平台近期新增功能说明](docs/articles/平台近期新增功能说明.md) | 跨镜 MTMC / 跌倒 / 手势 / 门户 / 屏幕 RTSP / 模型管理目录等近期能力解读 |
 | [Windows 屏幕 RTSP 推流](docs/camera-screen-rtsp.md) | 本机桌面推流接入摄像头管理与监控墙 |
 | [OpenCV Zoo 轻量视觉](docs/opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet / 与人脸·行人索引 |
+| [Open API 调用示例](backend/docs/openapi_examples.md) | 模型场景列表、详情、四类 multipart 推理、就绪字段与错误约定 |
 | [表格识别功能汇总](docs/表格识别功能汇总.md) | YOLO 检表 → RapidOCR → SLANet_plus；模型、API、前端与代码位置 |
 | [目标追踪-场景分类说明](docs/目标追踪-场景分类说明.md) | 通用追踪 / 车辆追踪 / 人员离岗三场景架构、权限路由与扩展方式 |
 | [人员离岗检测-功能说明](docs/人员离岗检测-功能说明.md) | 多工位离岗规则、镜头运动补偿（移动镜头工位锚定）、API 与验收 |

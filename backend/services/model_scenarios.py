@@ -61,7 +61,7 @@ _SCENARIOS = (
         "defaults": {"precision": "balanced", "conf": 0.5},
         "input": _SEGMENT_INPUT,
         "route": "/ai/scenarios/efficient-sam",
-        "apiPath": "/api/open/v1/model-scenarios/efficient-sam",
+        "apiPath": "/openapi/v1/model-scenarios/efficient-sam/infer",
     },
     {
         "phase": 1,
@@ -80,7 +80,7 @@ _SCENARIOS = (
         "defaults": {"precision": "fast", "conf": 0.5},
         "input": _SEGMENT_INPUT,
         "route": "/ai/scenarios/mobile-sam",
-        "apiPath": "/api/open/v1/model-scenarios/mobile-sam",
+        "apiPath": "/openapi/v1/model-scenarios/mobile-sam/infer",
     },
     {
         "phase": 1,
@@ -99,7 +99,7 @@ _SCENARIOS = (
         "defaults": {"threshold": 0.7},
         "input": _REID_INPUT,
         "route": "/ai/scenarios/clip-reid-vehicle",
-        "apiPath": "/api/open/v1/model-scenarios/clip-reid-vehicle",
+        "apiPath": "/openapi/v1/model-scenarios/clip-reid-vehicle/infer",
     },
     {
         "phase": 1,
@@ -118,7 +118,7 @@ _SCENARIOS = (
         "defaults": {"conf": 0.5, "imgsz": 640},
         "input": _IMAGE_INPUT,
         "route": "/ai/scenarios/keremberke-yolov5m-license-plate",
-        "apiPath": "/api/open/v1/model-scenarios/keremberke-yolov5m-license-plate",
+        "apiPath": "/openapi/v1/model-scenarios/keremberke-yolov5m-license-plate/infer",
     },
     {
         "phase": 1,
@@ -137,7 +137,7 @@ _SCENARIOS = (
         "defaults": {"conf": 0.5, "imgsz": 640},
         "input": _IMAGE_INPUT,
         "route": "/ai/scenarios/keremberke-yolov5n-license-plate",
-        "apiPath": "/api/open/v1/model-scenarios/keremberke-yolov5n-license-plate",
+        "apiPath": "/openapi/v1/model-scenarios/keremberke-yolov5n-license-plate/infer",
     },
     {
         "phase": 1,
@@ -156,7 +156,7 @@ _SCENARIOS = (
         "defaults": {"threshold": 0.7},
         "input": _REID_INPUT,
         "route": "/ai/scenarios/transreid-vehicle",
-        "apiPath": "/api/open/v1/model-scenarios/transreid-vehicle",
+        "apiPath": "/openapi/v1/model-scenarios/transreid-vehicle/infer",
     },
     {
         "phase": 1,
@@ -175,7 +175,7 @@ _SCENARIOS = (
         "defaults": {"threshold": 0.7},
         "input": _REID_INPUT,
         "route": "/ai/scenarios/vehicle-vit-reid",
-        "apiPath": "/api/open/v1/model-scenarios/vehicle-vit-reid",
+        "apiPath": "/openapi/v1/model-scenarios/vehicle-vit-reid/infer",
     },
     {
         "phase": 1,
@@ -194,7 +194,7 @@ _SCENARIOS = (
         "defaults": {"conf": 0.5, "imgsz": 640},
         "input": _IMAGE_INPUT,
         "route": "/ai/scenarios/yolo26n-obb",
-        "apiPath": "/api/open/v1/model-scenarios/yolo26n-obb",
+        "apiPath": "/openapi/v1/model-scenarios/yolo26n-obb/infer",
     },
     {
         "phase": 1,
@@ -213,7 +213,7 @@ _SCENARIOS = (
         "defaults": {"conf": 0.5, "imgsz": 640},
         "input": _IMAGE_INPUT,
         "route": "/ai/scenarios/yolo26n-p2-plate",
-        "apiPath": "/api/open/v1/model-scenarios/yolo26n-p2-plate",
+        "apiPath": "/openapi/v1/model-scenarios/yolo26n-p2-plate/infer",
     },
 )
 

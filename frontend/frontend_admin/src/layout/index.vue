@@ -23,6 +23,16 @@
 
         <!-- AI智能识别 / 系统管理 等均由后端菜单(sys_menu)驱动，受权限控制 -->
         <MenuItem v-for="m in store.routers" :key="m.id" :item="m" base-path="" />
+
+        <!-- 种子菜单存在本地改动时，用权限受控的只读入口保证新场景总览可发现。 -->
+        <el-menu-item
+          v-if="showScenarioFallback"
+          index="/ai/scenarios"
+          title="生产模型场景"
+        >
+          <el-icon><Grid /></el-icon>
+          <template #title>生产模型场景</template>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -88,6 +98,16 @@ const router = useRouter()
 const store = useUserStore()
 const collapse = ref(false)
 const portalUrl = computed(() => resolvePortalUrl())
+
+const menuContainsPath = (items, wantedPath, basePath = '') => (items || []).some((item) => {
+  const path = item.path || ''
+  const fullPath = path.startsWith('/') ? path : `${basePath}/${path}`.replace(/\/+/g, '/')
+  return fullPath === wantedPath || menuContainsPath(item.children, wantedPath, fullPath)
+})
+
+const showScenarioFallback = computed(() => (
+  store.hasPerm('ai:model:list') && !menuContainsPath(store.routers, '/ai/scenarios')
+))
 
 const onCommand = async (cmd) => {
   if (cmd === 'home') {
