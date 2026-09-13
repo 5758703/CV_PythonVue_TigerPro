@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from importlib import import_module
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -99,12 +100,24 @@ def _register_model(
     library="ultralytics",
     status="0",
     with_weights=True,
+    weight_extension=None,
 ):
-    relative = f"{key}.pt"
+    if weight_extension is not None:
+        relative = f"{key}{weight_extension}"
+        payload = b"x" * 100_001
+    elif library in ("clip-reid", "transreid", "vit-reid", "opencv-sam"):
+        relative = f"{key}.onnx"
+        payload = b"x" * 100_001
+    else:
+        relative = f"{key}.pt"
+        payload = b"weights"
     if with_weights:
-        (model_folder / relative).write_bytes(b"weights")
-    elif (model_folder / relative).exists():
-        (model_folder / relative).unlink()
+        (model_folder / relative).write_bytes(payload)
+    else:
+        for extension in (".pt", ".onnx"):
+            candidate = model_folder / f"{key}{extension}"
+            if candidate.exists():
+                candidate.unlink()
     with app.app_context():
         db.session.add(AiModel(
             model_name=key,
@@ -136,6 +149,14 @@ def test_invalid_image_extension_is_rejected(scenario_app):
 
     with pytest.raises(_dispatcher().ScenarioInputError, match="unsupported image extension"):
         _run(app, "yolo26n-obb", _files(image=_file("payload.exe")))
+
+
+def test_image_larger_than_configured_limit_is_rejected(scenario_app):
+    app, _headers, model_folder = scenario_app
+    _register_model(app, model_folder)
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="configured upload size limit"):
+        _run(app, "yolo26n-obb", _files(image=_file(payload=b"x" * (1024 * 1024 + 1))))
 
 
 @pytest.mark.parametrize("value", ["-0.01", "1.01", "not-a-number"])
@@ -170,12 +191,86 @@ def test_malformed_segmentation_prompt_json_is_rejected(scenario_app):
         _run(app, "mobile-sam", _files(image=_file()), {"points": "[broken"})
 
 
+@pytest.mark.parametrize(
+    "form",
+    [
+        {"points": '{"x": 1}', "labels": "[1]"},
+        {"points": "[[1, 2, 3]]", "labels": "[1]"},
+        {"points": "[[1, NaN]]", "labels": "[1]"},
+        {"points": "[[1, 2]]", "labels": '{"label": 1}'},
+        {"points": "[[1, 2], [3, 4]]", "labels": "[1]"},
+        {"points": "[[1, 2]]", "labels": "[Infinity]"},
+        {"box": "[[0, 0], [7, 7]]"},
+        {"box": "[0, 0, 7]"},
+        {"box": "[0, 0, 7, NaN]"},
+    ],
+)
+def test_segmentation_prompt_types_shapes_and_finite_values_are_validated(scenario_app, form):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app,
+        model_folder,
+        key="efficient-sam",
+        task="interactive-segmentation",
+        library="opencv-sam",
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="invalid segmentation prompts"):
+        _run(app, "efficient-sam", _files(image=_file()), form)
+
+
 def test_registered_model_task_must_match_scenario_ability(scenario_app):
     app, _headers, model_folder = scenario_app
     _register_model(app, model_folder, task="object-detection")
 
     with pytest.raises(_dispatcher().ScenarioInputError, match="does not match scenario ability"):
         _run(app, "yolo26n-obb", _files(image=_file()))
+
+
+@pytest.mark.parametrize(
+    ("key", "task", "library"),
+    [
+        ("mobile-sam", "interactive-segmentation", "opencv-sam"),
+        ("yolo26n-p2-plate", "object-detection", "transformers"),
+        ("yolo26n-obb", "obb", "yolo-master"),
+        ("clip-reid-vehicle", "vehicle-reid", "ultralytics"),
+    ],
+)
+def test_scenario_rejects_task_compatible_but_unowned_runtime_library(
+    scenario_app, key, task, library,
+):
+    app, _headers, model_folder = scenario_app
+    _register_model(app, model_folder, key=key, task=task, library=library)
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="unsupported runtime library for scenario"):
+        _run(app, key, _files(image=_file(), query=_file("query.png"), gallery=[_file("gallery.png")]))
+
+
+@pytest.mark.parametrize(
+    ("key", "task", "library", "extension"),
+    [
+        ("efficient-sam", "interactive-segmentation", "opencv-sam", ".pt"),
+        ("mobile-sam", "interactive-segmentation", "mobilesam", ".onnx"),
+        ("yolo26n-p2-plate", "object-detection", "ultralytics", ".weights"),
+        ("yolo26n-obb", "obb", "ultralytics", ".weights"),
+        ("clip-reid-vehicle", "vehicle-reid", "clip-reid", ".pt"),
+    ],
+)
+def test_scenario_rejects_runtime_incompatible_weight_type(
+    scenario_app, key, task, library, extension,
+):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app,
+        model_folder,
+        key=key,
+        task=task,
+        library=library,
+        weight_extension=extension,
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="model weights are incompatible with scenario runtime"):
+        _run(app, key, _files(image=_file(), query=_file("query.png"), gallery=[_file("gallery.png")]))
 
 
 def test_disabled_model_is_rejected_before_inference(scenario_app):
@@ -194,16 +289,15 @@ def test_missing_weights_are_rejected_without_downloading(scenario_app):
         _run(app, "yolo26n-obb", _files(image=_file()))
 
 
-@pytest.mark.parametrize("key", ["efficient-sam", "mobile-sam"])
-def test_segmentation_forwards_points_labels_and_box(scenario_app, monkeypatch, key):
+def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
     app, _headers, model_folder = scenario_app
-    library = "opencv-sam" if key == "efficient-sam" else "mobilesam"
+    key = "efficient-sam"
     _register_model(
         app,
         model_folder,
         key=key,
         task="interactive-segmentation",
-        library=library,
+        library="opencv-sam",
     )
     dispatcher = _dispatcher()
     calls = []
@@ -212,8 +306,7 @@ def test_segmentation_forwards_points_labels_and_box(scenario_app, monkeypatch, 
         calls.append((path, raw, kwargs))
         return {"masks": [1]}
 
-    target = "inference.segment_image_efficientsam" if key == "efficient-sam" else "inference.segment_image_mobilesam"
-    monkeypatch.setattr(target, segment_call)
+    monkeypatch.setattr("inference.segment_image_efficientsam", segment_call)
 
     result = _run(app, key, _files(image=_file()), {
         "points": "[[1, 2], [3, 4]]",
@@ -227,34 +320,109 @@ def test_segmentation_forwards_points_labels_and_box(scenario_app, monkeypatch, 
     assert result["result"] == {"masks": [1]}
 
 
-@pytest.mark.parametrize(
-    ("key", "task", "workbench"),
-    [
-        ("keremberke-yolov5n-license-plate", "object-detection", "plate_detection"),
-        ("yolo26n-obb", "obb", "obb_detection"),
-    ],
-)
-def test_plate_and_obb_forward_conf_and_imgsz_and_normalize_result(
-    scenario_app, monkeypatch, key, task, workbench,
+def test_mobilesam_box_prompt_uses_existing_helper_without_numpy_truth_error(
+    scenario_app, monkeypatch,
 ):
     app, _headers, model_folder = scenario_app
-    _register_model(app, model_folder, key=key, task=task)
-    dispatcher = _dispatcher()
+    _register_model(
+        app,
+        model_folder,
+        key="mobile-sam",
+        task="interactive-segmentation",
+        library="mobilesam",
+    )
+    predict_calls = []
+
+    class Predictor:
+        def set_image(self, _image):
+            return None
+
+        def predict(self, **kwargs):
+            predict_calls.append(kwargs)
+            mask = np.zeros((1, 8, 8), dtype=bool)
+            mask[:, 1:7, 1:7] = True
+            return mask, np.array([0.9], dtype=np.float32), None
+
+    monkeypatch.setattr("inference._get_mobile_sam_predictor", lambda _path: Predictor())
+    result = _run(app, "mobile-sam", _files(image=_file()), {"box": "[1, 1, 6, 6]"})
+
+    assert result["result"]["count"] == 1
+    assert len(predict_calls) == 1
+    assert predict_calls[0]["box"] is None
+    assert predict_calls[0]["point_coords"].tolist() == [[1.0, 1.0], [6.0, 6.0]]
+    assert predict_calls[0]["point_labels"].tolist() == [2, 3]
+
+
+class _Tensor:
+    def __init__(self, values):
+        self.values = np.asarray(values)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.values
+
+
+def test_plate_detection_uses_model_predict_and_returns_bbox_without_ocr(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    key = "yolo26n-p2-plate"
+    _register_model(app, model_folder, key=key, task="object-detection")
     calls = []
 
-    def predict(path, raw, **kwargs):
-        calls.append((path, raw, kwargs))
-        return {"detections": [{"bbox": [1, 2, 3, 4]}]}
+    class Model:
+        names = {0: "plate"}
 
-    monkeypatch.setattr(dispatcher, "_predict_detection", predict)
+        def predict(self, image, **kwargs):
+            calls.append((image.shape, kwargs))
+            box = SimpleNamespace(
+                cls=np.array([0]), conf=np.array([0.88]), xyxy=np.array([[1, 2, 5, 6]]),
+            )
+            return [SimpleNamespace(boxes=[box], names=self.names, plot=lambda: image)]
+
+    monkeypatch.setattr("inference._get_model", lambda _path: Model())
     result = _run(app, key, _files(image=_file()), {"conf": "0.42", "imgsz": "960"})
 
-    assert calls[0][2] == {"conf": 0.42, "imgsz": 960, "obb": task == "obb"}
+    assert calls[0][1]["conf"] == 0.42
+    assert calls[0][1]["imgsz"] == 960
     assert result["modelKey"] == key
-    assert result["workbench"] == workbench
-    assert isinstance(result["elapsedMs"], int)
-    assert result["elapsedMs"] >= 0
-    assert result["result"] == {"detections": [{"bbox": [1, 2, 3, 4]}]}
+    assert result["workbench"] == "plate_detection"
+    assert result["result"]["detections"] == [{
+        "className": "plate", "classId": 0, "confidence": 0.88,
+        "bbox": [1.0, 2.0, 5.0, 6.0],
+    }]
+    assert "text" not in result["result"]
+
+
+def test_obb_detection_uses_model_predict_and_returns_quad(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    key = "yolo26n-obb"
+    _register_model(app, model_folder, key=key, task="obb")
+    calls = []
+
+    class Model:
+        names = {0: "vehicle"}
+
+        def predict(self, image, **kwargs):
+            calls.append(kwargs)
+            obb = SimpleNamespace(
+                xyxy=_Tensor([[1, 2, 5, 6]]),
+                xyxyxyxy=_Tensor([[[1, 2], [5, 2], [5, 6], [1, 6]]]),
+                conf=_Tensor([0.91]),
+                cls=_Tensor([0]),
+            )
+            return [SimpleNamespace(obb=obb, boxes=None, names=self.names, plot=lambda: image)]
+
+    monkeypatch.setattr("inference._get_model", lambda _path: Model())
+    result = _run(app, key, _files(image=_file()), {"conf": "0.35", "imgsz": "736"})
+
+    assert calls[0]["conf"] == 0.35
+    assert calls[0]["imgsz"] == 736
+    assert result["result"]["detections"] == [{
+        "className": "vehicle", "classId": 0, "confidence": 0.91,
+        "bbox": [1.0, 2.0, 5.0, 6.0],
+        "quad": [[1.0, 2.0], [5.0, 2.0], [5.0, 6.0], [1.0, 6.0]],
+    }]
     assert "text" not in result["result"]
 
 
@@ -315,7 +483,7 @@ def test_reid_compares_query_with_each_gallery_image(scenario_app, monkeypatch):
 
     def extract(path, image):
         calls.append((path, image.shape))
-        return next(embeddings), {"backend": "test-onnx", "dim": 2}
+        return next(embeddings), {"backend": "vehicle-onnx", "dim": 2}
 
     monkeypatch.setattr("services.vehicle_reid_feat.extract_vehicle_embedding", extract)
     result = _run(
@@ -330,6 +498,42 @@ def test_reid_compares_query_with_each_gallery_image(scenario_app, monkeypatch):
         {"filename": "same.png", "similarity": 1.0, "matched": True},
         {"filename": "other.png", "similarity": 0.0, "matched": False},
     ]
+
+
+def test_reid_rejects_histogram_fallback(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    key = "clip-reid-vehicle"
+    _register_model(app, model_folder, key=key, task="vehicle-reid", library="clip-reid")
+    monkeypatch.setattr(
+        "services.vehicle_reid_feat.extract_vehicle_embedding",
+        lambda *_args: (np.array([1.0, 0.0]), {"backend": "hist-fallback", "onnxError": "secret"}),
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="vehicle ReID runtime did not use configured weights"):
+        _run(app, key, _files(query=_file("query.png"), gallery=[_file("gallery.png")]))
+
+
+def test_reid_query_metadata_is_allowlisted(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    key = "clip-reid-vehicle"
+    _register_model(app, model_folder, key=key, task="vehicle-reid", library="clip-reid")
+    monkeypatch.setattr(
+        "services.vehicle_reid_feat.extract_vehicle_embedding",
+        lambda *_args: (np.array([1.0, 0.0]), {
+            "backend": "vehicle-onnx",
+            "dim": 2,
+            "inputSize": "256x256",
+            "onnx": "C:/secret/models/vehicle.onnx",
+            "onnxError": "runtime internals",
+            "provider": "CPUExecutionProvider",
+        }),
+    )
+
+    result = _run(app, key, _files(query=_file("query.png"), gallery=[_file("gallery.png")]))
+
+    assert result["result"]["backend"] == {
+        "backend": "vehicle-onnx", "dim": 2, "inputSize": "256x256",
+    }
 
 
 def test_infer_route_returns_management_envelope_and_sanitizes_failures(scenario_app, monkeypatch):
@@ -362,3 +566,31 @@ def test_infer_route_maps_scenario_input_error_to_400(scenario_app):
 
     assert response.status_code == 400
     assert response.get_json() == {"code": 400, "message": "image is required", "data": None}
+
+
+def test_infer_route_returns_success_management_envelope(scenario_app, monkeypatch):
+    app, headers, _model_folder = scenario_app
+    data = {"modelKey": "yolo26n-obb", "workbench": "obb_detection", "elapsedMs": 1, "result": {}}
+    monkeypatch.setattr("routes.model_scenario.run_scenario", lambda *_args, **_kwargs: data)
+
+    response = app.test_client().post(
+        "/api/ai/model-scenarios/yolo26n-obb/infer",
+        headers=headers,
+        data={"file": (io.BytesIO(_png_bytes()), "sample.png")},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"code": 0, "message": "ok", "data": data}
+
+
+def test_infer_route_preserves_request_too_large_as_413(scenario_app):
+    app, headers, _model_folder = scenario_app
+
+    response = app.test_client().post(
+        "/api/ai/model-scenarios/yolo26n-obb/infer",
+        headers=headers,
+        data={"file": (io.BytesIO(b"x" * (1024 * 1024 + 1)), "sample.png")},
+    )
+
+    assert response.status_code == 413
+    assert response.get_json() == {"code": 413, "message": "request entity too large", "data": None}

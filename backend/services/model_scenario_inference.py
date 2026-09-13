@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from pathlib import Path
 from time import perf_counter
 
@@ -26,7 +27,24 @@ _EXPECTED_TASKS = {
     "plate-detection": frozenset(("object-detection",)),
     "obb": frozenset(("obb",)),
 }
-_DETECTION_EXTENSIONS = frozenset((".pt", ".pth", ".onnx", ".engine", ".weights"))
+_ABILITY_LIBRARIES = {
+    "interactive-segmentation": frozenset(("mobilesam", "opencv-sam", "efficientsam", "efficient-sam")),
+    "vehicle-reid": frozenset(("clip-reid", "transreid", "vit-reid")),
+    "plate-detection": frozenset(("ultralytics",)),
+    "obb": frozenset(("ultralytics",)),
+}
+_SCENARIO_LIBRARIES = {
+    "efficient-sam": frozenset(("opencv-sam", "efficientsam", "efficient-sam")),
+    "mobile-sam": frozenset(("mobilesam",)),
+    "clip-reid-vehicle": frozenset(("clip-reid",)),
+    "transreid-vehicle": frozenset(("transreid",)),
+    "vehicle-vit-reid": frozenset(("vit-reid",)),
+    "keremberke-yolov5m-license-plate": frozenset(("ultralytics",)),
+    "keremberke-yolov5n-license-plate": frozenset(("ultralytics",)),
+    "yolo26n-p2-plate": frozenset(("ultralytics",)),
+    "yolo26n-obb": frozenset(("ultralytics",)),
+}
+_DETECTION_EXTENSIONS = frozenset((".pt", ".pth", ".onnx", ".engine"))
 
 
 def _number(form, name: str, default: float) -> float:
@@ -68,6 +86,51 @@ def _json_value(form, *names: str):
         raise ScenarioInputError(f"{field} must be valid JSON") from exc
 
 
+def _is_finite_number(value) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _segmentation_prompts(form, *, allow_auto: bool) -> tuple[list | None, list | None, list | None]:
+    points = _json_value(form, "points")
+    labels = _json_value(form, "labels", "pointLabels")
+    box = _json_value(form, "box")
+    valid_points = (
+        points is None
+        or isinstance(points, list)
+        and all(
+            isinstance(point, list)
+            and len(point) == 2
+            and all(_is_finite_number(value) for value in point)
+            for point in points
+        )
+    )
+    valid_labels = (
+        labels is None
+        or isinstance(labels, list)
+        and all(_is_finite_number(value) and value in (0, 1) for value in labels)
+    )
+    valid_box = (
+        box is None
+        or isinstance(box, list)
+        and len(box) == 4
+        and all(_is_finite_number(value) for value in box)
+    )
+    labels_match = (
+        (points is None and labels is None)
+        or isinstance(points, list)
+        and isinstance(labels, list)
+        and len(points) == len(labels)
+    )
+    if not (valid_points and valid_labels and valid_box and labels_match):
+        raise ScenarioInputError("invalid segmentation prompts")
+    mode = (form.get("mode") or "prompt").strip().lower()
+    if not allow_auto and mode == "auto":
+        raise ScenarioInputError("invalid segmentation prompts")
+    if mode != "auto" and not points and not box:
+        raise ScenarioInputError("invalid segmentation prompts")
+    return points, labels, box
+
+
 def _read_image(upload, scenario: dict, *, label: str = "image") -> tuple[bytes, np.ndarray]:
     if upload is None or not getattr(upload, "filename", ""):
         raise ScenarioInputError(f"{label} is required")
@@ -94,22 +157,48 @@ def _resolve_model(scenario: dict) -> tuple[AiModel, Path]:
         raise ScenarioInputError("registered model task does not match scenario ability")
     if model.status != "0":
         raise ScenarioInputError("model is disabled")
+    library = (model.library or "").strip().lower()
+    if (
+        library not in _ABILITY_LIBRARIES[scenario["ability"]]
+        or library not in _SCENARIO_LIBRARIES[scenario["modelKey"]]
+    ):
+        raise ScenarioInputError("unsupported runtime library for scenario")
     path = _weight_path(model.file_path)
     if not _weights_present(path, model.library):
         raise ScenarioInputError("model weights are missing")
     assert path is not None
+    if scenario["ability"] == "vehicle-reid":
+        from services.vehicle_reid_feat import resolve_vehicle_onnx
+
+        if resolve_vehicle_onnx(str(path)) is None:
+            raise ScenarioInputError("model weights are incompatible with scenario runtime")
+    elif scenario["modelKey"] == "efficient-sam":
+        from efficient_sam_dnn import resolve_onnx
+
+        try:
+            resolve_onnx(str(path))
+        except (FileNotFoundError, OSError):
+            raise ScenarioInputError("model weights are incompatible with scenario runtime") from None
+    elif scenario["modelKey"] == "mobile-sam" and (
+        not path.is_file() or path.suffix.lower() not in (".pt", ".pth")
+    ):
+        raise ScenarioInputError("model weights are incompatible with scenario runtime")
+    elif scenario["ability"] in ("plate-detection", "obb"):
+        _detection_weight(path)
     return model, path
 
 
 def _detection_weight(path: Path) -> str:
     if path.is_file():
-        return str(path)
+        if path.suffix.lower() in _DETECTION_EXTENSIONS:
+            return str(path)
+        raise ScenarioInputError("model weights are incompatible with scenario runtime")
     candidates = sorted(
         candidate for candidate in path.rglob("*")
         if candidate.is_file() and candidate.suffix.lower() in _DETECTION_EXTENSIONS
     )
     if not candidates:
-        raise ScenarioInputError("model weights are missing")
+        raise ScenarioInputError("model weights are incompatible with scenario runtime")
     return str(candidates[0])
 
 
@@ -201,13 +290,15 @@ def _predict_detection(path: str, raw: bytes, *, conf: float, imgsz: int, obb: b
 
 
 def _segment(model: AiModel, path: Path, raw: bytes, form) -> dict:
-    points = _json_value(form, "points")
-    point_labels = _json_value(form, "labels", "pointLabels")
-    box = _json_value(form, "box")
     library = (model.library or "").strip().lower()
     if library == "mobilesam":
         from inference import segment_image_mobilesam
 
+        points, point_labels, box = _segmentation_prompts(form, allow_auto=True)
+        if box is not None:
+            points = list(points or ()) + [[box[0], box[1]], [box[2], box[3]]]
+            point_labels = list(point_labels or ()) + [2, 3]
+            box = None
         return segment_image_mobilesam(
             str(path), raw, points=points, point_labels=point_labels, box=box,
             mode=(form.get("mode") or "prompt").strip().lower(), draw=True,
@@ -215,6 +306,7 @@ def _segment(model: AiModel, path: Path, raw: bytes, form) -> dict:
     if library in ("opencv-sam", "efficientsam", "efficient-sam"):
         from inference import segment_image_efficientsam
 
+        points, point_labels, box = _segmentation_prompts(form, allow_auto=False)
         return segment_image_efficientsam(
             str(path), raw, points=points, point_labels=point_labels, box=box,
             draw=True, precision=(form.get("precision") or "fp32").strip().lower(),
@@ -238,9 +330,18 @@ def _vehicle_reid(path: Path, files, form, scenario: dict) -> dict:
     from services.vehicle_reid_feat import cosine, extract_vehicle_embedding
 
     query_embedding, query_meta = extract_vehicle_embedding(str(path), query_image)
+    if query_meta.get("backend") != "vehicle-onnx":
+        raise ScenarioInputError("vehicle ReID runtime did not use configured weights")
+    safe_query_meta = {
+        key: query_meta[key]
+        for key in ("backend", "dim", "inputSize")
+        if key in query_meta
+    }
     matches = []
     for filename, image in gallery:
-        embedding, _meta = extract_vehicle_embedding(str(path), image)
+        embedding, meta = extract_vehicle_embedding(str(path), image)
+        if meta.get("backend") != "vehicle-onnx":
+            raise ScenarioInputError("vehicle ReID runtime did not use configured weights")
         score = cosine(query_embedding, embedding)
         rounded = round(float(score), 4) if score is not None else None
         matches.append({
@@ -248,7 +349,7 @@ def _vehicle_reid(path: Path, files, form, scenario: dict) -> dict:
             "similarity": rounded,
             "matched": rounded is not None and rounded >= threshold,
         })
-    return {"query": query_upload.filename, "backend": query_meta, "matches": matches}
+    return {"query": query_upload.filename, "backend": safe_query_meta, "matches": matches}
 
 
 def run_scenario(model_key: str, files, form) -> dict:

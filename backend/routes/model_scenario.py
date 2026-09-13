@@ -1,6 +1,7 @@
 """Management endpoints for the registered model scenario catalog."""
 
 from flask import Blueprint, jsonify, request
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from security import permission_required
 from services.model_scenario_inference import ScenarioInputError, run_scenario
@@ -42,6 +43,8 @@ def get_model_scenario(model_key: str):
 def infer_model_scenario(model_key: str):
     try:
         result = run_scenario(model_key, request.files, request.form)
+    except RequestEntityTooLarge:
+        return jsonify(code=413, message="request entity too large", data=None), 413
     except ScenarioInputError as exc:
         return jsonify(code=400, message=str(exc), data=None), 400
     except Exception:  # noqa: BLE001 - never expose model paths or runtime details
