@@ -10,6 +10,7 @@ from config import Config
 from extensions import db, jwt
 from models import AiModel, Role, User
 from routes import all_blueprints
+from services import model_scenario_readiness as readiness
 
 
 @pytest.fixture
@@ -63,6 +64,10 @@ def _assert_envelope(response, status_code=200):
     return payload
 
 
+def _model_folder(client) -> Path:
+    return Path(client.application.config["MODEL_FOLDER"])
+
+
 def test_phase_one_catalog_returns_nine_entries_and_requires_authentication(scenario_api_client):
     """Removing the registered catalog route must reject anonymous catalog access."""
     client, headers, _tmp_path = scenario_api_client
@@ -88,7 +93,7 @@ def test_phase_one_catalog_returns_nine_entries_and_requires_authentication(scen
 def test_detail_joins_the_exact_registered_model_key(scenario_api_client):
     """A catalog detail must use its own key, not a similarly named database row."""
     client, headers, tmp_path = scenario_api_client
-    weights = Path(Config.MODEL_FOLDER)
+    weights = _model_folder(client)
     weights.mkdir()
     (weights / "obb.pt").write_bytes(b"weight")
 
@@ -145,7 +150,7 @@ def test_readiness_exposes_boolean_checks_and_the_blocking_reason(
 ):
     """Removing any readiness prerequisite must leave a truthful, explicit state."""
     client, headers, _tmp_path = scenario_api_client
-    weights = Path(Config.MODEL_FOLDER)
+    weights = _model_folder(client)
     weights.mkdir()
     if expected["weightsPresent"]:
         (weights / file_path).write_bytes(b"weight")
@@ -160,3 +165,59 @@ def test_readiness_exposes_boolean_checks_and_the_blocking_reason(
     assert readiness["ready"] is False
     for field, value in expected.items():
         assert readiness[field] == value
+
+
+def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client, monkeypatch):
+    """A clip-reid registration must probe onnxruntime, never its database alias."""
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client) / "clip-reid"
+    weights.mkdir(parents=True)
+    (weights / "clip_vehicle_reid.onnx").write_bytes(b"x" * 100_001)
+    monkeypatch.setattr(
+        readiness.importlib.util,
+        "find_spec",
+        lambda module: object() if module == "onnxruntime" else None,
+    )
+
+    with client.application.app_context():
+        db.session.add(_model(
+            key="clip-reid-vehicle", library="clip-reid", file_path="clip-reid",
+        ))
+        db.session.commit()
+
+    payload = _assert_envelope(client.get("/api/ai/model-scenarios/clip-reid-vehicle", headers=headers))
+    assert payload["data"]["weightsPresent"] is True
+    assert payload["data"]["runtimeAvailable"] is True
+    assert payload["data"]["ready"] is True
+
+
+def test_empty_weight_directory_is_not_ready(scenario_api_client):
+    """An empty configured directory must not be treated as a model asset."""
+    client, headers, _tmp_path = scenario_api_client
+    (_model_folder(client) / "empty-assets").mkdir(parents=True)
+
+    with client.application.app_context():
+        db.session.add(_model(key="vehicle-vit-reid", library="os", file_path="empty-assets"))
+        db.session.commit()
+
+    payload = _assert_envelope(client.get("/api/ai/model-scenarios/vehicle-vit-reid", headers=headers))
+    assert payload["data"]["weightsPresent"] is False
+    assert payload["data"]["ready"] is False
+    assert payload["data"]["reason"] == "model weights are missing"
+
+
+def test_weight_path_uses_the_current_application_model_folder(scenario_api_client):
+    """A deployment-specific MODEL_FOLDER must override the process-level default."""
+    client, headers, tmp_path = scenario_api_client
+    active_folder = tmp_path / "deployment-models"
+    active_folder.mkdir()
+    (active_folder / "obb.pt").write_bytes(b"weight")
+    client.application.config["MODEL_FOLDER"] = str(active_folder)
+
+    with client.application.app_context():
+        db.session.add(_model(key="yolo26n-obb", library="os", file_path="obb.pt"))
+        db.session.commit()
+
+    payload = _assert_envelope(client.get("/api/ai/model-scenarios/yolo26n-obb", headers=headers))
+    assert payload["data"]["weightsPresent"] is True
+    assert payload["data"]["ready"] is True

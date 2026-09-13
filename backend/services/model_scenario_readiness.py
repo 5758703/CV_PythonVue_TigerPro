@@ -5,8 +5,23 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from config import Config
+from flask import current_app
 from models import AiModel
+
+
+_LIBRARY_MODULES = {
+    "opencv-sam": "cv2",
+    "efficientsam": "cv2",
+    "efficient-sam": "cv2",
+    "mobilesam": "mobile_sam",
+    "mobile-sam": "mobile_sam",
+    "mobile_sam": "mobile_sam",
+    "clip-reid": "onnxruntime",
+    "transreid": "onnxruntime",
+    "vit-reid": "onnxruntime",
+}
+_VEHICLE_REID_LIBRARIES = frozenset(("clip-reid", "transreid", "vit-reid"))
+_EFFICIENT_SAM_LIBRARIES = frozenset(("opencv-sam", "efficientsam", "efficient-sam"))
 
 
 def _weight_path(file_path: str | None) -> Path | None:
@@ -14,7 +29,7 @@ def _weight_path(file_path: str | None) -> Path | None:
     if not file_path:
         return None
 
-    model_folder = Path(Config.MODEL_FOLDER).resolve()
+    model_folder = Path(current_app.config["MODEL_FOLDER"]).resolve()
     relative_path = Path(file_path)
     if relative_path.is_absolute():
         return None
@@ -30,12 +45,44 @@ def _weight_path(file_path: str | None) -> Path | None:
     return candidate
 
 
+def _library_name(library: str | None) -> str:
+    return (library or "").strip().lower()
+
+
 def _runtime_available(library: str | None) -> bool:
-    if not library:
+    library_name = _library_name(library)
+    if not library_name:
         return False
     try:
-        return importlib.util.find_spec(library) is not None
+        module_name = _LIBRARY_MODULES.get(library_name, library_name)
+        return importlib.util.find_spec(module_name) is not None
     except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+
+
+def _weights_present(weight_path: Path | None, library: str | None) -> bool:
+    if weight_path is None:
+        return False
+    try:
+        if weight_path.is_file():
+            return weight_path.stat().st_size > 0
+        if not weight_path.is_dir():
+            return False
+    except OSError:
+        return False
+
+    library_name = _library_name(library)
+    if library_name in _VEHICLE_REID_LIBRARIES:
+        from services.vehicle_reid_feat import assets_ready
+
+        return assets_ready(str(weight_path))
+    if library_name in _EFFICIENT_SAM_LIBRARIES:
+        from efficient_sam_dnn import assets_ready
+
+        return assets_ready(str(weight_path))
+    try:
+        return any(path.is_file() and path.stat().st_size > 0 for path in weight_path.rglob("*"))
+    except OSError:
         return False
 
 
@@ -57,7 +104,7 @@ def scenario_with_readiness(scenario: dict) -> dict:
 
     weight_path = _weight_path(model.file_path)
     enabled = model.status == "0"
-    weights_present = weight_path is not None and weight_path.exists()
+    weights_present = _weights_present(weight_path, model.library)
     runtime_available = _runtime_available(model.library)
     ready = enabled and weights_present and runtime_available
     if not enabled:
