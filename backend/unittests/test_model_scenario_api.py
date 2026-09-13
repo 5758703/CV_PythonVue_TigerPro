@@ -194,6 +194,50 @@ def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client,
     assert payload["data"]["ready"] is True
 
 
+@pytest.mark.parametrize(
+    ("key", "library", "folder", "asset_name", "blocked_module"),
+    [
+        (
+            "clip-reid-vehicle", "clip-reid", "clip-reid", "clip_vehicle_reid.onnx",
+            "services.vehicle_reid_feat",
+        ),
+        (
+            "efficient-sam", "opencv-sam", "efficient-sam",
+            "image_segmentation_efficientsam_ti_2025april.onnx", "efficient_sam_dnn",
+        ),
+    ],
+)
+def test_missing_optional_asset_adapter_returns_not_ready_detail(
+    scenario_api_client, monkeypatch, key, library, folder, asset_name, blocked_module,
+):
+    """A missing optional runtime module must not turn directory readiness into a 500."""
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client) / folder
+    weights.mkdir(parents=True)
+    (weights / asset_name).write_bytes(b"x" * 100_001)
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: None)
+
+    with client.application.app_context():
+        db.session.add(_model(
+            key=key, library=library, file_path=folder,
+        ))
+        db.session.commit()
+
+    original_import = builtins.__import__
+
+    def reject_optional_asset_adapter(name, *args, **kwargs):
+        if name == blocked_module:
+            raise ModuleNotFoundError(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_optional_asset_adapter)
+    payload = _assert_envelope(client.get(f"/api/ai/model-scenarios/{key}", headers=headers))
+    assert payload["data"]["weightsPresent"] is True
+    assert payload["data"]["runtimeAvailable"] is False
+    assert payload["data"]["ready"] is False
+    assert payload["data"]["reason"] == "runtime library is unavailable"
+
+
 def test_runtime_probe_does_not_import_a_dotted_business_parent(tmp_path, monkeypatch):
     """A dotted runtime name must not execute the parent package during readiness."""
     package_name = "scenario_readiness_probe_parent"

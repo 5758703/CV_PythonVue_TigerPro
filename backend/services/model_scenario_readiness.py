@@ -22,6 +22,12 @@ _LIBRARY_MODULES = {
 }
 _VEHICLE_REID_LIBRARIES = frozenset(("clip-reid", "transreid", "vit-reid"))
 _EFFICIENT_SAM_LIBRARIES = frozenset(("opencv-sam", "efficientsam", "efficient-sam"))
+_MIN_ONNX_ASSET_BYTES = 100_000
+_EFFICIENT_SAM_ONNX_NAMES = (
+    "image_segmentation_efficientsam_ti_2025april.onnx",
+    "image_segmentation_efficientsam_ti_2025april_int8.onnx",
+    "image_segmentation_efficientsam_ti_2024may.onnx",
+)
 
 
 def _weight_path(file_path: str | None) -> Path | None:
@@ -67,6 +73,18 @@ def _runtime_available(library: str | None) -> bool:
     return _find_module_spec(module_name) is not None
 
 
+def _large_onnx_in_directory(
+    weight_path: Path, *, names: tuple[str, ...] = (), allow_any_name: bool = False,
+) -> bool:
+    try:
+        candidates = [weight_path / name for name in names]
+        if allow_any_name:
+            candidates.extend(path for path in weight_path.iterdir() if path.suffix.lower() == ".onnx")
+        return any(path.is_file() and path.stat().st_size > _MIN_ONNX_ASSET_BYTES for path in candidates)
+    except OSError:
+        return False
+
+
 def _weights_present(weight_path: Path | None, library: str | None) -> bool:
     if weight_path is None:
         return False
@@ -80,13 +98,9 @@ def _weights_present(weight_path: Path | None, library: str | None) -> bool:
 
     library_name = _library_name(library)
     if library_name in _VEHICLE_REID_LIBRARIES:
-        from services.vehicle_reid_feat import assets_ready
-
-        return assets_ready(str(weight_path))
+        return _large_onnx_in_directory(weight_path, allow_any_name=True)
     if library_name in _EFFICIENT_SAM_LIBRARIES:
-        from efficient_sam_dnn import assets_ready
-
-        return assets_ready(str(weight_path))
+        return _large_onnx_in_directory(weight_path, names=_EFFICIENT_SAM_ONNX_NAMES)
     try:
         return any(path.is_file() and path.stat().st_size > 0 for path in weight_path.rglob("*"))
     except OSError:
