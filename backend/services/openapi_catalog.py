@@ -317,6 +317,7 @@ def scopes_for_all_bridgeable_domains() -> list[str]:
         scopes.extend(d["fullScopes"])
     scopes += [
         "vision:detect", "vision:ocr", "face:recognize", "water:read", "jobs:read",
+        "model-scenario:read", "model-scenario:infer",
     ]
     return sorted(set(scopes))
 

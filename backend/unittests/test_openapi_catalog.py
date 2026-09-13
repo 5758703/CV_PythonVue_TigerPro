@@ -6,6 +6,7 @@ from services.openapi_catalog import (
     catalog_stats,
     list_domains,
     resolve_api_endpoint,
+    scopes_for_all_bridgeable_domains,
     scopes_for_domain,
 )
 
@@ -59,3 +60,8 @@ def test_open_scope_decorators_feed_catalog_scope_enumeration_and_domain_grants(
     expected = {"model-scenario:read", "model-scenario:infer"}
     assert expected <= set(all_scopes())
     assert expected <= set(scopes_for_domain("openapi", include_fine=True))
+
+
+def test_full_all_and_seed_demo_scopes_include_model_scenario_access():
+    full_scopes = set(scopes_for_all_bridgeable_domains())
+    assert {"model-scenario:read", "model-scenario:infer"} <= full_scopes
