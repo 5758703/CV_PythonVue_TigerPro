@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   PHASE_ONE_ROUTE_KEYS,
+  resolveFixedModelKey,
   resolveWorkbench,
   serializeScenarioForm,
 } from './scenarioState.js'
@@ -78,4 +79,14 @@ test('exposes exactly the approved phase-one model route keys', () => {
     'yolo26n-obb',
     'yolo26n-p2-plate',
   ])
+})
+
+test('keeps the route model key fixed when a query tries to switch models', () => {
+  assert.equal(
+    resolveFixedModelKey({
+      meta: { modelKey: 'efficient-sam' },
+      query: { modelKey: 'mobile-sam' },
+    }),
+    'efficient-sam',
+  )
 })

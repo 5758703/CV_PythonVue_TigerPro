@@ -21,6 +21,10 @@ export function resolveWorkbench(type) {
   return SUPPORTED_WORKBENCHES.has(type) ? type : null
 }
 
+export function resolveFixedModelKey(route) {
+  return typeof route?.meta?.modelKey === 'string' ? route.meta.modelKey : null
+}
+
 function appendValue(form, name, value) {
   if (value !== undefined && value !== null) {
     form.append(name, String(value))
