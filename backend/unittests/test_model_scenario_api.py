@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -259,7 +261,11 @@ def test_missing_optional_asset_adapter_returns_not_ready_detail(
     assert payload["data"]["weightsPresent"] is True
     assert payload["data"]["runtimeAvailable"] is False
     assert payload["data"]["ready"] is False
-    assert payload["data"]["reason"] == "runtime library is unavailable"
+    expected_reason = (
+        "production manifest is missing or invalid"
+        if key == "efficient-sam" else "runtime library is unavailable"
+    )
+    assert payload["data"]["reason"] == expected_reason
 
 
 def test_runtime_probe_does_not_import_a_dotted_business_parent(tmp_path, monkeypatch):
@@ -391,10 +397,13 @@ def test_p2_plate_valid_production_manifest_enables_the_verified_artifact(
     client, headers, _tmp_path = scenario_api_client
     weights = _model_folder(client)
     weights.mkdir()
-    (weights / "p2-plate.pt").write_bytes(b"trained")
+    artifact = weights / "p2-plate.pt"
+    artifact.write_bytes(b"trained")
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     (weights / "production-manifest.json").write_text(
         '{"modelKey":"yolo26n-p2-plate","task":"object-detection",'
-        '"trainingComplete":true,"classes":["license_plate"]}',
+        '"trainingComplete":true,"classes":["license_plate"],'
+        f'"artifactFile":"p2-plate.pt","artifactSha256":"{digest}"}}',
         encoding="utf-8",
     )
     monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
@@ -410,6 +419,79 @@ def test_p2_plate_valid_production_manifest_enables_the_verified_artifact(
     ))["data"]
     assert detail["apiReady"] is True
     assert detail["reason"] is None
+
+
+@pytest.mark.parametrize(
+    "manifest_update",
+    [
+        {"artifactFile": None},
+        {"artifactSha256": None},
+        {"artifactFile": "../p2-plate.pt"},
+        {"artifactFile": "other.pt"},
+        {"artifactSha256": "0" * 64},
+        {"artifactSha256": "not-a-sha256"},
+    ],
+)
+def test_p2_manifest_must_bind_the_exact_artifact_and_hash(
+    scenario_api_client, monkeypatch, manifest_update,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    artifact = weights / "p2-plate.pt"
+    artifact.write_bytes(b"trained")
+    manifest = {
+        "modelKey": "yolo26n-p2-plate",
+        "task": "object-detection",
+        "trainingComplete": True,
+        "classes": ["license_plate"],
+        "artifactFile": artifact.name,
+        "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+    }
+    manifest.update(manifest_update)
+    (weights / "production-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+    with client.application.app_context():
+        db.session.add(_model(
+            key="yolo26n-p2-plate", task="object-detection",
+            library="ultralytics", file_path=artifact.name,
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/yolo26n-p2-plate", headers=headers,
+    ))["data"]
+    assert detail["apiReady"] is False
+    assert detail["reason"] == "plate-specific production manifest is missing or invalid"
+
+
+def test_p2_directory_with_multiple_compatible_weights_is_ambiguous(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client) / "p2"
+    weights.mkdir(parents=True)
+    for name in ("one.pt", "two.pt"):
+        (weights / name).write_bytes(name.encode())
+    digest = hashlib.sha256((weights / "one.pt").read_bytes()).hexdigest()
+    (weights / "production-manifest.json").write_text(json.dumps({
+        "modelKey": "yolo26n-p2-plate", "task": "object-detection",
+        "trainingComplete": True, "classes": ["license_plate"],
+        "artifactFile": "one.pt", "artifactSha256": digest,
+    }), encoding="utf-8")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+    with client.application.app_context():
+        db.session.add(_model(
+            key="yolo26n-p2-plate", task="object-detection",
+            library="ultralytics", file_path="p2",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/yolo26n-p2-plate", headers=headers,
+    ))["data"]
+    assert detail["apiReady"] is False
+    assert detail["reason"] == "model weight directory is ambiguous"
 
 
 def test_p2_plate_renamed_base_requires_a_production_manifest(
@@ -456,6 +538,39 @@ def test_efficientsam_rejects_an_arbitrary_large_onnx_file(
     ))["data"]
     assert detail["apiReady"] is False
     assert detail["reason"] == "model weights are incompatible with scenario runtime"
+
+
+def test_efficientsam_requires_a_hash_bound_production_manifest(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client)
+    weights.mkdir()
+    artifact = weights / "image_segmentation_efficientsam_ti_2025april.onnx"
+    artifact.write_bytes(b"x" * 100_001)
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+    with client.application.app_context():
+        db.session.add(_model(
+            key="efficient-sam", task="interactive-segmentation",
+            library="opencv-sam", file_path=artifact.name,
+        ))
+        db.session.commit()
+
+    missing = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/efficient-sam", headers=headers,
+    ))["data"]
+    assert missing["apiReady"] is False
+    assert missing["reason"] == "production manifest is missing or invalid"
+
+    (weights / "production-manifest.json").write_text(json.dumps({
+        "modelKey": "efficient-sam", "task": "interactive-segmentation",
+        "artifactFile": artifact.name,
+        "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest().upper(),
+    }), encoding="utf-8")
+    ready = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/efficient-sam", headers=headers,
+    ))["data"]
+    assert ready["apiReady"] is True
 
 
 @pytest.mark.parametrize(

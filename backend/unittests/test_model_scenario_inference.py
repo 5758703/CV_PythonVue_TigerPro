@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import base64
+import hashlib
 import json
 import sys
 from importlib import import_module
@@ -127,13 +128,19 @@ def _register_model(
         relative = f"{key}.pt"
         payload = b"weights"
     if with_weights:
-        (model_folder / relative).write_bytes(payload)
-        if key == "yolo26n-p2-plate" and weight_extension is None:
-            (model_folder / "production-manifest.json").write_text(json.dumps({
+        artifact = model_folder / relative
+        artifact.write_bytes(payload)
+        if key in ("yolo26n-p2-plate", "efficient-sam") and weight_extension is None:
+            manifest = {
                 "modelKey": key,
-                "task": "object-detection",
-                "trainingComplete": True,
-                "classes": ["license_plate"],
+                "task": task,
+                "artifactFile": artifact.name,
+                "artifactSha256": hashlib.sha256(payload).hexdigest(),
+            }
+            if key == "yolo26n-p2-plate":
+                manifest.update({"trainingComplete": True, "classes": ["license_plate"]})
+            (model_folder / "production-manifest.json").write_text(json.dumps({
+                **manifest,
             }), encoding="utf-8")
     else:
         for extension in (".pt", ".onnx"):
@@ -433,7 +440,7 @@ def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
     assert result["result"] == {"masks": [1]}
 
 
-def test_efficientsam_keeps_variant_directory_for_precision_selection(
+def test_efficientsam_rejects_an_ambiguous_variant_directory(
     scenario_app, monkeypatch,
 ):
     app, _headers, model_folder = scenario_app
@@ -463,14 +470,16 @@ def test_efficientsam_keeps_variant_directory_for_precision_selection(
 
     monkeypatch.setattr("inference.segment_image_efficientsam", segment_call)
 
-    _run(app, "efficient-sam", _files(image=_file()), {
-        "points": "[[1, 2]]",
-        "labels": "[1]",
-        "precision": "int8",
-    })
+    with pytest.raises(
+        _dispatcher().ScenarioInputError, match="model weight directory is ambiguous",
+    ):
+        _run(app, "efficient-sam", _files(image=_file()), {
+            "points": "[[1, 2]]",
+            "labels": "[1]",
+            "precision": "int8",
+        })
 
-    assert Path(calls[0][0]).is_dir()
-    assert calls[0][1]["precision"] == "int8"
+    assert calls == []
 
 
 def test_segmentation_returns_area_metrics_computed_from_the_real_mask(

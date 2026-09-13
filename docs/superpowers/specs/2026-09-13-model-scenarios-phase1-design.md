@@ -73,7 +73,9 @@
 
 列表和详情要求已登录并具备模型查询权限；推理要求模型推理权限。接口统一返回 `{code, message, data}`。
 
-`infer` 使用 `multipart/form-data`：通用字段为 `file`；分割额外接受 `points`、`labels`、`box`（SAM 不使用且拒绝 `conf`）；检测接受 `conf`、`imgsz`；ReID 接受 `query` 和一个或多个 `gallery`。服务端以场景注册表决定允许字段，不接受客户端指定任意权重路径或运行库。签名前先按 `Content-Length` 限制请求总量，随后限制 40 个 part、33 个文件、单图 12 MiB、总文件 396 MiB 和 4000 万像素。
+`infer` 使用 `multipart/form-data`：通用字段为 `file`；分割额外接受 `points`、`labels`、`box`（SAM 不使用且拒绝 `conf`）；检测接受 `conf`、`imgsz`；ReID 接受 `query` 和一个或多个 `gallery`。服务端以场景注册表决定允许字段，不接受客户端指定任意权重路径或运行库。POST 推理在读取 body/form/files 前强制校验正整数 `Content-Length`：缺失返回 411、格式错误或不大于零返回 400、超限返回 413；随后限制 40 个 part、33 个文件、单图 12 MiB、总文件 396 MiB 和 4000 万像素。GET 列表/详情无正文时允许 Content-Length 缺失或为零。
+
+EfficientSAM 和 YOLO26n-P2 车牌制品必须在权重同目录提供 `production-manifest.json`。清单至少包含与注册场景一致的 `modelKey`、`task`，只含 basename 的 `artifactFile`，以及与当前唯一权重精确匹配的 64 位十六进制 `artifactSha256`。目录存在多个兼容权重、清单缺失、路径穿越、制品错绑或 hash 不匹配时均为 not ready；readiness 与 inference 共用这一无导入、无加载、无写入的契约。P2 清单另需 `trainingComplete: true` 和车牌类别。
 
 ### 4.2 对外接口
 

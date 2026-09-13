@@ -1,43 +1,39 @@
 # TigerPro Open API 调用示例
 
-Base: `http://127.0.0.1:5001`（Gateway 模式默认 `5002`）
+模型场景端点使用 HMAC-SHA256 请求签名：
 
-文档站: http://127.0.0.1:5001/openapi/v1/docs
+- `GET /openapi/v1/model-scenarios?phase=1`（`model-scenario:read`）
+- `GET /openapi/v1/model-scenarios/<modelKey>`（`model-scenario:read`）
+- `POST /openapi/v1/model-scenarios/<modelKey>/infer`（`model-scenario:infer`）
 
-## 鉴权
+## Canonical 规范
 
-```http
-X-App-Id: <YOUR_APP_ID>
-X-Api-Key: <YOUR_API_KEY>
-```
-
-或 `Authorization: Bearer <api_key>`。
-
-## 生产模型场景
-
-模型场景接口不走全量桥接别名，直接使用以下三个端点：
-
-- `GET /openapi/v1/model-scenarios?phase=1`：第一阶段场景列表，需要 `model-scenario:read` scope。
-- `GET /openapi/v1/model-scenarios/<model_key>`：单场景详情，需要 `model-scenario:read` scope。
-- `POST /openapi/v1/model-scenarios/<model_key>/infer`：同步推理，需要 `model-scenario:infer` scope。
-
-这三个端点除应用凭据外，还必须携带 `X-Timestamp`、`X-Nonce`、`X-Signature`。签名密钥是创建应用时返回的**原始 API key**（不是数据库中的摘要），签名算法为 HMAC-SHA256：
+签名密钥是创建应用时仅显示一次的原始 API key。每次请求必须使用新的 nonce。
 
 ```text
-payload_sha256 = SHA256(payload_lines_in_original_part_order.join("\n"))
-canonical = METHOD + "\n" + NORMALIZED_PATH + "\n" + NORMALIZED_QUERY + "\n" + TIMESTAMP + "\n" + NONCE + "\n" + NORMALIZED_CONTENT_TYPE + "\n" + payload_sha256
-signature = hex(HMAC-SHA256(raw_api_key, canonical))
+canonical = METHOD + "\n"
+          + NORMALIZED_PATH + "\n"
+          + NORMALIZED_QUERY + "\n"
+          + TIMESTAMP + "\n"
+          + NONCE + "\n"
+          + NORMALIZED_CONTENT_TYPE + "\n"
+          + PAYLOAD_SHA256
+signature = lowercase_hex(HMAC-SHA256(raw_api_key, canonical))
 ```
 
-GET/HEAD 的 payload 是空字节。multipart 的每个普通字段行是 `form:<url-encoded-name>=<url-encoded-value>`，每个文件行是 `file:<url-encoded-field-name>:<sha256-of-file-bytes>`；所有行按字典序排序。不要签 multipart boundary、文件名、Content-Type 或 query string。
+- path 使用 RFC 3986 编码，保留 `/ - . _ ~`。
+- query 保留重复键；逐个 RFC 3986 编码后，按编码后的 `(key, value)` 排序并以 `&` 连接。
+- GET/HEAD 的 payload 是空字节 SHA256；允许缺失或为 `0` 的 Content-Length。
+- POST 推理必须提供正整数 Content-Length；缺失返回 411，无效或不大于零返回 400，超限返回 413。
+- multipart Content-Type 只签小写媒体类型 `multipart/form-data`，不签 boundary。
+- multipart 严格按传输中的原始 part 顺序签名，保留从 0 开始的 index，不排序。
+- 普通 part：`index:form:urlencoded-field=urlencoded-value`。
+- 文件 part：`index:file:urlencoded-field:urlencoded-safe-filename:lowercase-part-content-type:sha256(file-bytes)`。
+- part 的字段名、值、filename、part Content-Type、文件内容、顺序或 index 任何变化都会导致验签失败。
 
-将随后代码保存为 `signed_scenario.py` 后即可从 PowerShell 运行；凭据只从环境变量读取。需要先安装 `requests`，并在当前目录准备 `rotated-target.jpg`。
+## 可执行 Python 示例
 
-```powershell
-$env:TIGERPRO_APP_ID = "app_demo"
-$env:TIGERPRO_API_KEY = "创建应用时仅显示一次的原始密钥"
-python .\signed_scenario.py
-```
+以下 helper 与服务端 canonical 规则一致。`requests` 会先发送普通字段，再发送文件字段，因此 helper 也按实际发送顺序构造清单。
 
 ```python
 import hashlib
@@ -61,28 +57,34 @@ def enc(value):
 
 def normalized_query(path):
     pairs = [(enc(k), enc(v)) for k, v in parse_qsl(urlsplit(path).query, keep_blank_values=True)]
-    return "&".join(f"{k}={v}" for k, v in sorted(pairs))
+    return "&".join(f"{key}={value}" for key, value in sorted(pairs))
 
 
-def payload_hash(fields=(), files=()):
-    lines = [f"{i}:form:{enc(name)}={enc(value)}" for i, (name, value) in enumerate(fields)]
-    offset = len(lines)
-    lines += [
-        f"{offset+i}:file:{enc(field)}:{enc(filename)}:{content_type.lower()}:"
-        f"{hashlib.sha256(content).hexdigest()}"
-        for i, (field, (filename, content, content_type)) in enumerate(files)
+def multipart_hash(fields, files):
+    lines = [
+        f"{index}:form:{enc(name)}={enc(value)}"
+        for index, (name, value) in enumerate(fields)
     ]
-    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
+    offset = len(lines)
+    lines.extend(
+        f"{offset + index}:file:{enc(field)}:{enc(filename)}:{part_type.lower()}:"
+        f"{hashlib.sha256(content).hexdigest()}"
+        for index, (field, (filename, content, part_type)) in enumerate(files)
+    )
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 
-def signed_headers(method, path, digest, content_type=""):
+def signed_headers(method, path, payload_sha256, content_type=""):
     timestamp = str(int(time.time()))
     nonce = uuid.uuid4().hex
     parsed = urlsplit(path)
-    normalized_path = quote(parsed.path, safe="/-._~")
-    canonical = "\n".join((method.upper(), normalized_path, normalized_query(path), timestamp,
-                            nonce, content_type.lower(), digest))
-    signature = hmac.new(API_KEY.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    canonical = "\n".join((
+        method.upper(), quote(parsed.path, safe="/-._~"), normalized_query(path),
+        timestamp, nonce, content_type.lower(), payload_sha256,
+    ))
+    signature = hmac.new(
+        API_KEY.encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256,
+    ).hexdigest()
     return {
         "X-App-Id": APP_ID,
         "X-Api-Key": API_KEY,
@@ -92,143 +94,29 @@ def signed_headers(method, path, digest, content_type=""):
     }
 
 
-# 场景列表：query 不进入 canonical path，GET payload 为空字节。
-path = "/openapi/v1/model-scenarios"
-path = "/openapi/v1/model-scenarios?phase=1"
-empty_digest = hashlib.sha256(b"").hexdigest()
-response = requests.get(
-    BASE + path,
-    headers=signed_headers("GET", path, empty_digest),
+list_path = "/openapi/v1/model-scenarios?phase=1&tag=b&tag=a"
+empty_hash = hashlib.sha256(b"").hexdigest()
+print(requests.get(
+    BASE + list_path,
+    headers=signed_headers("GET", list_path, empty_hash),
     timeout=30,
-)
-response.raise_for_status()
-print(response.json())
+).json())
 
-# OBB 推理：fields/files 的顺序不影响签名，文件内容必须与发送内容一致。
-path = "/openapi/v1/model-scenarios/yolo26n-obb/infer"
+infer_path = "/openapi/v1/model-scenarios/yolo26n-obb/infer"
 content = Path("rotated-target.jpg").read_bytes()
 fields = [("conf", "0.45"), ("imgsz", "1024")]
 files = [("file", ("rotated-target.jpg", content, "image/jpeg"))]
-response = requests.post(
-    BASE + path,
+print(requests.post(
+    BASE + infer_path,
     data=fields,
     files=files,
-    headers=signed_headers("POST", path, payload_hash(fields, files), "multipart/form-data"),
+    headers=signed_headers(
+        "POST", infer_path, multipart_hash(fields, files), "multipart/form-data",
+    ),
     timeout=120,
-)
-response.raise_for_status()
-print(response.json())
+).json())
 ```
 
-签名规范：Query 保留重复键，按 RFC3986 编码后的键和值排序。multipart 行严格保留原始 part 顺序与索引：`index:form:name=value` 或 `index:file:field:safe-filename:content-type:sha256`。Content-Type 只签小写媒体类型，不含 boundary。SAM 分割不接受 `conf`。默认限制为 40 个 part、33 个文件、单图 12 MiB、总请求 396 MiB 和 4000 万像素。
+允许的普通字段是 `points`、`labels`、`pointLabels`、`box`、`mode`、`precision`、`threshold`、`conf`、`imgsz`；文件字段是 `file`、`query`、`gallery`。服务端同时限制 part 数、文件数、单文件大小、总请求大小和解码像素数。
 
-PowerShell 列表请求（query 参与签名）：
-
-```powershell
-$Path = "/openapi/v1/model-scenarios?phase=1"
-$Timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
-$Nonce = [Guid]::NewGuid().ToString("N")
-$EmptyHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([byte[]]::new(0))).ToLower()
-$Canonical = "GET`n/openapi/v1/model-scenarios`nphase=1`n$Timestamp`n$Nonce`n`n$EmptyHash"
-$Mac = [Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($env:TIGERPRO_API_KEY))
-$Signature = [Convert]::ToHexString($Mac.ComputeHash([Text.Encoding]::UTF8.GetBytes($Canonical))).ToLower()
-Invoke-RestMethod "http://127.0.0.1:5001$Path" -Headers @{
-  "X-App-Id"=$env:TIGERPRO_APP_ID; "X-Api-Key"=$env:TIGERPRO_API_KEY
-  "X-Timestamp"=$Timestamp; "X-Nonce"=$Nonce; "X-Signature"=$Signature
-}
-```
-
-交互分割可增加 `points`、`labels`、`box`、`mode`、`precision=fp32|int8`；车辆 ReID 使用一个 `query` 和重复的 `gallery` 文件字段；检测使用 `conf` 与 `imgsz`。每次调用必须生成新 nonce。时间戳允许窗口由 `OPENAPI_SIGNATURE_MAX_AGE_SECONDS` 配置。
-
-应用管理接口的 `ipAllowlist` 接受 IPv4/IPv6 地址或 CIDR 数组；空数组表示不限制。默认 `TRUST_PROXY=0`，白名单只检查 TCP 对端地址并忽略客户端可伪造的 `X-Forwarded-For`。只有服务部署在受控反向代理之后、且代理会覆盖该头时才可设 `TRUST_PROXY=1`；此时服务使用最左侧转发地址。
-
-列表和详情中的就绪字段来自当前模型登记、权重与运行环境，不会加载模型：
-
-| 字段 | 含义 |
-|------|------|
-| `configured` | `AiModel` 中存在与 `modelKey` 精确匹配的登记记录 |
-| `enabled` | 模型登记状态为启用 |
-| `weightsPresent` | 配置的相对权重路径存在且包含可用资产 |
-| `runtimeAvailable` | 场景声明的运行库当前可发现 |
-| `adapter` | 场景绑定的服务端适配器；客户端不可覆盖 |
-| `published` / `apiEnabled` | 场景是否发布、是否允许 API 调用 |
-| `ready` | 兼容字段，与 `apiReady` 保持一致 |
-| `apiReady` | 精确 task/library、适配器、权重、运行库、发布和 API 开关均满足 |
-| `reason` | 未就绪时的可操作原因；就绪时为 `null` |
-
-不要只依据 `configured` 提交推理；客户端应以 `apiReady` 为最终门槛。服务端仍会重新校验签名、scope、模型状态、权重、文件和参数。成功响应包含 `requestId`，响应头同时返回 `X-Request-Id`；排障时请记录该值。错误响应也保留 `requestId`，不会暴露绝对权重路径或内部堆栈。
-
-| HTTP | 常见场景 | 处理建议 |
-|------|----------|----------|
-| `401` | 签名缺失、过期或不匹配 | 用原始 API key 重算签名，并校准调用方时钟 |
-| `400` | 图片/参数无效、模型未登记/未启用、权重缺失或运行配置不匹配 | 修正输入，或按 `reason` 完成模型准备 |
-| `403` | 缺少 `model-scenario:read` / `model-scenario:infer` scope，或应用/IP 策略拒绝 | 调整应用授权或白名单后重试 |
-| `409` | nonce 已使用 | 生成新 nonce 后重新签名，不要重放旧请求 |
-| `413` | 单张图片字节数或解码像素数超过场景独立上限 | 压缩或缩小图片；ReID 还受 gallery 数量上限约束 |
-| `429` | 共享 QPS 或 UTC 日配额耗尽 | 等待 `Retry-After` 秒，再用新时间戳和新 nonce 重试 |
-| `500` | 运行库加载或推理异常 | 使用 `requestId` 查询服务端日志，不要原样向终端用户展示内部错误 |
-
-车牌工作台当前是 detector-only：结果只保证车牌框、置信度、裁剪/叠加等定位信息。除非后续明确接入 OCR，不得把检测类别或框内容解释为车牌字符。车辆 ReID 同样不是检测器，完整跨镜流程仍需检测、跟踪、质量筛选与拓扑约束。
-
-## 全量桥接（推荐）
-
-控制台可桥接的 `/api/...` 对应：
-
-```text
-/openapi/v1/x/<去掉 /api/ 后的路径>
-```
-
-授权方式：
-
-- 域级：`domain:face`、`domain:ai_model`、`domain:sys_user` …（与 Blueprint 一一对应）
-- 细粒度：与 RBAC 相同，如 `ai:face:list`
-- 超管：`*:*:*`
-- `/api/system/open-app` **不可**桥接
-
-控制台「开放平台」按五大分组展示全部 Blueprint 域，可「新建/刷新本域应用」或「一键对齐全部域应用」。
-
-```bash
-# 分域目录（groups + domains + endpoints）
-curl -s http://127.0.0.1:5001/openapi/v1/capabilities \
-  -H "X-App-Id: app_demo" \
-  -H "X-Api-Key: $API_KEY"
-
-# 管理端：一键为全部可桥接域创建/刷新应用
-curl -X POST http://127.0.0.1:5001/api/system/open-app/ensure-domains \
-  -H "Authorization: Bearer <admin_jwt>"
-
-# 管理端：仅为某人脸域创建应用
-curl -X POST http://127.0.0.1:5001/api/system/open-app/from-domain \
-  -H "Authorization: Bearer <admin_jwt>" \
-  -H "Content-Type: application/json" \
-  -d '{"domainId":"face","qpsLimit":20,"dailyLimit":5000}'
-
-# 等价于 POST /api/ai/face/recognize
-curl -s -X POST http://127.0.0.1:5001/openapi/v1/x/ai/face/recognize \
-  -H "X-App-Id: app_face" \
-  -H "X-Api-Key: $API_KEY" \
-  -F "file=@./face.jpg" \
-  -F "modelId=1"
-
-# 用户列表（需 sys_user 域应用或含 domain:sys_user）
-curl -s "http://127.0.0.1:5001/openapi/v1/x/system/user?pageNum=1&pageSize=10" \
-  -H "X-App-Id: app_sys_user" \
-  -H "X-Api-Key: $API_KEY"
-```
-
-## 精简别名（仍可用）
-
-```bash
-curl -s -X POST http://127.0.0.1:5001/openapi/v1/vision/detect \
-  -H "X-App-Id: app_demo" \
-  -H "X-Api-Key: $API_KEY" \
-  -F "file=@./sample.jpg" \
-  -F "modelId=1"
-```
-
-异步：`async=1` → `jobId`，需运行 `python scripts/open_job_worker.py`。
-
-## Webhook / Gateway
-
-控制台配置 Webhook；独立网关：`python gateway_app.py`（:5002）。  
-指标：`GET /openapi/v1/metrics`
+成功和错误响应都包含 `requestId`，响应头也返回 `X-Request-Id`。常见错误：401 签名错误，409 nonce 重放，411 POST 缺少 Content-Length，413 请求超限，429 配额耗尽。

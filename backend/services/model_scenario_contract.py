@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+import re
 from typing import Callable
 
 
@@ -113,7 +114,7 @@ def _files(path: Path) -> list[Path]:
     return []
 
 
-def _compatible_weight(model_key: str, path: Path, extensions: frozenset[str]) -> Path | None:
+def _compatible_weights(model_key: str, path: Path, extensions: frozenset[str]) -> list[Path]:
     candidates = [item for item in _files(path) if item.suffix.lower() in extensions]
     if model_key in (
         "efficient-sam", "clip-reid-vehicle", "transreid-vehicle", "vehicle-vit-reid",
@@ -126,7 +127,7 @@ def _compatible_weight(model_key: str, path: Path, extensions: frozenset[str]) -
         candidates = [
             item for item in candidates if item.name.lower() in _EFFICIENT_SAM_ONNX_NAMES
         ]
-    return candidates[0] if candidates else None
+    return candidates
 
 
 def _sha256(path: Path) -> str:
@@ -137,41 +138,40 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _training_marker_confirms_plate(weight_path: Path) -> bool:
-    marker_paths = (
-        weight_path.parent / "production-manifest.json",
-        weight_path.with_suffix(weight_path.suffix + ".scenario.json"),
-        weight_path.with_suffix(".scenario.json"),
-    )
-    for marker in marker_paths:
-        try:
-            if not marker.is_file() or marker.stat().st_size > 16_384:
-                continue
-            data = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, ValueError, TypeError):
-            continue
+def _production_manifest_confirms(model_key: str, task: str, weight_path: Path) -> bool:
+    marker = weight_path.parent / "production-manifest.json"
+    try:
+        if not marker.is_file() or marker.stat().st_size > 16_384:
+            return False
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return False
+    artifact_file = data.get("artifactFile")
+    expected_hash = data.get("artifactSha256")
+    if (
+        data.get("modelKey") != model_key
+        or data.get("task") != task
+        or not isinstance(artifact_file, str)
+        or not artifact_file
+        or Path(artifact_file).name != artifact_file
+        or not isinstance(expected_hash, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash)
+        or artifact_file != weight_path.name
+    ):
+        return False
+    if model_key == "yolo26n-p2-plate":
         classes = data.get("classes")
         normalized_classes = {
             str(item).strip().lower().replace("-", "_") for item in classes
         } if isinstance(classes, list) else set()
-        if not (
-            data.get("modelKey") == "yolo26n-p2-plate"
-            and data.get("task") == "object-detection"
-            and data.get("trainingComplete") is True
-            and normalized_classes.intersection(("plate", "license_plate"))
+        if data.get("trainingComplete") is not True or not normalized_classes.intersection(
+            ("plate", "license_plate")
         ):
-            continue
-        expected_hash = data.get("artifactSha256")
-        if expected_hash is not None:
-            if not isinstance(expected_hash, str) or len(expected_hash) != 64:
-                continue
-            try:
-                if not hmac.compare_digest(_sha256(weight_path), expected_hash.lower()):
-                    continue
-            except OSError:
-                continue
-        return True
-    return False
+            return False
+    try:
+        return hmac.compare_digest(_sha256(weight_path), expected_hash.lower())
+    except OSError:
+        return False
 
 
 def evaluate_scenario_contract(
@@ -220,15 +220,29 @@ def evaluate_scenario_contract(
     if not weights_present:
         return ScenarioContractResult(False, runtime_available, False, "model weights are missing")
 
-    selected = _compatible_weight(model_key, configured_path, contract["extensions"])
-    if selected is None:
+    candidates = _compatible_weights(model_key, configured_path, contract["extensions"])
+    if not candidates:
         return ScenarioContractResult(
             True, runtime_available, False, "model weights are incompatible with scenario runtime",
         )
-    if model_key == "yolo26n-p2-plate" and not _training_marker_confirms_plate(selected):
+    if configured_path is not None and configured_path.is_dir() and len(candidates) != 1:
+        return ScenarioContractResult(
+            True, runtime_available, False, "model weight directory is ambiguous",
+        )
+    selected = candidates[0]
+    if model_key == "yolo26n-p2-plate" and not _production_manifest_confirms(
+        model_key, contract["task"], selected,
+    ):
         return ScenarioContractResult(
             True, runtime_available, False,
             "plate-specific production manifest is missing or invalid", selected,
+        )
+    if model_key == "efficient-sam" and not _production_manifest_confirms(
+        model_key, contract["task"], selected,
+    ):
+        return ScenarioContractResult(
+            True, runtime_available, False,
+            "production manifest is missing or invalid", selected,
         )
     if not runtime_available:
         return ScenarioContractResult(

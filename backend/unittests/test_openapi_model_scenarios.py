@@ -259,6 +259,42 @@ def test_signed_request_rejects_content_length_unknown_file_and_excess_parts(ope
     _assert_open_error(too_many_response, 413, "request_too_large")
 
 
+@pytest.mark.parametrize(
+    ("content_length", "status", "err_type"),
+    [(None, 411, "length_required"), ("", 411, "length_required"),
+     ("abc", 400, "validation"), ("0", 400, "validation"), ("-1", 400, "validation")],
+)
+def test_infer_rejects_missing_invalid_or_nonpositive_content_length_before_body_read(
+    openapi_app, monkeypatch, content_length, status, err_type,
+):
+    app, _, infer_headers = openapi_app
+    path = "/openapi/v1/model-scenarios/yolo26n-obb/infer"
+    monkeypatch.setattr(
+        "security_open._verify_scenario_signature",
+        lambda *_args: pytest.fail("signature verification must not read the request body"),
+    )
+    environ = {"CONTENT_TYPE": "multipart/form-data; boundary=x"}
+    if content_length is not None:
+        environ["CONTENT_LENGTH"] = content_length
+    response = app.test_client().open(
+        path, method="POST", headers={
+            "X-App-Id": infer_headers["X-App-Id"],
+            "X-Api-Key": infer_headers["X-Api-Key"],
+        }, environ_overrides=environ,
+    )
+    _assert_open_error(response, status, err_type)
+
+
+def test_signed_get_allows_missing_content_length(openapi_app):
+    app, read_headers, _ = openapi_app
+    path = "/openapi/v1/model-scenarios?phase=1"
+    response = app.test_client().get(
+        path, headers=_signed_headers(read_headers, "GET", path),
+        environ_overrides={"CONTENT_LENGTH": ""},
+    )
+    assert response.status_code == 200
+
+
 def test_scenario_nonce_is_persistent_and_replay_safe_across_clients(openapi_app):
     app, read_headers, _infer_headers = openapi_app
     path = "/openapi/v1/model-scenarios"

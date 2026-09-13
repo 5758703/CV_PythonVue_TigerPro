@@ -540,6 +540,19 @@ def require_open_scope(scope: str, *, signed_request: bool = False):
                         "SCENARIO_MAX_REQUEST_BYTES",
                         int(current_app.config.get("SCENARIO_MAX_IMAGE_BYTES", 12 * 1024 * 1024)) * 33,
                     ))
+                    raw_content_length = request.environ.get("CONTENT_LENGTH")
+                    if request.method == "POST":
+                        if raw_content_length is None or not str(raw_content_length).strip():
+                            msg = "Content-Length is required for scenario inference"
+                            resp = open_error(411, 411, msg, "length_required")
+                            log_open_call(
+                                capability=scope, status_code=411, biz_code=411,
+                                latency_ms=int((time.time() - started) * 1000),
+                                error_message=msg,
+                            )
+                            return resp
+                        if not str(raw_content_length).isdigit() or int(raw_content_length) <= 0:
+                            raise SignedPayloadInvalid("Content-Length must be a positive integer")
                     if request.content_length is not None and request.content_length > maximum_request:
                         raise SignedPayloadTooLarge("request exceeds the scenario aggregate size limit")
                     signature_err, signature_type = _verify_scenario_signature(app, api_key)
