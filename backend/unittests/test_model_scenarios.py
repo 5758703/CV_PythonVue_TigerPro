@@ -4,6 +4,7 @@ from services.model_scenarios import (
     get_scenario,
     list_scenarios,
 )
+from config import Config
 
 
 EXPECTED_PHASE_ONE_KEYS = (
@@ -56,6 +57,14 @@ def test_each_phase_one_scenario_has_complete_user_facing_metadata():
     for scenario in list_scenarios(phase=1):
         for field in required_fields:
             assert scenario[field], f"{scenario['modelKey']} is missing {field}"
+
+
+def test_image_inputs_match_existing_upload_format_and_size_constraints():
+    max_size_mb = Config.MAX_CONTENT_LENGTH // (1024 * 1024)
+
+    for scenario in list_scenarios(phase=1):
+        assert ".webp" in scenario["input"]["formats"]
+        assert scenario["input"]["maxSizeMb"] == max_size_mb
 
 
 def test_unknown_model_key_has_no_scenario():

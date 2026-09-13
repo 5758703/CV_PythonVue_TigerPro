@@ -7,6 +7,8 @@ service layer that can inspect registered models and installed dependencies.
 
 from copy import deepcopy
 
+from config import Config
+
 
 PHASE_ONE_KEYS = (
     "efficient-sam",
@@ -27,16 +29,18 @@ WORKBENCH_TYPES = (
     "obb_detection",
 )
 
-_IMAGE_INPUT = {"formats": [".jpg", ".jpeg", ".png", ".bmp"], "maxSizeMb": 10}
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+_MAX_UPLOAD_SIZE_MB = Config.MAX_CONTENT_LENGTH // (1024 * 1024)
+_IMAGE_INPUT = {"formats": list(_IMAGE_EXTENSIONS), "maxSizeMb": _MAX_UPLOAD_SIZE_MB}
 _SEGMENT_INPUT = {
     **_IMAGE_INPUT,
     "prompts": ["points", "labels", "box"],
 }
 _REID_INPUT = {
-    "formats": [".jpg", ".jpeg", ".png", ".bmp"],
+    "formats": list(_IMAGE_EXTENSIONS),
     "query": "single vehicle image",
     "gallery": "one or more vehicle images",
-    "maxSizeMb": 10,
+    "maxSizeMb": _MAX_UPLOAD_SIZE_MB,
 }
 
 _SCENARIOS = (
