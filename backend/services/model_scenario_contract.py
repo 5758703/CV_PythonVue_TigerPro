@@ -18,6 +18,7 @@ class ScenarioContractResult:
     api_ready: bool
     reason: str | None
     weight_path: Path | None = None
+    supported_precisions: tuple[str, ...] = ()
 
 
 _CONTRACTS = {
@@ -138,26 +139,38 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _production_manifest_confirms(model_key: str, task: str, weight_path: Path) -> bool:
-    marker = weight_path.parent / "production-manifest.json"
+def _read_manifest(directory: Path) -> dict | None:
+    marker = directory / "production-manifest.json"
     try:
         if not marker.is_file() or marker.stat().st_size > 16_384:
-            return False
+            return None
         data = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError, TypeError):
-        return False
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _artifact_binding(data: dict, weight_path: Path) -> bool:
     artifact_file = data.get("artifactFile")
     expected_hash = data.get("artifactSha256")
     if (
-        data.get("modelKey") != model_key
-        or data.get("task") != task
-        or not isinstance(artifact_file, str)
+        not isinstance(artifact_file, str)
         or not artifact_file
         or Path(artifact_file).name != artifact_file
         or not isinstance(expected_hash, str)
         or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash)
         or artifact_file != weight_path.name
     ):
+        return False
+    try:
+        return hmac.compare_digest(_sha256(weight_path), expected_hash.lower())
+    except OSError:
+        return False
+
+
+def _production_manifest_confirms(model_key: str, task: str, weight_path: Path) -> bool:
+    data = _read_manifest(weight_path.parent)
+    if data is None or data.get("modelKey") != model_key or data.get("task") != task:
         return False
     if model_key == "yolo26n-p2-plate":
         classes = data.get("classes")
@@ -168,10 +181,37 @@ def _production_manifest_confirms(model_key: str, task: str, weight_path: Path) 
             ("plate", "license_plate")
         ):
             return False
-    try:
-        return hmac.compare_digest(_sha256(weight_path), expected_hash.lower())
-    except OSError:
-        return False
+    return _artifact_binding(data, weight_path)
+
+
+def _efficient_sam_artifacts(
+    configured_path: Path, candidates: list[Path], task: str,
+) -> dict[str, Path] | None:
+    directory = configured_path if configured_path.is_dir() else configured_path.parent
+    data = _read_manifest(directory)
+    if data is None or data.get("modelKey") != "efficient-sam" or data.get("task") != task:
+        return None
+    raw_artifacts = data.get("artifacts")
+    if raw_artifacts is None:
+        raw_artifacts = {"fp32": data}
+    if not isinstance(raw_artifacts, dict) or not raw_artifacts:
+        return None
+    by_name = {candidate.name: candidate for candidate in candidates}
+    resolved = {}
+    for precision in ("fp32", "int8"):
+        binding = raw_artifacts.get(precision)
+        if binding is None:
+            continue
+        if not isinstance(binding, dict):
+            return None
+        artifact_file = binding.get("artifactFile")
+        candidate = by_name.get(artifact_file) if isinstance(artifact_file, str) else None
+        if candidate is None or not _artifact_binding(binding, candidate):
+            return None
+        resolved[precision] = candidate
+    if len(resolved) != len(raw_artifacts):
+        return None
+    return resolved or None
 
 
 def evaluate_scenario_contract(
@@ -180,6 +220,7 @@ def evaluate_scenario_contract(
     configured_path: Path | None,
     *,
     runtime_probe: Callable[[str], bool],
+    requested_precision: str | None = None,
 ) -> ScenarioContractResult:
     """Evaluate publication, exact DB metadata, assets, adapter and runtime.
 
@@ -225,11 +266,32 @@ def evaluate_scenario_contract(
         return ScenarioContractResult(
             True, runtime_available, False, "model weights are incompatible with scenario runtime",
         )
-    if configured_path is not None and configured_path.is_dir() and len(candidates) != 1:
+    efficient_artifacts = None
+    if model_key == "efficient-sam" and configured_path is not None:
+        efficient_artifacts = _efficient_sam_artifacts(
+            configured_path, candidates, contract["task"],
+        )
+        if efficient_artifacts is None:
+            return ScenarioContractResult(
+                True, runtime_available, False,
+                "production manifest is missing or invalid", candidates[0],
+            )
+        supported = tuple(
+            precision for precision in ("fp32", "int8") if precision in efficient_artifacts
+        )
+        precision = requested_precision or ("fp32" if "fp32" in supported else supported[0])
+        if precision not in efficient_artifacts:
+            return ScenarioContractResult(
+                True, runtime_available, False, "precision is not published",
+                supported_precisions=supported,
+            )
+        selected = efficient_artifacts[precision]
+    elif configured_path is not None and configured_path.is_dir() and len(candidates) != 1:
         return ScenarioContractResult(
             True, runtime_available, False, "model weight directory is ambiguous",
         )
-    selected = candidates[0]
+    else:
+        selected = candidates[0]
     if model_key == "yolo26n-p2-plate" and not _production_manifest_confirms(
         model_key, contract["task"], selected,
     ):
@@ -237,15 +299,12 @@ def evaluate_scenario_contract(
             True, runtime_available, False,
             "plate-specific production manifest is missing or invalid", selected,
         )
-    if model_key == "efficient-sam" and not _production_manifest_confirms(
-        model_key, contract["task"], selected,
-    ):
-        return ScenarioContractResult(
-            True, runtime_available, False,
-            "production manifest is missing or invalid", selected,
-        )
     if not runtime_available:
         return ScenarioContractResult(
             True, False, False, "runtime library is unavailable", selected,
+            tuple(efficient_artifacts) if efficient_artifacts else (),
         )
-    return ScenarioContractResult(True, True, True, None, selected)
+    return ScenarioContractResult(
+        True, True, True, None, selected,
+        tuple(efficient_artifacts) if efficient_artifacts else (),
+    )

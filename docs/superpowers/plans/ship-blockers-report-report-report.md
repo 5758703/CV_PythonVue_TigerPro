@@ -28,3 +28,13 @@ Final production hardening for the first nine model scenarios. User-owned change
 - Full `test_model_scenario_api.py` progressed through 19 passing cases without failure but exceeded the 360-second execution limit; focused new contract tests passed separately.
 
 Warnings observed are pre-existing SQLAlchemy datetime/query deprecations, MobileSAM registry warnings, and a workspace `.pytest_cache` permission warning; no test failure was hidden by them.
+
+## Precision follow-up
+
+- EfficientSAM manifests now support explicit `artifacts.fp32` and `artifacts.int8` bindings; one or both may be published.
+- Readiness exposes `supportedPrecisions`; inference rejects unpublished values and resolves the exact manifest-bound file before calling the adapter.
+- The segmentation workbench renders only server-published precision options.
+- Restored the general Open API bridge, compact alias, async worker, webhook, gateway, and metrics documentation without restoring the obsolete multipart signing rules.
+- Precision contract tests: 4 focused tests passed (dual publication, invalid hash, unpublished precision, exact int8 path).
+- Combined inference and Open API security regression: 95 passed.
+- Frontend scenario Node tests: 23 passed; Vite production build passed.

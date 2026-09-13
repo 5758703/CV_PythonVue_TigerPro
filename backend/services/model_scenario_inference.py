@@ -189,7 +189,7 @@ def _read_image(upload, scenario: dict, *, label: str = "image") -> tuple[bytes,
     return raw, image
 
 
-def _resolve_model(scenario: dict) -> tuple[AiModel, Path]:
+def _resolve_model(scenario: dict, *, precision: str | None = None) -> tuple[AiModel, Path]:
     model = AiModel.query.filter_by(model_key=scenario["modelKey"]).first()
     if model is None:
         raise ScenarioInputError("model is not registered")
@@ -199,6 +199,7 @@ def _resolve_model(scenario: dict) -> tuple[AiModel, Path]:
         model,
         configured_path,
         runtime_probe=lambda module: _find_module_spec(module) is not None,
+        requested_precision=precision,
     )
     if not contract.api_ready:
         raise ScenarioInputError(contract.reason or "model scenario is unavailable")
@@ -209,19 +210,6 @@ def _resolve_model(scenario: dict) -> tuple[AiModel, Path]:
 
         if resolve_vehicle_onnx(str(path)) is None:
             raise ScenarioInputError("model weights are incompatible with scenario runtime")
-    elif scenario["modelKey"] == "efficient-sam":
-        from efficient_sam_dnn import resolve_onnx
-
-        adapter_path = (
-            configured_path
-            if configured_path is not None and configured_path.is_dir()
-            else path
-        )
-        try:
-            resolve_onnx(str(adapter_path))
-        except (FileNotFoundError, OSError):
-            raise ScenarioInputError("model weights are incompatible with scenario runtime") from None
-        path = adapter_path
     return model, path
 
 
@@ -528,7 +516,12 @@ def run_scenario(model_key: str, files, form) -> dict:
     scenario = get_scenario(model_key)
     if scenario is None:
         raise ScenarioInputError("model scenario not found")
-    model, path = _resolve_model(scenario)
+    requested_precision = None
+    if model_key == "efficient-sam":
+        requested_precision = (form.get("precision") or "fp32").strip().lower()
+        if requested_precision not in ("fp32", "int8"):
+            raise ScenarioInputError("precision must be fp32 or int8")
+    model, path = _resolve_model(scenario, precision=requested_precision)
     allowed_fields = {
         "interactive-segmentation": frozenset(("points", "labels", "pointLabels", "box", "mode", "precision")),
         "vehicle-reid": frozenset(("threshold",)),

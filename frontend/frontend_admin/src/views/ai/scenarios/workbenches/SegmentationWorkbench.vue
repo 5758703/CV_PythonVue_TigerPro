@@ -31,9 +31,8 @@
         <div class="wb-control-heading"><h3>运行参数</h3><button class="wb-text-button" type="button" :disabled="busy" @click="resetParameters">恢复默认</button></div>
         <label class="wb-field">
           <span>ONNX 精度</span>
-          <select v-model="precision" :disabled="busy">
-            <option value="fp32">FP32 · 高精度</option>
-            <option value="int8">INT8 · 低延迟</option>
+          <select v-model="precision" :disabled="busy || !precisionOptions.length">
+            <option v-for="item in precisionOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select>
         </label>
         <p>EfficientSAM 使用固定模型权重，仅切换运行精度。</p>
@@ -119,7 +118,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
@@ -165,6 +164,15 @@ let activeBox = null
 let maskRequestGeneration = 0
 
 const isMobileSam = computed(() => props.scenario.modelKey === 'mobile-sam')
+const precisionOptions = computed(() => (props.scenario.supportedPrecisions || []).map(value => ({
+  value,
+  label: value === 'int8' ? 'INT8 · 低延迟' : 'FP32 · 高精度',
+})))
+watch(precisionOptions, (options) => {
+  if (options.length && !options.some(item => item.value === precision.value)) {
+    precision.value = options[0].value
+  }
+}, { immediate: true })
 const inputHint = computed(() => {
   const formats = props.scenario.input?.formats?.join(', ') || '常见图片格式'
   return `${formats} · 最大 ${props.scenario.input?.maxSizeMb || '配置'} MB · 提示最多 ${props.scenario.input?.maxPrompts || '配置'} 个`

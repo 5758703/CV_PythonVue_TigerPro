@@ -6,11 +6,21 @@
 {
   "modelKey": "efficient-sam",
   "task": "interactive-segmentation",
-  "artifactFile": "image_segmentation_efficientsam_ti_2025april.onnx",
-  "artifactSha256": "64位十六进制SHA256",
+  "artifacts": {
+    "fp32": {
+      "artifactFile": "image_segmentation_efficientsam_ti_2025april.onnx",
+      "artifactSha256": "64位十六进制SHA256"
+    },
+    "int8": {
+      "artifactFile": "image_segmentation_efficientsam_ti_2025april_int8.onnx",
+      "artifactSha256": "64位十六进制SHA256"
+    }
+  },
   "runtimeContract": "opencv-sam/effective-sam-v1"
 }
 ```
+
+EfficientSAM 至少发布一个 precision。单制品格式兼容为只发布 `fp32`；推荐使用 `artifacts` 显式声明。目录可同时放置经过各自 hash 绑定的官方 fp32/int8 资产，接口通过 `supportedPrecisions` 公布可请求值，未发布的 precision 返回 400。
 
 P2 车牌模型还必须包含训练完成证明和车牌类别：
 

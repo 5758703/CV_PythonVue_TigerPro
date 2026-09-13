@@ -440,17 +440,27 @@ def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
     assert result["result"] == {"masks": [1]}
 
 
-def test_efficientsam_rejects_an_ambiguous_variant_directory(
+def test_efficientsam_selects_the_manifest_bound_int8_artifact(
     scenario_app, monkeypatch,
 ):
     app, _headers, model_folder = scenario_app
     weights = model_folder / "efficient-variants"
     weights.mkdir()
-    for name in (
-        "image_segmentation_efficientsam_ti_2025april.onnx",
-        "image_segmentation_efficientsam_ti_2025april_int8.onnx",
+    artifacts = {}
+    for precision, name in (
+        ("fp32", "image_segmentation_efficientsam_ti_2025april.onnx"),
+        ("int8", "image_segmentation_efficientsam_ti_2025april_int8.onnx"),
     ):
-        (weights / name).write_bytes(b"x" * 100_001)
+        artifact = weights / name
+        artifact.write_bytes(precision.encode() * 50_001)
+        artifacts[precision] = {
+            "artifactFile": name,
+            "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        }
+    (weights / "production-manifest.json").write_text(json.dumps({
+        "modelKey": "efficient-sam", "task": "interactive-segmentation",
+        "artifacts": artifacts,
+    }), encoding="utf-8")
     with app.app_context():
         db.session.add(AiModel(
             model_name="efficient variants",
@@ -470,16 +480,31 @@ def test_efficientsam_rejects_an_ambiguous_variant_directory(
 
     monkeypatch.setattr("inference.segment_image_efficientsam", segment_call)
 
-    with pytest.raises(
-        _dispatcher().ScenarioInputError, match="model weight directory is ambiguous",
-    ):
-        _run(app, "efficient-sam", _files(image=_file()), {
-            "points": "[[1, 2]]",
-            "labels": "[1]",
-            "precision": "int8",
-        })
+    _run(app, "efficient-sam", _files(image=_file()), {
+        "points": "[[1, 2]]",
+        "labels": "[1]",
+        "precision": "int8",
+    })
 
-    assert calls == []
+    assert Path(calls[0][0]).name == "image_segmentation_efficientsam_ti_2025april_int8.onnx"
+    assert calls[0][1]["precision"] == "int8"
+
+
+def test_efficientsam_rejects_an_unpublished_precision(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app, model_folder, key="efficient-sam",
+        task="interactive-segmentation", library="opencv-sam",
+    )
+    monkeypatch.setattr(
+        "inference.segment_image_efficientsam",
+        lambda *_args, **_kwargs: pytest.fail("unpublished precision must not run"),
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="precision is not published"):
+        _run(app, "efficient-sam", _files(image=_file()), {
+            "points": "[[1, 2]]", "labels": "[1]", "precision": "int8",
+        })
 
 
 def test_segmentation_returns_area_metrics_computed_from_the_real_mask(

@@ -122,6 +122,7 @@ def scenario_with_readiness(scenario: dict) -> dict:
             ready=False,
             apiReady=False,
             reason="model is not registered",
+            supportedPrecisions=[],
         )
         return result
 
@@ -143,5 +144,6 @@ def scenario_with_readiness(scenario: dict) -> dict:
         ready=contract.api_ready,
         apiReady=contract.api_ready,
         reason=contract.reason,
+        supportedPrecisions=list(contract.supported_precisions),
     )
     return result

@@ -571,6 +571,54 @@ def test_efficientsam_requires_a_hash_bound_production_manifest(
         "/api/ai/model-scenarios/efficient-sam", headers=headers,
     ))["data"]
     assert ready["apiReady"] is True
+    assert ready["supportedPrecisions"] == ["fp32"]
+
+
+def test_efficientsam_dual_manifest_publishes_both_precisions(
+    scenario_api_client, monkeypatch,
+):
+    client, headers, _tmp_path = scenario_api_client
+    weights = _model_folder(client) / "efficient-dual"
+    weights.mkdir(parents=True)
+    artifacts = {}
+    for precision, name in (
+        ("fp32", "image_segmentation_efficientsam_ti_2025april.onnx"),
+        ("int8", "image_segmentation_efficientsam_ti_2025april_int8.onnx"),
+    ):
+        artifact = weights / name
+        artifact.write_bytes(precision.encode() * 50_001)
+        artifacts[precision] = {
+            "artifactFile": name,
+            "artifactSha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        }
+    (weights / "production-manifest.json").write_text(json.dumps({
+        "modelKey": "efficient-sam", "task": "interactive-segmentation",
+        "artifacts": artifacts,
+    }), encoding="utf-8")
+    monkeypatch.setattr(readiness, "_find_module_spec", lambda _module: object())
+    with client.application.app_context():
+        db.session.add(_model(
+            key="efficient-sam", task="interactive-segmentation",
+            library="opencv-sam", file_path="efficient-dual",
+        ))
+        db.session.commit()
+
+    detail = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/efficient-sam", headers=headers,
+    ))["data"]
+    assert detail["apiReady"] is True
+    assert detail["supportedPrecisions"] == ["fp32", "int8"]
+
+    artifacts["int8"]["artifactSha256"] = "0" * 64
+    (weights / "production-manifest.json").write_text(json.dumps({
+        "modelKey": "efficient-sam", "task": "interactive-segmentation",
+        "artifacts": artifacts,
+    }), encoding="utf-8")
+    invalid = _assert_envelope(client.get(
+        "/api/ai/model-scenarios/efficient-sam", headers=headers,
+    ))["data"]
+    assert invalid["apiReady"] is False
+    assert invalid["reason"] == "production manifest is missing or invalid"
 
 
 @pytest.mark.parametrize(

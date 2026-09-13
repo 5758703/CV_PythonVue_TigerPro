@@ -120,3 +120,42 @@ print(requests.post(
 允许的普通字段是 `points`、`labels`、`pointLabels`、`box`、`mode`、`precision`、`threshold`、`conf`、`imgsz`；文件字段是 `file`、`query`、`gallery`。服务端同时限制 part 数、文件数、单文件大小、总请求大小和解码像素数。
 
 成功和错误响应都包含 `requestId`，响应头也返回 `X-Request-Id`。常见错误：401 签名错误，409 nonce 重放，411 POST 缺少 Content-Length，413 请求超限，429 配额耗尽。
+
+## 全量桥接（推荐）
+
+控制台可桥接的 `/api/...` 对应 `/openapi/v1/x/<去掉 /api/ 后的路径>`。授权支持与 RBAC 相同的细粒度权限（例如 `ai:face:list`）、域级权限（例如 `domain:face`）以及超级权限 `*:*:*`；`/api/system/open-app` 不可桥接。
+
+```bash
+# 查看可用域和端点
+curl -s http://127.0.0.1:5001/openapi/v1/capabilities \
+  -H "X-App-Id: app_demo" -H "X-Api-Key: $API_KEY"
+
+# 管理端为全部可桥接域创建或刷新应用
+curl -X POST http://127.0.0.1:5001/api/system/open-app/ensure-domains \
+  -H "Authorization: Bearer <admin_jwt>"
+
+# 调用桥接的人脸识别端点
+curl -X POST http://127.0.0.1:5001/openapi/v1/x/ai/face/recognize \
+  -H "X-App-Id: app_face" -H "X-Api-Key: $API_KEY" \
+  -F "file=@./face.jpg" -F "modelId=1"
+```
+
+## 精简别名（仍可用）
+
+部分常用能力保留精简别名，例如：
+
+```bash
+curl -X POST http://127.0.0.1:5001/openapi/v1/vision/detect \
+  -H "X-App-Id: app_demo" -H "X-Api-Key: $API_KEY" \
+  -F "file=@./sample.jpg" -F "modelId=1"
+```
+
+异步调用增加 `async=1`，响应返回 `jobId`。异步任务需要运行：
+
+```bash
+python scripts/open_job_worker.py
+```
+
+## Webhook / Gateway
+
+Webhook 在开放应用管理界面配置。独立网关通过 `python gateway_app.py` 启动，默认监听 5002；主应用默认监听 5001。监控指标端点为 `GET /openapi/v1/metrics`。
