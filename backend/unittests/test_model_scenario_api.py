@@ -1,0 +1,162 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from flask import Flask
+from flask_jwt_extended import create_access_token
+
+from config import Config
+from extensions import db, jwt
+from models import AiModel, Role, User
+from routes import all_blueprints
+
+
+@pytest.fixture
+def scenario_api_client(tmp_path, monkeypatch):
+    """An isolated management app with the project blueprints registered."""
+    monkeypatch.setattr(Config, "MODEL_FOLDER", str(tmp_path / "models"))
+    app = Flask("model-scenario-api")
+    app.config.update(
+        TESTING=True,
+        SQLALCHEMY_DATABASE_URI=f"sqlite:///{tmp_path / 'scenario-api.db'}",
+        SQLALCHEMY_TRACK_MODIFICATIONS=False,
+        JWT_SECRET_KEY="scenario-api-test-secret",
+        MODEL_FOLDER=str(tmp_path / "models"),
+    )
+    db.init_app(app)
+    jwt.init_app(app)
+    for blueprint in all_blueprints:
+        app.register_blueprint(blueprint)
+
+    with app.app_context():
+        db.create_all()
+        admin_role = Role(role_name="Admin", role_key="admin")
+        admin = User(username="scenario-admin", nickname="Scenario Admin")
+        admin.set_password("not-used")
+        admin.roles = [admin_role]
+        db.session.add_all([admin_role, admin])
+        db.session.commit()
+        token = create_access_token(identity=str(admin.id))
+
+    yield app.test_client(), {"Authorization": f"Bearer {token}"}, tmp_path
+
+    with app.app_context():
+        db.session.remove()
+        db.drop_all()
+
+
+def _model(*, key: str, library: str, file_path: str | None, status: str = "0") -> AiModel:
+    return AiModel(
+        model_name=f"Configured {key}",
+        model_key=key,
+        library=library,
+        file_path=file_path,
+        status=status,
+    )
+
+
+def _assert_envelope(response, status_code=200):
+    assert response.status_code == status_code
+    payload = response.get_json()
+    assert set(payload) == {"code", "message", "data"}
+    return payload
+
+
+def test_phase_one_catalog_returns_nine_entries_and_requires_authentication(scenario_api_client):
+    """Removing the registered catalog route must reject anonymous catalog access."""
+    client, headers, _tmp_path = scenario_api_client
+
+    assert client.get("/api/ai/model-scenarios?phase=1").status_code == 401
+
+    payload = _assert_envelope(client.get("/api/ai/model-scenarios?phase=1", headers=headers))
+    assert payload["code"] == 0
+    assert len(payload["data"]) == 9
+    assert {entry["modelKey"] for entry in payload["data"]} == {
+        "efficient-sam",
+        "mobile-sam",
+        "clip-reid-vehicle",
+        "keremberke-yolov5m-license-plate",
+        "keremberke-yolov5n-license-plate",
+        "transreid-vehicle",
+        "vehicle-vit-reid",
+        "yolo26n-obb",
+        "yolo26n-p2-plate",
+    }
+
+
+def test_detail_joins_the_exact_registered_model_key(scenario_api_client):
+    """A catalog detail must use its own key, not a similarly named database row."""
+    client, headers, tmp_path = scenario_api_client
+    weights = Path(Config.MODEL_FOLDER)
+    weights.mkdir()
+    (weights / "obb.pt").write_bytes(b"weight")
+
+    with client.application.app_context():
+        db.session.add_all([
+            _model(key="yolo26n-obb", library="os", file_path="models/obb.pt"),
+            _model(key="yolo26n-obb-shadow", library="os", file_path="missing.pt"),
+        ])
+        db.session.commit()
+
+    payload = _assert_envelope(client.get("/api/ai/model-scenarios/yolo26n-obb", headers=headers))
+    detail = payload["data"]
+    assert detail["modelKey"] == "yolo26n-obb"
+    assert detail["model"]["modelKey"] == "yolo26n-obb"
+    assert detail["configured"] is True
+    assert detail["enabled"] is True
+    assert detail["weightsPresent"] is True
+    assert detail["runtimeAvailable"] is True
+    assert detail["ready"] is True
+    assert detail["reason"] is None
+
+
+def test_unknown_catalog_key_is_not_found(scenario_api_client):
+    """A non-catalog key must not be represented as a readiness result."""
+    client, headers, _tmp_path = scenario_api_client
+
+    payload = _assert_envelope(
+        client.get("/api/ai/model-scenarios/not-a-registered-model", headers=headers),
+        status_code=404,
+    )
+    assert payload["code"] == 404
+    assert payload["data"] is None
+
+
+@pytest.mark.parametrize(
+    ("key", "library", "file_path", "status", "expected"),
+    [
+        (
+            "mobile-sam", "os", "mobile.pt", "1",
+            {"enabled": False, "weightsPresent": True, "runtimeAvailable": True, "reason": "model is disabled"},
+        ),
+        (
+            "transreid-vehicle", "os", "missing.pt", "0",
+            {"enabled": True, "weightsPresent": False, "runtimeAvailable": True, "reason": "model weights are missing"},
+        ),
+        (
+            "vehicle-vit-reid", "runtime_that_does_not_exist_9d9b", "vehicle.pt", "0",
+            {"enabled": True, "weightsPresent": True, "runtimeAvailable": False, "reason": "runtime library is unavailable"},
+        ),
+    ],
+)
+def test_readiness_exposes_boolean_checks_and_the_blocking_reason(
+    scenario_api_client, key, library, file_path, status, expected,
+):
+    """Removing any readiness prerequisite must leave a truthful, explicit state."""
+    client, headers, _tmp_path = scenario_api_client
+    weights = Path(Config.MODEL_FOLDER)
+    weights.mkdir()
+    if expected["weightsPresent"]:
+        (weights / file_path).write_bytes(b"weight")
+
+    with client.application.app_context():
+        db.session.add(_model(key=key, library=library, file_path=file_path, status=status))
+        db.session.commit()
+
+    payload = _assert_envelope(client.get(f"/api/ai/model-scenarios/{key}", headers=headers))
+    readiness = payload["data"]
+    assert readiness["configured"] is True
+    assert readiness["ready"] is False
+    for field, value in expected.items():
+        assert readiness[field] == value
