@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+import sys
 from pathlib import Path
 
 import pytest
@@ -174,9 +176,10 @@ def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client,
     weights.mkdir(parents=True)
     (weights / "clip_vehicle_reid.onnx").write_bytes(b"x" * 100_001)
     monkeypatch.setattr(
-        readiness.importlib.util,
-        "find_spec",
+        readiness,
+        "_find_module_spec",
         lambda module: object() if module == "onnxruntime" else None,
+        raising=False,
     )
 
     with client.application.app_context():
@@ -189,6 +192,26 @@ def test_library_alias_probes_its_controlled_runtime_module(scenario_api_client,
     assert payload["data"]["weightsPresent"] is True
     assert payload["data"]["runtimeAvailable"] is True
     assert payload["data"]["ready"] is True
+
+
+def test_runtime_probe_does_not_import_a_dotted_business_parent(tmp_path, monkeypatch):
+    """A dotted runtime name must not execute the parent package during readiness."""
+    package_name = "scenario_readiness_probe_parent"
+    marker_name = "_scenario_readiness_probe_parent_loaded"
+    package_dir = tmp_path / package_name
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text(
+        f"import builtins\nbuiltins.{marker_name} = True\n",
+        encoding="utf-8",
+    )
+    (package_dir / "runtime.py").write_text("", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setattr(builtins, marker_name, False, raising=False)
+    monkeypatch.delitem(sys.modules, package_name, raising=False)
+    monkeypatch.delitem(sys.modules, f"{package_name}.runtime", raising=False)
+
+    assert readiness._runtime_available(f"{package_name}.runtime") is False
+    assert getattr(builtins, marker_name) is False
 
 
 def test_empty_weight_directory_is_not_ready(scenario_api_client):

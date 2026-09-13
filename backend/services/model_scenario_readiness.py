@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib.machinery
 from pathlib import Path
 
 from flask import current_app
@@ -49,15 +49,22 @@ def _library_name(library: str | None) -> str:
     return (library or "").strip().lower()
 
 
+def _find_module_spec(module_name: str):
+    """Find a top-level runtime module without importing a package parent."""
+    if not module_name.isidentifier():
+        return None
+    try:
+        return importlib.machinery.PathFinder.find_spec(module_name)
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return None
+
+
 def _runtime_available(library: str | None) -> bool:
     library_name = _library_name(library)
     if not library_name:
         return False
-    try:
-        module_name = _LIBRARY_MODULES.get(library_name, library_name)
-        return importlib.util.find_spec(module_name) is not None
-    except (ImportError, ModuleNotFoundError, ValueError):
-        return False
+    module_name = _LIBRARY_MODULES.get(library_name, library_name)
+    return _find_module_spec(module_name) is not None
 
 
 def _weights_present(weight_path: Path | None, library: str | None) -> bool:
