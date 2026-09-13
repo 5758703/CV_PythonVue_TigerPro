@@ -51,6 +51,144 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "OK"}},
             }
         },
+        "/model-scenarios": {
+            "get": {
+                "summary": "List model scenarios",
+                "description": "Returns public scenario metadata and runtime readiness.",
+                "x-required-scope": "model-scenario:read",
+                "parameters": [{
+                    "name": "phase",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "integer"},
+                }],
+                "responses": {
+                    "200": {
+                        "description": "Scenario catalog",
+                        "content": {
+                            "application/json": {
+                                "example": {
+                                    "code": 0,
+                                    "message": "ok",
+                                    "requestId": "req-123",
+                                    "data": [{
+                                        "modelKey": "yolo26n-obb",
+                                        "workbenchType": "obb_detection",
+                                        "configured": True,
+                                        "ready": True,
+                                        "reason": None,
+                                    }],
+                                }
+                            }
+                        },
+                    },
+                    "400": {"description": "Invalid phase"},
+                    "401": {"description": "Invalid credentials"},
+                    "403": {"description": "Missing model-scenario:read scope"},
+                },
+            }
+        },
+        "/model-scenarios/{modelKey}": {
+            "get": {
+                "summary": "Get model scenario",
+                "description": "Returns public capability metadata, input rules, and readiness.",
+                "x-required-scope": "model-scenario:read",
+                "parameters": [{
+                    "name": "modelKey",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }],
+                "responses": {
+                    "200": {"description": "Scenario metadata and readiness"},
+                    "401": {"description": "Invalid credentials"},
+                    "403": {"description": "Missing model-scenario:read scope"},
+                    "404": {"description": "Unknown model scenario"},
+                },
+            }
+        },
+        "/model-scenarios/{modelKey}/infer": {
+            "post": {
+                "summary": "Run model scenario inference",
+                "description": (
+                    "Dispatches by the registered model key. The server never accepts a model "
+                    "path or runtime library from the caller."
+                ),
+                "x-required-scope": "model-scenario:infer",
+                "parameters": [{
+                    "name": "modelKey",
+                    "in": "path",
+                    "required": True,
+                    "schema": {"type": "string"},
+                }],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "oneOf": [
+                                    {"required": ["file"]},
+                                    {"required": ["query", "gallery"]},
+                                ],
+                                "properties": {
+                                    "file": {
+                                        "type": "string",
+                                        "format": "binary",
+                                        "description": "Segmentation or detection image",
+                                    },
+                                    "query": {
+                                        "type": "string",
+                                        "format": "binary",
+                                        "description": "Vehicle ReID query image",
+                                    },
+                                    "gallery": {
+                                        "type": "array",
+                                        "items": {"type": "string", "format": "binary"},
+                                        "description": "One or more vehicle ReID gallery images",
+                                    },
+                                    "points": {"type": "string", "description": "JSON point array"},
+                                    "labels": {"type": "string", "description": "JSON point-label array"},
+                                    "box": {"type": "string", "description": "JSON [x1,y1,x2,y2]"},
+                                    "mode": {"type": "string", "enum": ["prompt", "auto"]},
+                                    "precision": {"type": "string"},
+                                    "conf": {"type": "number", "minimum": 0, "maximum": 1},
+                                    "imgsz": {
+                                        "type": "integer", "minimum": 32, "maximum": 4096,
+                                    },
+                                    "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {
+                        "description": "Normalized inference result",
+                        "content": {
+                            "application/json": {
+                                "example": {
+                                    "code": 0,
+                                    "message": "ok",
+                                    "requestId": "req-123",
+                                    "data": {
+                                        "modelKey": "yolo26n-obb",
+                                        "workbench": "obb_detection",
+                                        "elapsedMs": 7,
+                                        "result": {"detections": [], "count": 0},
+                                    },
+                                }
+                            }
+                        },
+                    },
+                    "400": {"description": "Unavailable scenario or invalid input"},
+                    "401": {"description": "Invalid credentials"},
+                    "403": {"description": "Missing model-scenario:infer scope"},
+                    "413": {"description": "Configured upload limit exceeded"},
+                    "500": {"description": "Sanitized inference failure"},
+                },
+            }
+        },
         "/vision/detect": {
             "post": {
                 "summary": "图片目标检测",

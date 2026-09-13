@@ -6,6 +6,7 @@
 - 目录：GET /openapi/v1/catalog 、/capabilities
 """
 from flask import Blueprint, Response, request
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from openapi_spec import DOCS_HTML, OPENAPI_SPEC
 from security_open import (
@@ -17,6 +18,9 @@ from security_open import (
 from services import job_store
 from services import metrics_registry as metrics
 from services import openapi_handlers as handlers
+from services.model_scenario_inference import ScenarioInputError, run_scenario
+from services.model_scenario_readiness import scenario_with_readiness
+from services.model_scenarios import get_scenario, list_scenarios
 from services.object_store import store_upload
 from services.openapi_bridge import register_bridge_routes
 from services.openapi_catalog import (
@@ -118,6 +122,48 @@ def capabilities():
         "docs": "/openapi/v1/docs",
         "catalog": "/openapi/v1/catalog",
     })
+
+
+def _public_scenario(scenario):
+    data = scenario_with_readiness(scenario)
+    data.pop("model", None)
+    return data
+
+
+@openapi_v1_bp.get("/model-scenarios")
+@require_open_scope("model-scenario:read")
+def list_open_model_scenarios():
+    raw_phase = request.args.get("phase")
+    try:
+        phase = int(raw_phase) if raw_phase is not None else None
+    except ValueError:
+        return open_error(400, 400, "phase must be an integer", "validation")
+    return open_ok([_public_scenario(item) for item in list_scenarios(phase=phase)])
+
+
+@openapi_v1_bp.get("/model-scenarios/<string:model_key>")
+@require_open_scope("model-scenario:read")
+def get_open_model_scenario(model_key: str):
+    scenario = get_scenario(model_key)
+    if scenario is None:
+        return open_error(404, 404, "model scenario not found", "not_found")
+    return open_ok(_public_scenario(scenario))
+
+
+@openapi_v1_bp.post("/model-scenarios/<string:model_key>/infer")
+@require_open_scope("model-scenario:infer")
+def infer_open_model_scenario(model_key: str):
+    try:
+        result = run_scenario(model_key, request.files, request.form)
+    except RequestEntityTooLarge:
+        return open_error(
+            413, 413, "request entity too large", "request_too_large",
+        )
+    except ScenarioInputError as exc:
+        return open_error(400, 400, str(exc), "validation")
+    except Exception:  # noqa: BLE001 - never expose model paths or runtime details
+        return open_error(500, 500, "inference failed", "inference")
+    return open_ok(result)
 
 
 def _flag_async() -> bool:
