@@ -3,7 +3,7 @@
     <section class="wb-controls" aria-label="车辆 ReID 输入与参数">
       <div class="wb-control-group">
         <h3>查询车辆</h3>
-        <label class="wb-dropzone" @dragover.prevent @drop.prevent="dropQuery">
+        <label class="wb-dropzone" :class="{ 'is-disabled': busy }" @dragover.prevent @drop.prevent="dropQuery">
           <input type="file" accept="image/*" :disabled="busy" @change="pickQuery">
           <img v-if="queryPreview" :src="queryPreview" alt="查询车辆缩略图">
           <strong>{{ queryFile ? queryFile.name : '拖入或选择查询图' }}</strong>
@@ -14,7 +14,7 @@
 
       <div class="wb-control-group">
         <h3>候选图库</h3>
-        <label class="wb-dropzone" @dragover.prevent @drop.prevent="dropGallery">
+        <label class="wb-dropzone" :class="{ 'is-disabled': busy }" @dragover.prevent @drop.prevent="dropGallery">
           <input type="file" accept="image/*" multiple :disabled="busy" @change="pickGallery">
           <strong>添加一张或多张候选图</strong>
           <span>重复 gallery 字段 · {{ inputHint }}</span>
@@ -59,9 +59,9 @@
         <p>上传查询图与候选图库后执行外观特征比对。</p>
       </div>
       <ol v-if="rankedMatches.length" class="wb-rank-list">
-        <li v-for="(match, index) in rankedMatches" :key="`${match.filename}-${index}`">
+        <li v-for="(match, index) in rankedMatches" :key="match.galleryIndex">
           <span class="wb-rank-list__rank">{{ String(index + 1).padStart(2, '0') }}</span>
-          <img v-if="galleryPreview(match.filename)" :src="galleryPreview(match.filename)" :alt="match.filename">
+          <img v-if="galleryPreview(match.galleryIndex)" :src="galleryPreview(match.galleryIndex)" :alt="match.filename">
           <div>
             <strong>{{ match.filename || `候选 ${index + 1}` }}</strong>
             <span v-if="typeof match.similarity === 'number'">相似度 {{ (match.similarity * 100).toFixed(2) }}%</span>
@@ -111,7 +111,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 
 import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
-import { normalizeWorkbenchResult, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
+import { isAcceptedImageCandidate, normalizeWorkbenchResult, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
 
 const props = defineProps({ scenario: { type: Object, required: true } })
 const emit = defineEmits(['completed'])
@@ -142,7 +142,8 @@ const topScore = computed(() => typeof rankedMatches.value[0]?.similarity === 'n
   ? `${(rankedMatches.value[0].similarity * 100).toFixed(2)}%` : '未返回')
 
 function acceptImage(nextFile) {
-  if (!nextFile?.type?.startsWith('image/')) {
+  if (busy.value) return false
+  if (!isAcceptedImageCandidate(nextFile, props.scenario.input?.formats)) {
     error.value = '请选择浏览器可预览的图片文件。'
     return false
   }
@@ -154,6 +155,7 @@ function acceptImage(nextFile) {
 }
 
 function setQuery(nextFile) {
+  if (busy.value) return
   if (!acceptImage(nextFile)) return
   if (queryPreview.value) URL.revokeObjectURL(queryPreview.value)
   queryFile.value = nextFile
@@ -161,6 +163,7 @@ function setQuery(nextFile) {
 }
 
 function clearQuery() {
+  if (busy.value) return
   if (queryPreview.value) URL.revokeObjectURL(queryPreview.value)
   queryFile.value = null
   queryPreview.value = ''
@@ -170,6 +173,7 @@ function clearQuery() {
 }
 
 function addGallery(files) {
+  if (busy.value) return
   for (const nextFile of files || []) {
     if (!acceptImage(nextFile)) continue
     galleryItems.value.push({ id: ++gallerySequence, file: nextFile, url: URL.createObjectURL(nextFile) })
@@ -177,24 +181,29 @@ function addGallery(files) {
 }
 
 function pickQuery(event) {
+  if (busy.value) return
   setQuery(event.target.files?.[0])
   event.target.value = ''
 }
 
 function dropQuery(event) {
+  if (busy.value) return
   setQuery(event.dataTransfer?.files?.[0])
 }
 
 function pickGallery(event) {
+  if (busy.value) return
   addGallery(event.target.files)
   event.target.value = ''
 }
 
 function dropGallery(event) {
+  if (busy.value) return
   addGallery(event.dataTransfer?.files)
 }
 
 function removeGallery(index) {
+  if (busy.value) return
   URL.revokeObjectURL(galleryItems.value[index].url)
   galleryItems.value.splice(index, 1)
   runOutput.value = null
@@ -202,11 +211,12 @@ function removeGallery(index) {
   elapsedMs.value = null
 }
 
-function galleryPreview(filename) {
-  return galleryItems.value.find((item) => item.file.name === filename)?.url || ''
+function galleryPreview(galleryIndex) {
+  return galleryItems.value[galleryIndex]?.url || ''
 }
 
 function resetParameters() {
+  if (busy.value) return
   threshold.value = Number(props.scenario.defaults?.threshold ?? 0.7)
 }
 

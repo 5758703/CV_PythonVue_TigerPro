@@ -5,10 +5,10 @@
         <h3>输入图像</h3>
         <label
           class="wb-dropzone"
-          :class="{ 'is-dragging': dragging }"
-          @dragenter.prevent="dragging = true"
+          :class="{ 'is-dragging': dragging, 'is-disabled': busy }"
+          @dragenter.prevent="onDragEnter"
           @dragover.prevent
-          @dragleave.prevent="dragging = false"
+          @dragleave.prevent="onDragLeave"
           @drop.prevent="onDrop"
         >
           <input type="file" accept="image/*" :disabled="busy" @change="onFileChange">
@@ -21,8 +21,8 @@
       <div v-if="isMobileSam" class="wb-control-group">
         <div class="wb-control-heading"><h3>分割模式</h3><button class="wb-text-button" type="button" :disabled="busy" @click="resetParameters">恢复默认</button></div>
         <div class="wb-segmented" role="group" aria-label="分割模式">
-          <button type="button" :class="{ 'is-active': mode === 'prompt' }" @click="mode = 'prompt'">交互提示</button>
-          <button type="button" :class="{ 'is-active': mode === 'auto' }" @click="setAutoMode">全自动</button>
+          <button type="button" :disabled="busy" :class="{ 'is-active': mode === 'prompt' }" @click="setPromptMode">交互提示</button>
+          <button type="button" :disabled="busy" :class="{ 'is-active': mode === 'auto' }" @click="setAutoMode">全自动</button>
         </div>
         <p>MobileSAM 支持交互提示与全自动模式。</p>
       </div>
@@ -42,9 +42,9 @@
       <div v-if="mode === 'prompt'" class="wb-control-group">
         <h3>提示工具</h3>
         <div class="wb-tool-grid" role="group" aria-label="提示工具">
-          <button type="button" :class="{ 'is-active': tool === 'positive' }" @click="tool = 'positive'">＋ 正点</button>
-          <button type="button" :class="{ 'is-active': tool === 'negative' }" @click="tool = 'negative'">－ 负点</button>
-          <button type="button" :class="{ 'is-active': tool === 'box' }" @click="tool = 'box'">▱ 框选</button>
+          <button type="button" :disabled="busy" :class="{ 'is-active': tool === 'positive' }" @click="setTool('positive')">＋ 正点</button>
+          <button type="button" :disabled="busy" :class="{ 'is-active': tool === 'negative' }" @click="setTool('negative')">－ 负点</button>
+          <button type="button" :disabled="busy" :class="{ 'is-active': tool === 'box' }" @click="setTool('box')">▱ 框选</button>
         </div>
         <div class="wb-inline-actions">
           <button class="wb-text-button" type="button" :disabled="!history.length || busy" @click="undoPrompt">撤销</button>
@@ -124,7 +124,10 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
 import {
+  clampImagePoint,
   deriveMaskMetrics,
+  isAcceptedImageCandidate,
+  isCurrentPreviewRequest,
   normalizeWorkbenchResult,
   serializeScenarioForm,
   undoSegmentationPrompt,
@@ -157,6 +160,7 @@ const maskMetrics = ref(null)
 const completedInteractions = ref(null)
 let boxStart = null
 let activeBox = null
+let maskRequestGeneration = 0
 
 const isMobileSam = computed(() => props.scenario.modelKey === 'mobile-sam')
 const inputHint = computed(() => {
@@ -189,7 +193,8 @@ const maskImageUrl = computed(() => {
 })
 
 function setFile(nextFile) {
-  if (!nextFile?.type?.startsWith('image/')) {
+  if (busy.value) return
+  if (!isAcceptedImageCandidate(nextFile, props.scenario.input?.formats)) {
     error.value = '请选择浏览器可预览的图片文件。'
     return
   }
@@ -201,20 +206,24 @@ function setFile(nextFile) {
   normalizedResult.value = { detections: [] }
   elapsedMs.value = null
   maskMetrics.value = null
+  maskRequestGeneration += 1
   clearPrompts()
 }
 
 function onFileChange(event) {
+  if (busy.value) return
   setFile(event.target.files?.[0])
   event.target.value = ''
 }
 
 function onDrop(event) {
+  if (busy.value) return
   dragging.value = false
   setFile(event.dataTransfer?.files?.[0])
 }
 
 function clearFile() {
+  if (busy.value) return
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   file.value = null
   previewUrl.value = ''
@@ -223,7 +232,16 @@ function clearFile() {
   normalizedResult.value = { detections: [] }
   elapsedMs.value = null
   maskMetrics.value = null
+  maskRequestGeneration += 1
   clearPrompts()
+}
+
+function onDragEnter() {
+  if (!busy.value) dragging.value = true
+}
+
+function onDragLeave() {
+  if (!busy.value) dragging.value = false
 }
 
 function onImageLoad() {
@@ -239,10 +257,18 @@ function onImageLoad() {
 function pointerCoordinates(event) {
   const canvas = overlayCanvas.value
   const bounds = canvas.getBoundingClientRect()
-  return [
+  return clampImagePoint([
     Math.round((event.clientX - bounds.left) * canvas.width / bounds.width),
     Math.round((event.clientY - bounds.top) * canvas.height / bounds.height),
-  ]
+  ], canvas.width, canvas.height)
+}
+
+function promptSnapshot() {
+  return {
+    points: points.value.map((point) => [...point]),
+    pointLabels: [...pointLabels.value],
+    box: box.value ? [...box.value] : null,
+  }
 }
 
 function onPointerDown(event) {
@@ -254,29 +280,28 @@ function onPointerDown(event) {
     activeBox = [point[0], point[1], point[0], point[1]]
     return
   }
+  history.value.push(promptSnapshot())
   points.value.push(point)
   pointLabels.value.push(tool.value === 'positive' ? 1 : 0)
-  history.value.push('point')
   drawPrompts()
 }
 
 function onPointerMove(event) {
-  if (!boxStart || tool.value !== 'box') return
+  if (busy.value || !boxStart || tool.value !== 'box') return
   const [x, y] = pointerCoordinates(event)
   activeBox = [Math.min(boxStart[0], x), Math.min(boxStart[1], y), Math.max(boxStart[0], x), Math.max(boxStart[1], y)]
   drawPrompts()
 }
 
 function onPointerUp(event) {
-  if (!boxStart || tool.value !== 'box') return
+  if (busy.value || !boxStart || tool.value !== 'box') return
   const [x, y] = pointerCoordinates(event)
   const nextBox = [Math.min(boxStart[0], x), Math.min(boxStart[1], y), Math.max(boxStart[0], x), Math.max(boxStart[1], y)]
   boxStart = null
   activeBox = null
   if (nextBox[2] - nextBox[0] >= 3 && nextBox[3] - nextBox[1] >= 3) {
-    if (box.value) history.value = history.value.filter((kind) => kind !== 'box')
+    history.value.push(promptSnapshot())
     box.value = nextBox
-    history.value.push('box')
   }
   drawPrompts()
 }
@@ -312,9 +337,10 @@ function drawPrompts() {
 }
 
 function undoPrompt() {
-  const lastKind = history.value.pop()
-  if (!lastKind) return
-  const next = undoSegmentationPrompt({ points: points.value, pointLabels: pointLabels.value, box: box.value }, lastKind)
+  if (busy.value) return
+  const snapshot = history.value.pop()
+  if (!snapshot) return
+  const next = undoSegmentationPrompt({ points: points.value, pointLabels: pointLabels.value, box: box.value }, snapshot)
   points.value = next.points
   pointLabels.value = next.pointLabels
   box.value = next.box
@@ -322,6 +348,7 @@ function undoPrompt() {
 }
 
 function clearPrompts() {
+  if (busy.value) return
   points.value = []
   pointLabels.value = []
   box.value = null
@@ -330,32 +357,48 @@ function clearPrompts() {
 }
 
 function setAutoMode() {
+  if (busy.value) return
   mode.value = 'auto'
   clearPrompts()
 }
 
 function resetParameters() {
+  if (busy.value) return
   mode.value = 'prompt'
   precision.value = 'fp32'
 }
 
+function setPromptMode() {
+  if (!busy.value) mode.value = 'prompt'
+}
+
+function setTool(nextTool) {
+  if (!busy.value) tool.value = nextTool
+}
+
 async function measureSelectedMask() {
+  const generation = ++maskRequestGeneration
+  const requestedUrl = maskImageUrl.value
   maskMetrics.value = null
-  if (!maskImageUrl.value) return
+  if (!requestedUrl) return
   const image = new Image()
   image.onload = () => {
+    if (!isCurrentPreviewRequest(generation, maskRequestGeneration, requestedUrl, maskImageUrl.value)) return
     const canvas = document.createElement('canvas')
     canvas.width = image.naturalWidth
     canvas.height = image.naturalHeight
     const context = canvas.getContext('2d', { willReadFrequently: true })
     context.drawImage(image, 0, 0)
-    maskMetrics.value = deriveMaskMetrics(
+    const metrics = deriveMaskMetrics(
       context.getImageData(0, 0, canvas.width, canvas.height).data,
       canvas.width,
       canvas.height,
     )
+    if (isCurrentPreviewRequest(generation, maskRequestGeneration, requestedUrl, maskImageUrl.value)) {
+      maskMetrics.value = metrics
+    }
   }
-  image.src = maskImageUrl.value
+  image.src = requestedUrl
 }
 
 async function runInference() {
@@ -366,6 +409,7 @@ async function runInference() {
   normalizedResult.value = { detections: [] }
   elapsedMs.value = null
   maskMetrics.value = null
+  maskRequestGeneration += 1
   completedInteractions.value = interactionCount.value
   try {
     const form = serializeScenarioForm('segmentation', {

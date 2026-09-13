@@ -4,7 +4,10 @@ import test from 'node:test'
 import {
   PHASE_ONE_ROUTE_KEYS,
   buildScenarioApiDocumentation,
+  clampImagePoint,
   deriveMaskMetrics,
+  isAcceptedImageCandidate,
+  isCurrentPreviewRequest,
   normalizeWorkbenchResult,
   scaleDetectionGeometry,
   isLatestScenarioRequest,
@@ -188,25 +191,32 @@ test('accepts only the latest detail response for the current fixed route key', 
   assert.equal(isLatestScenarioRequest(2, 2, 'efficient-sam', 'mobile-sam'), false)
 })
 
-test('undoes the latest segmentation prompt without desynchronizing point labels', () => {
-  assert.deepEqual(undoSegmentationPrompt({
-    points: [[10, 20], [30, 40]],
-    pointLabels: [1, 0],
+test('restores the full segmentation snapshot when a replacement box is undone', () => {
+  const previous = {
+    points: [[10, 20]],
+    pointLabels: [1],
     box: [5, 6, 50, 60],
-  }, 'point'), {
+  }
+  const current = {
+    points: [[10, 20]],
+    pointLabels: [1],
+    box: [100, 110, 180, 190],
+  }
+
+  const restored = undoSegmentationPrompt(current, previous)
+  previous.points[0][0] = 999
+  previous.box[0] = 999
+
+  assert.deepEqual(restored, {
     points: [[10, 20]],
     pointLabels: [1],
     box: [5, 6, 50, 60],
   })
-  assert.deepEqual(undoSegmentationPrompt({
-    points: [[10, 20]],
-    pointLabels: [1],
-    box: [5, 6, 50, 60],
-  }, 'box'), {
-    points: [[10, 20]],
-    pointLabels: [1],
-    box: null,
-  })
+})
+
+test('clamps pointer coordinates to the image boundary when dragging outside', () => {
+  assert.deepEqual(clampImagePoint([-18, 145], 100, 80), [0, 80])
+  assert.deepEqual(clampImagePoint([42.7, 21.2], 100, 80), [43, 21])
 })
 
 test('validates each workbench form at its business input boundaries', () => {
@@ -276,6 +286,18 @@ test('normalizes real ReID matches by similarity and leaves missing decisions mi
   assert.equal(normalized.matches[3].similarity, undefined)
 })
 
+test('keeps ReID gallery indices stable for duplicate names and equal scores', () => {
+  const normalized = normalizeWorkbenchResult('vehicle_reid', {
+    matches: [
+      { filename: 'same.jpg', similarity: 0.8, matched: true },
+      { filename: 'same.jpg', similarity: 0.9, matched: true },
+      { filename: 'other.jpg', similarity: 0.9, matched: true },
+    ],
+  })
+
+  assert.deepEqual(normalized.matches.map((item) => item.galleryIndex), [1, 2, 0])
+})
+
 test('keeps only finite drawable detector geometry and scales within canvas bounds', () => {
   const normalized = normalizeWorkbenchResult('obb_detection', {
     width: 200,
@@ -306,4 +328,25 @@ test('derives mask area and ratio only from actual RGBA mask pixels', () => {
   ])
   assert.deepEqual(deriveMaskMetrics(rgba, 2, 2), { area: 2, ratio: 0.5 })
   assert.equal(deriveMaskMetrics(rgba, 0, 2), null)
+})
+
+test('accepts an extension-approved image when the browser leaves MIME empty', () => {
+  assert.equal(isAcceptedImageCandidate(
+    new File(['image'], 'plate.PNG', { type: '' }),
+    ['.jpg', '.png'],
+  ), true)
+  assert.equal(isAcceptedImageCandidate(
+    new File(['image'], 'plate.gif', { type: '' }),
+    ['.jpg', '.png'],
+  ), false)
+  assert.equal(isAcceptedImageCandidate(
+    new File(['image'], 'plate.png', { type: 'text/plain' }),
+    ['.jpg', '.png'],
+  ), false)
+})
+
+test('rejects a stale async preview callback by generation or selected URL', () => {
+  assert.equal(isCurrentPreviewRequest(3, 3, 'data:new', 'data:new'), true)
+  assert.equal(isCurrentPreviewRequest(2, 3, 'data:old', 'data:new'), false)
+  assert.equal(isCurrentPreviewRequest(3, 3, 'data:old', 'data:new'), false)
 })

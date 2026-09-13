@@ -3,7 +3,7 @@
     <section class="wb-controls" aria-label="车牌检测输入与参数">
       <div class="wb-control-group">
         <h3>待检测图像</h3>
-        <label class="wb-dropzone" :class="{ 'is-dragging': dragging }" @dragenter.prevent="dragging = true" @dragover.prevent @dragleave.prevent="dragging = false" @drop.prevent="onDrop">
+        <label class="wb-dropzone" :class="{ 'is-dragging': dragging, 'is-disabled': busy }" @dragenter.prevent="onDragEnter" @dragover.prevent @dragleave.prevent="onDragLeave" @drop.prevent="onDrop">
           <input type="file" accept="image/*" :disabled="busy" @change="onFileChange">
           <strong>{{ file ? file.name : '拖入图片或选择文件' }}</strong>
           <span>{{ inputHint }}</span>
@@ -75,7 +75,7 @@
           <table class="wb-table">
             <thead><tr><th>#</th><th>类别</th><th>置信度</th><th>坐标</th><th>OCR</th></tr></thead>
             <tbody>
-              <tr v-for="(item, index) in normalizedResult.detections" :key="index" :class="{ 'is-selected': selectedIndex === index }" tabindex="0" @click="selectDetection(index)" @keydown.enter="selectDetection(index)">
+              <tr v-for="(item, index) in normalizedResult.detections" :key="index" :class="{ 'is-selected': selectedIndex === index }" tabindex="0" @click="selectDetection(index)" @keydown.enter="selectDetection(index)" @keydown.space.prevent="selectDetection(index)">
                 <td>{{ index + 1 }}</td>
                 <td>{{ item.className || (item.classId ?? '—') }}</td>
                 <td>{{ typeof item.confidence === 'number' ? item.confidence.toFixed(4) : '—' }}</td>
@@ -100,7 +100,7 @@ import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 
 import { scenarioApi } from '../../../../api/modelScenarios'
 import ResultPanel from '../components/ResultPanel.vue'
-import { normalizeWorkbenchResult, scaleDetectionGeometry, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
+import { isAcceptedImageCandidate, normalizeWorkbenchResult, scaleDetectionGeometry, serializeScenarioForm, validateWorkbenchState } from '../scenarioState'
 
 const props = defineProps({ scenario: { type: Object, required: true } })
 const emit = defineEmits(['completed'])
@@ -132,7 +132,8 @@ function ocrText(item) {
 }
 
 function setFile(nextFile) {
-  if (!nextFile?.type?.startsWith('image/')) {
+  if (busy.value) return
+  if (!isAcceptedImageCandidate(nextFile, props.scenario.input?.formats)) {
     error.value = '请选择浏览器可预览的图片文件。'
     return
   }
@@ -144,20 +145,31 @@ function setFile(nextFile) {
 }
 
 function onFileChange(event) {
+  if (busy.value) return
   setFile(event.target.files?.[0])
   event.target.value = ''
 }
 
 function onDrop(event) {
+  if (busy.value) return
   dragging.value = false
   setFile(event.dataTransfer?.files?.[0])
 }
 
 function clearFile() {
+  if (busy.value) return
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
   file.value = null
   previewUrl.value = ''
   resetResult()
+}
+
+function onDragEnter() {
+  if (!busy.value) dragging.value = true
+}
+
+function onDragLeave() {
+  if (!busy.value) dragging.value = false
 }
 
 function resetResult() {
@@ -217,11 +229,13 @@ function createCrops() {
 }
 
 function selectDetection(index) {
+  if (busy.value) return
   selectedIndex.value = index
   drawOverlay()
 }
 
 function resetParameters() {
+  if (busy.value) return
   conf.value = Number(props.scenario.defaults?.conf ?? 0.5)
   imgsz.value = Number(props.scenario.defaults?.imgsz ?? 640)
 }

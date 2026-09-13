@@ -258,18 +258,29 @@ export function validateWorkbenchState(type, state = {}, inputPolicy = {}) {
   return errors
 }
 
-export function undoSegmentationPrompt(state, lastKind) {
-  const next = {
-    points: [...(state.points || [])],
-    pointLabels: [...(state.pointLabels || [])],
-    box: Array.isArray(state.box) ? [...state.box] : null,
+export function undoSegmentationPrompt(_state, snapshot = {}) {
+  return {
+    points: (snapshot.points || []).map((point) => [...point]),
+    pointLabels: [...(snapshot.pointLabels || [])],
+    box: Array.isArray(snapshot.box) ? [...snapshot.box] : null,
   }
-  if (lastKind === 'box') next.box = null
-  if (lastKind === 'point') {
-    next.points.pop()
-    next.pointLabels.pop()
-  }
-  return next
+}
+
+export function clampImagePoint(point, width, height) {
+  const x = Number.isFinite(point?.[0]) ? Math.round(point[0]) : 0
+  const y = Number.isFinite(point?.[1]) ? Math.round(point[1]) : 0
+  return [clamp(x, 0, Math.max(0, width)), clamp(y, 0, Math.max(0, height))]
+}
+
+export function isAcceptedImageCandidate(file, formats = []) {
+  if (!file) return false
+  if (typeof file.type === 'string' && file.type) return file.type.startsWith('image/')
+  const filename = typeof file.name === 'string' ? file.name.toLowerCase() : ''
+  return formats.some((extension) => filename.endsWith(String(extension).toLowerCase()))
+}
+
+export function isCurrentPreviewRequest(requestGeneration, activeGeneration, requestedUrl, currentUrl) {
+  return requestGeneration === activeGeneration && requestedUrl === currentUrl
 }
 
 function normalizeNumberList(value, length) {
@@ -301,15 +312,15 @@ export function normalizeWorkbenchResult(type, value) {
   const source = value && typeof value === 'object' ? value : {}
   if (type === 'vehicle_reid') {
     const matches = Array.isArray(source.matches)
-      ? source.matches.map((item) => {
+      ? source.matches.map((item, galleryIndex) => {
         const match = item && typeof item === 'object' ? { ...item } : {}
         if (!isFiniteNumber(item?.similarity)) delete match.similarity
         if (typeof item?.matched !== 'boolean') delete match.matched
-        return match
+        return { ...match, galleryIndex }
       }).sort((left, right) => {
         const leftScore = isFiniteNumber(left.similarity) ? left.similarity : -Infinity
         const rightScore = isFiniteNumber(right.similarity) ? right.similarity : -Infinity
-        return rightScore - leftScore
+        return rightScore - leftScore || left.galleryIndex - right.galleryIndex
       })
       : []
     return { ...source, matches }
