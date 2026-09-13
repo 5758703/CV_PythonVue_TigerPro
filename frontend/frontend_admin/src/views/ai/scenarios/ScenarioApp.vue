@@ -156,7 +156,12 @@ import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { scenarioApi } from '../../../api/modelScenarios'
-import { resolveFixedModelKey, resolveWorkbench } from './scenarioState'
+import {
+  buildScenarioApiDocumentation,
+  isLatestScenarioRequest,
+  resolveFixedModelKey,
+  resolveWorkbench,
+} from './scenarioState'
 import './scenarios.css'
 
 const props = defineProps({
@@ -172,6 +177,7 @@ const scenario = ref(null)
 const loadError = ref('')
 const notFound = ref(false)
 const copied = ref(false)
+let requestSequence = 0
 
 const fixedModelKey = computed(() => resolveFixedModelKey(route) || props.modelKey || null)
 const workbench = computed(() => resolveWorkbench(scenario.value?.workbenchType))
@@ -216,54 +222,14 @@ const inputLimit = computed(() => {
   return `${formats}${size ? ` · 单次不超过 ${size} MB` : ''}`
 })
 
-const apiFields = computed(() => {
-  if (workbench.value === 'vehicle_reid') {
-    return [
-      { name: 'query', required: true, description: '单张车辆查询图片。' },
-      { name: 'gallery', required: true, description: '一张或多张候选车辆图片，可重复提交。' },
-      { name: 'threshold', required: false, description: `相似度阈值，默认 ${scenario.value?.defaults?.threshold ?? 0.7}。` },
-    ]
-  }
-  if (workbench.value === 'segmentation') {
-    return [
-      { name: 'file', required: true, description: '待分割图片。' },
-      { name: 'points / labels', required: false, description: 'JSON 数组形式的提示点和正负标签。' },
-      { name: 'box', required: false, description: 'JSON 数组形式的矩形提示框。' },
-      { name: 'precision / conf', required: false, description: '精度策略与置信度参数。' },
-    ]
-  }
-  return [
-    { name: 'file', required: true, description: '待检测图片。' },
-    { name: 'conf', required: false, description: `置信度阈值，默认 ${scenario.value?.defaults?.conf ?? 0.5}。` },
-    { name: 'imgsz', required: false, description: `推理尺寸，默认 ${scenario.value?.defaults?.imgsz ?? 640}。` },
-  ]
-})
-
-const curlExample = computed(() => {
-  if (!scenario.value) return ''
-  const path = scenario.value.apiPath || `/api/open/v1/model-scenarios/${fixedModelKey.value}`
-  const endpoint = `${path}/infer`
-  const fields = workbench.value === 'vehicle_reid'
-    ? [`-F "query=@query.jpg"`, `-F "gallery=@candidate-01.jpg"`, `-F "threshold=${scenario.value.defaults?.threshold ?? 0.7}"`]
-    : workbench.value === 'segmentation'
-      ? [`-F "file=@input.jpg"`, `-F 'points=[[320,240]]'`, `-F 'labels=[1]'`, `-F "conf=${scenario.value.defaults?.conf ?? 0.5}"`]
-      : [`-F "file=@input.jpg"`, `-F "conf=${scenario.value.defaults?.conf ?? 0.5}"`, `-F "imgsz=${scenario.value.defaults?.imgsz ?? 640}"`]
-  return [
-    `curl -X POST "${window.location.origin}${endpoint}" \\`,
-    '  -H "Authorization: Bearer <YOUR_API_KEY>" \\',
-    ...fields.map((field, index) => `  ${field}${index < fields.length - 1 ? ' \\' : ''}`),
-  ].join('\n')
-})
-
-const responseExample = computed(() => JSON.stringify({
-  code: 0,
-  message: 'ok',
-  data: workbench.value === 'vehicle_reid'
-    ? { modelKey: fixedModelKey.value, matches: [{ candidate: 'candidate-01.jpg', score: 0.86, matched: true }] }
-    : workbench.value === 'segmentation'
-      ? { modelKey: fixedModelKey.value, masks: 1, areaRatio: 0.184, interactionCount: 1 }
-      : { modelKey: fixedModelKey.value, detections: [], count: 0 },
-}, null, 2))
+const apiDocumentation = computed(() => scenario.value
+  ? buildScenarioApiDocumentation(scenario.value, {
+    origin: typeof window === 'undefined' ? '' : window.location.origin,
+  })
+  : { curl: '', fields: [], response: {} })
+const apiFields = computed(() => apiDocumentation.value.fields)
+const curlExample = computed(() => apiDocumentation.value.curl)
+const responseExample = computed(() => JSON.stringify(apiDocumentation.value.response, null, 2))
 
 async function copyCurl() {
   try {
@@ -288,23 +254,33 @@ async function copyCurl() {
 }
 
 async function loadScenario() {
+  const requestedKey = fixedModelKey.value
+  const sequence = ++requestSequence
+  const isCurrent = () => isLatestScenarioRequest(
+    sequence,
+    requestSequence,
+    requestedKey,
+    fixedModelKey.value,
+  )
   loading.value = true
   loadError.value = ''
   notFound.value = false
   scenario.value = null
-  if (!fixedModelKey.value) {
+  if (!requestedKey) {
     notFound.value = true
     loading.value = false
     return
   }
   try {
-    const response = await scenarioApi.get(fixedModelKey.value)
+    const response = await scenarioApi.get(requestedKey)
+    if (!isCurrent()) return
     scenario.value = response.data
   } catch (error) {
+    if (!isCurrent()) return
     if (error?.response?.status === 404) notFound.value = true
     else loadError.value = error?.response?.data?.message || error?.message || '请检查网络连接或访问权限。'
   } finally {
-    loading.value = false
+    if (isCurrent()) loading.value = false
   }
 }
 
