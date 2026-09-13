@@ -164,6 +164,8 @@ test('matches the Open API success envelope and normalized result field names', 
   assert.deepEqual(Object.keys(docs.vehicle_reid.response.data.result).sort(), [
     'backend', 'matches', 'query',
   ])
+  assert.equal(docs.vehicle_reid.response.data.result.backend.inputSize, '256x256')
+  assert.equal(typeof docs.vehicle_reid.response.data.result.backend.inputSize, 'string')
   assert.deepEqual(Object.keys(docs.vehicle_reid.response.data.result.matches[0]).sort(), [
     'filename', 'matched', 'similarity',
   ])

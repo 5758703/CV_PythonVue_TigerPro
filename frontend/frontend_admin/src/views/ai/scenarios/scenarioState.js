@@ -103,7 +103,7 @@ function normalizedResult(workbenchType) {
   if (workbenchType === 'vehicle_reid') {
     return {
       query: 'query.jpg',
-      backend: { backend: 'vehicle-onnx', dim: 768, inputSize: [256, 256] },
+      backend: { backend: 'vehicle-onnx', dim: 768, inputSize: '256x256' },
       matches: [{ filename: 'candidate-01.jpg', similarity: 0.86, matched: true }],
     }
   }
