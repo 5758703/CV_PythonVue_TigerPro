@@ -46,8 +46,12 @@ third_party/
 docs/*
 !docs/community/
 !docs/community/**
-!docs/articles/
-!docs/articles/**
+# docs/articles/ 本地文章/排版稿，不推送远程
+
+# ===== 公众号封面/排版稿（根目录设计产物，不推送远程）=====
+AI解放双手*
+*公众号封面*
+*graphite-minimal*
 
 # ===== CSDN 模型手册（本地私有，明确禁止上传）=====
 docs/csdn-ai-models-catalog/
