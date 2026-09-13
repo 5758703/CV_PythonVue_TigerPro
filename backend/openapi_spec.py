@@ -77,6 +77,10 @@ OPENAPI_SPEC = {
                                         "configured": True,
                                         "ready": True,
                                         "reason": None,
+                                        "apiPath": (
+                                            "/openapi/v1/model-scenarios/"
+                                            "yolo26n-obb/infer"
+                                        ),
                                     }],
                                 }
                             }
@@ -85,6 +89,7 @@ OPENAPI_SPEC = {
                     "400": {"description": "Invalid phase"},
                     "401": {"description": "Invalid credentials"},
                     "403": {"description": "Missing model-scenario:read scope"},
+                    "500": {"description": "Sanitized scenario lookup failure"},
                 },
             }
         },
@@ -104,6 +109,7 @@ OPENAPI_SPEC = {
                     "401": {"description": "Invalid credentials"},
                     "403": {"description": "Missing model-scenario:read scope"},
                     "404": {"description": "Unknown model scenario"},
+                    "500": {"description": "Sanitized scenario lookup failure"},
                 },
             }
         },

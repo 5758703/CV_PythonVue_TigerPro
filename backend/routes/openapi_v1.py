@@ -124,10 +124,21 @@ def capabilities():
     })
 
 
+_PUBLIC_SCENARIO_FIELDS = (
+    "phase", "order", "modelKey", "name", "category", "ability",
+    "workbenchType", "project", "description", "workflow", "outputs",
+    "metrics", "risks", "defaults", "input", "configured", "enabled",
+    "weightsPresent", "runtimeAvailable", "ready", "reason",
+)
+
+
 def _public_scenario(scenario):
     data = scenario_with_readiness(scenario)
-    data.pop("model", None)
-    return data
+    public = {field: data[field] for field in _PUBLIC_SCENARIO_FIELDS}
+    public["apiPath"] = (
+        f"/openapi/v1/model-scenarios/{data['modelKey']}/infer"
+    )
+    return public
 
 
 @openapi_v1_bp.get("/model-scenarios")
@@ -138,16 +149,24 @@ def list_open_model_scenarios():
         phase = int(raw_phase) if raw_phase is not None else None
     except ValueError:
         return open_error(400, 400, "phase must be an integer", "validation")
-    return open_ok([_public_scenario(item) for item in list_scenarios(phase=phase)])
+    try:
+        data = [_public_scenario(item) for item in list_scenarios(phase=phase)]
+    except Exception:  # noqa: BLE001 - do not expose database or model paths
+        return open_error(500, 500, "model scenario lookup failed", "internal")
+    return open_ok(data)
 
 
 @openapi_v1_bp.get("/model-scenarios/<string:model_key>")
 @require_open_scope("model-scenario:read")
 def get_open_model_scenario(model_key: str):
-    scenario = get_scenario(model_key)
-    if scenario is None:
-        return open_error(404, 404, "model scenario not found", "not_found")
-    return open_ok(_public_scenario(scenario))
+    try:
+        scenario = get_scenario(model_key)
+        if scenario is None:
+            return open_error(404, 404, "model scenario not found", "not_found")
+        data = _public_scenario(scenario)
+    except Exception:  # noqa: BLE001 - do not expose database or model paths
+        return open_error(500, 500, "model scenario lookup failed", "internal")
+    return open_ok(data)
 
 
 @openapi_v1_bp.post("/model-scenarios/<string:model_key>/infer")

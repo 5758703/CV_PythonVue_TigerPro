@@ -110,6 +110,42 @@ def test_read_scope_lists_and_gets_public_scenarios_but_cannot_infer(openapi_app
     assert "model-scenario:infer" in denied_payload["message"]
 
 
+def test_public_scenario_shape_is_allowlisted_and_uses_the_real_infer_path(
+    openapi_app, monkeypatch,
+):
+    app, read_headers, _infer_headers = openapi_app
+    import routes.openapi_v1 as openapi_routes
+
+    real_readiness = openapi_routes.scenario_with_readiness
+
+    def readiness_with_future_management_field(scenario):
+        data = real_readiness(scenario)
+        data["futureManagementSecret"] = "C:/secret/future-admin-value"
+        return data
+
+    monkeypatch.setattr(
+        openapi_routes,
+        "scenario_with_readiness",
+        readiness_with_future_management_field,
+    )
+    response = app.test_client().get(
+        "/openapi/v1/model-scenarios/yolo26n-obb", headers=read_headers,
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert set(data) == {
+        "phase", "order", "modelKey", "name", "category", "ability",
+        "workbenchType", "project", "description", "workflow", "outputs",
+        "metrics", "risks", "defaults", "input", "apiPath", "configured",
+        "enabled", "weightsPresent", "runtimeAvailable", "ready", "reason",
+    }
+    assert data["apiPath"] == (
+        "/openapi/v1/model-scenarios/yolo26n-obb/infer"
+    )
+    assert "future-admin-value" not in response.get_data(as_text=True)
+
+
 def test_infer_scope_dispatches_to_shared_scenario_runner(openapi_app, monkeypatch):
     app, _read_headers, infer_headers = openapi_app
     captured = {}
@@ -217,6 +253,44 @@ def test_infer_preserves_file_limit_and_sanitizes_runtime_failures(
     assert "secret" not in failed.get_data(as_text=True)
 
 
+@pytest.mark.parametrize("path", [
+    "/openapi/v1/model-scenarios",
+    "/openapi/v1/model-scenarios/yolo26n-obb",
+])
+def test_scenario_reads_sanitize_unexpected_readiness_failures(
+    openapi_app, monkeypatch, path,
+):
+    app, read_headers, _infer_headers = openapi_app
+
+    def readiness_failure(*_args, **_kwargs):
+        raise RuntimeError("C:/secret/models/yolo26n-obb.pt database failure")
+
+    monkeypatch.setattr("routes.openapi_v1.scenario_with_readiness", readiness_failure)
+    response = app.test_client().get(path, headers=read_headers)
+
+    payload = _assert_open_error(response, 500, "internal")
+    assert payload["message"] == "model scenario lookup failed"
+    assert "secret" not in response.get_data(as_text=True)
+
+
+def test_scenario_detail_sanitizes_unexpected_registry_failure(
+    openapi_app, monkeypatch,
+):
+    app, read_headers, _infer_headers = openapi_app
+
+    def registry_failure(*_args, **_kwargs):
+        raise RuntimeError("D:/secret/catalog/database.sqlite failure")
+
+    monkeypatch.setattr("routes.openapi_v1.get_scenario", registry_failure)
+    response = app.test_client().get(
+        "/openapi/v1/model-scenarios/yolo26n-obb", headers=read_headers,
+    )
+
+    payload = _assert_open_error(response, 500, "internal")
+    assert payload["message"] == "model scenario lookup failed"
+    assert "secret" not in response.get_data(as_text=True)
+
+
 def test_openapi_json_documents_scenario_paths_scopes_and_multipart_fields(openapi_app):
     app, _read_headers, _infer_headers = openapi_app
     spec = app.test_client().get("/openapi/v1/openapi.json").get_json()
@@ -227,6 +301,12 @@ def test_openapi_json_documents_scenario_paths_scopes_and_multipart_fields(opena
     assert collection["x-required-scope"] == "model-scenario:read"
     assert detail["x-required-scope"] == "model-scenario:read"
     assert infer["x-required-scope"] == "model-scenario:infer"
+    assert "500" in collection["responses"]
+    assert "500" in detail["responses"]
+    list_example = collection["responses"]["200"]["content"]["application/json"]["example"]
+    assert list_example["data"][0]["apiPath"] == (
+        "/openapi/v1/model-scenarios/yolo26n-obb/infer"
+    )
 
     form_schema = infer["requestBody"]["content"]["multipart/form-data"]["schema"]
     assert {frozenset(option["required"]) for option in form_schema["oneOf"]} == {

@@ -79,6 +79,9 @@ _ROUTE_RE = re.compile(
     r'^@(\w+)_bp\.(get|post|put|patch|delete)\(\s*["\']([^"\']*)["\']',
     re.M,
 )
+_OPEN_SCOPE_RE = re.compile(
+    r'^@require_open_scope\(\s*["\']([^"\']*)["\']\s*\)',
+)
 
 
 def _domain_for_path(path: str) -> str:
@@ -143,6 +146,11 @@ def _scan_route_file(path: Path) -> list[dict]:
             if pm:
                 scope = pm.group(1)
                 auth = "perm"
+                continue
+            om = _OPEN_SCOPE_RE.match(s)
+            if om:
+                scope = om.group(1)
+                auth = "open"
                 continue
             if s.startswith("@login_required"):
                 scope = scope or "auth:login"
