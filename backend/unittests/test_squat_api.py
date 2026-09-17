@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import base64
 
 import pytest
 from flask import Flask
@@ -119,3 +120,44 @@ def test_video_job_completes_and_output_name_is_restricted(squat_app, monkeypatc
     assert client.get(f"/api/ai/squat/output/{output}", headers=headers).data == b"annotated"
     assert client.get("/api/ai/squat/output/../secret.mp4", headers=headers).status_code in (400, 404)
     assert client.get("/api/ai/squat/output/not-squat.mp4", headers=headers).status_code == 400
+
+
+def test_local_session_lifecycle(squat_app, monkeypatch):
+    import cv2
+    import numpy as np
+
+    app, headers, model_id, _tmp_path = squat_app
+
+    class EmptyEstimator:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def infer(self, _frame):
+            return []
+
+    monkeypatch.setattr("routes.squat.PoseFrameEstimator", EmptyEstimator)
+    client = app.test_client()
+    created = client.post(
+        "/api/ai/squat/sessions",
+        json={"sourceType": "local", "modelId": model_id},
+        headers=headers,
+    )
+    assert created.status_code == 200
+    session_id = created.json["data"]["sessionId"]
+
+    ok, encoded = cv2.imencode(".jpg", np.zeros((32, 32, 3), dtype=np.uint8))
+    assert ok
+    frame = client.post(
+        f"/api/ai/squat/sessions/{session_id}/frames",
+        data={
+            "file": (io.BytesIO(encoded.tobytes()), "frame.jpg"),
+            "sequence": "1",
+            "capturedAt": "0.0",
+        },
+        headers=headers,
+    )
+    assert frame.status_code == 200
+    assert base64.b64decode(frame.json["data"]["annotatedImageBase64"])
+    assert client.get(f"/api/ai/squat/sessions/{session_id}", headers=headers).status_code == 200
+    stopped = client.delete(f"/api/ai/squat/sessions/{session_id}", headers=headers)
+    assert stopped.json["data"]["status"] == "stopped"
