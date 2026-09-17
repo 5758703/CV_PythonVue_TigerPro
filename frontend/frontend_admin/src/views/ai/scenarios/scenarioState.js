@@ -10,6 +10,7 @@ const SUPPORTED_WORKBENCHES = new Set([
   'image_classification',
   'multimodal_grounding',
   'body_pose',
+  'squat_counting',
   'instance_segmentation',
   'person_reid',
   'hand_pose',
@@ -33,6 +34,7 @@ export const SCENARIO_GROUP_ROUTE_KEYS = [
   'image-classification',
   'multimodal-grounding',
   'body-pose',
+  'squat-counting',
   'ppe-detection',
   'smoking-detection',
   'fall-detection',
@@ -172,6 +174,7 @@ const GROUP_ROUTE_META = [
   ['aiScenarioImageClassification', '图像分类场景'],
   ['aiScenarioMultimodalGrounding', '多模态定位场景'],
   ['aiScenarioBodyPose', '人体姿态估计场景'],
+  ['aiScenarioSquatCounting', '健身蹲起计数场景'],
   ['aiScenarioPpeDetection', 'PPE 防护检测场景'],
   ['aiScenarioSmokingDetection', '吸烟行为检测场景'],
   ['aiScenarioFallDetection', '跌倒行为检测场景'],
@@ -937,6 +940,21 @@ export function validateWorkbenchState(type, state = {}, inputPolicy = {}) {
   if (!validUnitInterval(Number(state.conf))) errors.push('置信度阈值必须在 0 到 1 之间。')
   if (!Number.isInteger(Number(state.imgsz)) || Number(state.imgsz) < 32 || Number(state.imgsz) > 4096) {
     errors.push('推理尺寸必须是 32 到 4096 的整数。')
+  }
+  return errors
+}
+
+export function validateSquatParameters(state = {}) {
+  const errors = []
+  const standing = Number(state.standingAngle)
+  const bottom = Number(state.bottomAngle)
+  const confirmFrames = Number(state.confirmFrames ?? 3)
+  if (!Number.isFinite(standing) || !Number.isFinite(bottom) || standing <= bottom) {
+    errors.push('站立阈值必须大于下蹲阈值')
+  }
+  if (standing > 180 || bottom <= 0) errors.push('动作角度必须在 0 到 180 度之间')
+  if (!Number.isInteger(confirmFrames) || confirmFrames < 1 || confirmFrames > 30) {
+    errors.push('连续确认帧数必须是 1 到 30 的整数')
   }
   return errors
 }

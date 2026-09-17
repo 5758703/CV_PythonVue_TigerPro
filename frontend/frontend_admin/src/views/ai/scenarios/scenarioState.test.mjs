@@ -19,6 +19,7 @@ import {
   resolveFixedGroupKey,
   resolveGroupKey,
   resolveWorkbench,
+  validateSquatParameters,
   serializeScenarioForm,
   undoSegmentationPrompt,
   validateWorkbenchState,
@@ -40,11 +41,23 @@ test('resolves each supported workbench type', () => {
   assert.equal(resolveWorkbench('multimodal_grounding'), 'multimodal_grounding')
   assert.equal(resolveWorkbench('industrial_diagnosis'), 'industrial_diagnosis')
   assert.equal(resolveWorkbench('body_pose'), 'body_pose')
+  assert.equal(resolveWorkbench('squat_counting'), 'squat_counting')
   assert.equal(resolveWorkbench('hand_pose'), 'hand_pose')
   assert.equal(resolveWorkbench('text_nlp'), 'text_nlp')
   assert.equal(resolveWorkbench('speech_asr'), 'speech_asr')
   assert.equal(resolveWorkbench('speech_tts'), 'speech_tts')
   assert.equal(resolveWorkbench('talking_head'), 'talking_head')
+})
+
+test('validates squat thresholds and confirmation parameters', () => {
+  assert.deepEqual(validateSquatParameters({ standingAngle: 100, bottomAngle: 160 }), [
+    '站立阈值必须大于下蹲阈值',
+  ])
+  assert.deepEqual(validateSquatParameters({
+    standingAngle: 160,
+    bottomAngle: 100,
+    confirmFrames: 3,
+  }), [])
 })
 
 test('marks an unknown workbench type unsupported', () => {
@@ -162,9 +175,9 @@ test('serializes a ReID query and repeated gallery fields', () => {
   assert.equal(form.get('threshold'), '0.7')
 })
 
-test('exposes exactly the thirty-nine scenario group route keys', () => {
-  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 39)
-  assert.deepEqual(SCENARIO_GROUP_ROUTE_KEYS.slice(0, 11), [
+test('exposes exactly the forty scenario group route keys', () => {
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 40)
+  assert.deepEqual(SCENARIO_GROUP_ROUTE_KEYS.slice(0, 12), [
     'interactive-segmentation',
     'vehicle-reid',
     'plate-detection',
@@ -176,6 +189,7 @@ test('exposes exactly the thirty-nine scenario group route keys', () => {
     'image-classification',
     'multimodal-grounding',
     'body-pose',
+    'squat-counting',
   ])
   assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('person-reid'))
   assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('text-to-speech'))
@@ -183,7 +197,7 @@ test('exposes exactly the thirty-nine scenario group route keys', () => {
   assert.equal(SCENARIO_GROUP_ROUTE_KEYS.at(-1), 'talking-head')
 })
 
-test('maps all ninety legacy model keys onto the thirty-nine groups', () => {
+test('maps all ninety legacy model keys onto the forty groups', () => {
   assert.equal(SCENARIO_MODEL_COUNT, 90)
   assert.equal(LEGACY_MODEL_ROUTE_KEYS.length, 90)
   assert.equal(resolveGroupKey('interactive-segmentation'), 'interactive-segmentation')
@@ -206,15 +220,15 @@ test('maps all ninety legacy model keys onto the thirty-nine groups', () => {
   assert.equal(resolveGroupKey('linly-talker'), 'talking-head')
 })
 
-test('builds thirty-nine group router records and ninety legacy redirects', () => {
+test('builds forty group router records and ninety legacy redirects', () => {
   const component = () => Promise.resolve('ScenarioApp')
   assert.equal(typeof scenarioState.createScenarioRouteRecords, 'function')
   assert.equal(typeof scenarioState.createLegacyScenarioRedirectRecords, 'function')
   const records = scenarioState.createScenarioRouteRecords(component)
   const redirects = scenarioState.createLegacyScenarioRedirectRecords()
 
-  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 39)
-  assert.equal(records.length, 39)
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 40)
+  assert.equal(records.length, 40)
   assert.deepEqual(records.map((record) => record.path), SCENARIO_GROUP_ROUTE_KEYS.map(
     (key) => `ai/scenarios/${key}`,
   ))

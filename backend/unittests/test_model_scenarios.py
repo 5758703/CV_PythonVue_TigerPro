@@ -141,6 +141,7 @@ _ZERO_LATER_WORKBENCHES = {
     "image_classification": 0,
     "multimodal_grounding": 0,
     "body_pose": 0,
+    "squat_counting": 0,
     "instance_segmentation": 0,
     "person_reid": 0,
     "hand_pose": 0,
@@ -255,6 +256,7 @@ def test_phase_three_workbench_distribution_matches_supported_capabilities():
         "image_classification": 3,
         "multimodal_grounding": 1,
         "body_pose": 4,
+        "squat_counting": 0,
         "instance_segmentation": 0,
         "person_reid": 0,
         "hand_pose": 0,
@@ -441,7 +443,7 @@ def test_same_task_models_are_merged_into_scenario_groups():
 
     groups = list_scenario_groups()
     assert SCENARIO_GROUP_KEYS == tuple(item["groupKey"] for item in groups)
-    assert len(groups) == 39
+    assert len(groups) == 40
 
     plate = next(item for item in groups if item["groupKey"] == "plate-detection")
     assert len(plate["models"]) == 8
@@ -456,6 +458,11 @@ def test_same_task_models_are_merged_into_scenario_groups():
         "mobilenet-v2", "vit-base", "yolo-master-cls-n",
     ]
     body = next(item for item in groups if item["groupKey"] == "body-pose")
+    squat = next(item for item in groups if item["groupKey"] == "squat-counting")
+    assert squat["workbenchType"] == "squat_counting"
+    assert squat["defaultModelKey"] == "rtmo-m"
+    assert squat["modelKeys"] == ("rtmo-m", "rtmo-s", "rtmpose-m", "yolo-master-pose-n", "yolo11n-pose", "yolo26n-pose")
+    assert squat["input"]["modes"] == ("video", "local_camera", "network_camera")
     assert [item["modelKey"] for item in body["models"]] == [
         "dwpose-m", "rtmo-m", "rtmo-s", "rtmpose-m",
         "yolo-master-pose-n", "yolo11n-pose", "yolo26n-pose",

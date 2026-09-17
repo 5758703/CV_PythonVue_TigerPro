@@ -142,6 +142,7 @@ WORKBENCH_TYPES = (
     "image_classification",
     "multimodal_grounding",
     "body_pose",
+    "squat_counting",
     "instance_segmentation",
     "person_reid",
     "hand_pose",
@@ -206,6 +207,11 @@ _TALKING_INPUT = {
     "audio": "driving speech audio",
     "maxSizeMb": _MAX_UPLOAD_SIZE_MB,
     "maxPixels": Config.SCENARIO_MAX_PIXELS,
+}
+_SQUAT_INPUT = {
+    "modes": ("video", "local_camera", "network_camera"),
+    "formats": (".mp4", ".avi", ".mov", ".mkv"),
+    "maxSizeMb": 512,
 }
 
 _SCENARIOS = (
@@ -2380,6 +2386,24 @@ _SCENARIO_GROUPS = (
         "risks": "开放词汇结果依赖提示质量；行业目标须专训或标定阈值。",
         "modelKeys": ("vlm-fo1-3b",),
         "route": "/ai/scenarios/multimodal-grounding",
+    },
+    {
+        "groupKey": "squat-counting",
+        "order": 11,
+        "name": "健身蹲起计数",
+        "category": "健身动作分析",
+        "ability": "squat-counting",
+        "workbenchType": "squat_counting",
+        "project": "单人健身蹲起检测与计数",
+        "description": "复用人体姿态模型，通过视频、本地摄像头或网络摄像头识别完整蹲起并稳定计数。",
+        "workflow": "锁定主训练者，平滑膝关节角并按站立—下蹲—站立状态机计数。",
+        "outputs": "实时次数、动作阶段、膝角、跟踪状态、训练摘要和上传视频标注结果。",
+        "metrics": "完整动作计数准确率、半蹲误计率、主目标切换率与处理 FPS。",
+        "risks": "须保持全身尤其髋膝踝可见；遮挡、极端机位或多人重叠会降低稳定性。",
+        "defaults": {"conf": 0.25, "standingAngle": 160, "bottomAngle": 100, "confirmFrames": 3},
+        "input": _SQUAT_INPUT,
+        "modelKeys": ("rtmo-m", "rtmo-s", "rtmpose-m", "yolo-master-pose-n", "yolo11n-pose", "yolo26n-pose"),
+        "route": "/ai/scenarios/squat-counting",
     },
     {
         "groupKey": "body-pose",
