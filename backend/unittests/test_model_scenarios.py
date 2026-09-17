@@ -460,8 +460,8 @@ def test_same_task_models_are_merged_into_scenario_groups():
     body = next(item for item in groups if item["groupKey"] == "body-pose")
     squat = next(item for item in groups if item["groupKey"] == "squat-counting")
     assert squat["workbenchType"] == "squat_counting"
-    assert squat["defaultModelKey"] == "rtmo-m"
-    assert squat["modelKeys"] == ("rtmo-m", "rtmo-s", "rtmpose-m", "yolo-master-pose-n", "yolo11n-pose", "yolo26n-pose")
+    assert squat["defaultModelKey"] == "yolo11n-pose"
+    assert squat["modelKeys"] == ("yolo11n-pose", "rtmo-m", "rtmo-s", "rtmpose-m", "yolo-master-pose-n", "yolo26n-pose")
     assert squat["input"]["modes"] == ("video", "local_camera", "network_camera")
     assert [item["modelKey"] for item in body["models"]] == [
         "dwpose-m", "rtmo-m", "rtmo-s", "rtmpose-m",

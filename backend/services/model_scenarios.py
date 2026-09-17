@@ -2402,7 +2402,7 @@ _SCENARIO_GROUPS = (
         "risks": "须保持全身尤其髋膝踝可见；遮挡、极端机位或多人重叠会降低稳定性。",
         "defaults": {"conf": 0.25, "standingAngle": 160, "bottomAngle": 100, "confirmFrames": 3},
         "input": _SQUAT_INPUT,
-        "modelKeys": ("rtmo-m", "rtmo-s", "rtmpose-m", "yolo-master-pose-n", "yolo11n-pose", "yolo26n-pose"),
+        "modelKeys": ("yolo11n-pose", "rtmo-m", "rtmo-s", "rtmpose-m", "yolo-master-pose-n", "yolo26n-pose"),
         "route": "/ai/scenarios/squat-counting",
     },
     {
