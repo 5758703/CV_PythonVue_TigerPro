@@ -200,8 +200,13 @@ def video_progress(job_id):
 
 
 @squat_bp.get("/output/<path:name>")
-@permission_required("ai:model:query")
 def output_video(name):
+    try:
+        verify_jwt_in_request(locations=["headers", "query_string"])
+    except Exception:  # noqa: BLE001 - media elements use query token
+        return jsonify(code=401, message="authentication required"), 401
+    if not has_perm(current_user(), "ai:model:query"):
+        return jsonify(code=403, message="permission denied"), 403
     safe_name = secure_filename(name)
     if safe_name != name or not name.endswith("_squat.mp4"):
         return jsonify(code=400, message="invalid squat output name"), 400

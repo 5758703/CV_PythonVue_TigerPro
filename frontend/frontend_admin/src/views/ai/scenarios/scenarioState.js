@@ -959,6 +959,13 @@ export function validateSquatParameters(state = {}) {
   return errors
 }
 
+export function validateSquatSourceState(source, state = {}) {
+  if (source === 'video') return state.file ? [] : ['请选择训练视频']
+  if (source === 'local') return state.mediaReady ? [] : ['请先授权本地摄像头']
+  if (source === 'network') return state.cameraId ? [] : ['请选择网络摄像头']
+  return ['请选择输入来源']
+}
+
 export function undoSegmentationPrompt(_state, snapshot = {}) {
   return {
     points: (snapshot.points || []).map((point) => [...point]),

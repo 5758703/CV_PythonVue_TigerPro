@@ -208,6 +208,7 @@ import PlatePoseWorkbench from './workbenches/PlatePoseWorkbench.vue'
 import SegmentationWorkbench from './workbenches/SegmentationWorkbench.vue'
 import SpeechAsrWorkbench from './workbenches/SpeechAsrWorkbench.vue'
 import SpeechTtsWorkbench from './workbenches/SpeechTtsWorkbench.vue'
+import SquatCountingWorkbench from './workbenches/SquatCountingWorkbench.vue'
 import TalkingHeadWorkbench from './workbenches/TalkingHeadWorkbench.vue'
 import TextNlpWorkbench from './workbenches/TextNlpWorkbench.vue'
 import VehicleReidWorkbench from './workbenches/VehicleReidWorkbench.vue'
@@ -264,6 +265,7 @@ const workbenchComponent = computed(() => ({
   multimodal_grounding: MultimodalGroundingWorkbench,
   industrial_diagnosis: MultimodalGroundingWorkbench,
   body_pose: BodyPoseWorkbench,
+  squat_counting: SquatCountingWorkbench,
   hand_pose: BodyPoseWorkbench,
   text_nlp: TextNlpWorkbench,
   speech_asr: SpeechAsrWorkbench,
@@ -287,6 +289,7 @@ const ABILITY_LABELS = {
   multimodal_grounding: '多模态定位',
   industrial_diagnosis: '工业诊断',
   body_pose: '人体姿态',
+  squat_counting: '健身蹲起计数',
   hand_pose: '手部姿态',
   text_nlp: '文本 NLP',
   speech_asr: '语音识别',

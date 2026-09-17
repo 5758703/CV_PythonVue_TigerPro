@@ -20,6 +20,7 @@ import {
   resolveGroupKey,
   resolveWorkbench,
   validateSquatParameters,
+  validateSquatSourceState,
   serializeScenarioForm,
   undoSegmentationPrompt,
   validateWorkbenchState,
@@ -58,6 +59,14 @@ test('validates squat thresholds and confirmation parameters', () => {
     bottomAngle: 100,
     confirmFrames: 3,
   }), [])
+})
+
+test('validates each squat input source independently', () => {
+  assert.deepEqual(validateSquatSourceState('video', {}), ['请选择训练视频'])
+  assert.deepEqual(validateSquatSourceState('video', { file: { name: 'set.mp4' } }), [])
+  assert.deepEqual(validateSquatSourceState('local', { mediaReady: false }), ['请先授权本地摄像头'])
+  assert.deepEqual(validateSquatSourceState('network', { cameraId: null }), ['请选择网络摄像头'])
+  assert.deepEqual(validateSquatSourceState('network', { cameraId: 7 }), [])
 })
 
 test('marks an unknown workbench type unsupported', () => {
