@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.machinery
+import importlib.util
 from pathlib import Path
 
 from flask import current_app
@@ -20,9 +21,12 @@ _LIBRARY_MODULES = {
     "clip-reid": "onnxruntime",
     "transreid": "onnxruntime",
     "vit-reid": "onnxruntime",
+    "insightface": "insightface",
+    "opencv-face": "cv2",
 }
 _VEHICLE_REID_LIBRARIES = frozenset(("clip-reid", "transreid", "vit-reid"))
 _EFFICIENT_SAM_LIBRARIES = frozenset(("opencv-sam", "efficientsam", "efficient-sam"))
+_FACE_LIBRARIES = frozenset(("insightface", "opencv-face"))
 _MIN_ONNX_ASSET_BYTES = 100_000
 _EFFICIENT_SAM_ONNX_NAMES = (
     "image_segmentation_efficientsam_ti_2025april.onnx",
@@ -31,15 +35,27 @@ _EFFICIENT_SAM_ONNX_NAMES = (
 )
 
 
-def _weight_path(file_path: str | None) -> Path | None:
-    """Resolve a database weight path under the configured model folder."""
+def _weight_path(file_path: str | None, *, library: str | None = None) -> Path | None:
+    """Resolve a database weight path under MODEL_FOLDER or InsightFace root."""
     if not file_path:
         return None
 
-    model_folder = Path(current_app.config["MODEL_FOLDER"]).resolve()
     relative_path = Path(file_path)
     if relative_path.is_absolute():
         return None
+
+    normalized = file_path.replace("\\", "/").strip().lower().rstrip("/")
+    library_name = (library or "").strip().lower()
+    if normalized == "insightface" or library_name == "insightface":
+        upload_folder = Path(current_app.config["UPLOAD_FOLDER"]).resolve()
+        try:
+            candidate = (upload_folder / "insightface").resolve()
+            candidate.relative_to(upload_folder)
+        except ValueError:
+            return None
+        return candidate
+
+    model_folder = Path(current_app.config["MODEL_FOLDER"]).resolve()
     # Existing uploads store paths relative to UPLOAD_FOLDER ("models/..."),
     # while readiness intentionally anchors relative assets at MODEL_FOLDER.
     if relative_path.parts and relative_path.parts[0].lower() == "models":
@@ -57,11 +73,20 @@ def _library_name(library: str | None) -> str:
 
 
 def _find_module_spec(module_name: str):
-    """Find a top-level runtime module without importing a package parent."""
+    """Find a top-level runtime module without importing a package parent.
+
+    PathFinder covers ordinary site-packages installs. Editable / PEP 660 installs
+    (common for local ultralytics forks) only appear on the full meta path, so we
+    fall back to ``importlib.util.find_spec`` for top-level names. Dotted names are
+    rejected so readiness never executes a parent package to reach a submodule.
+    """
     if not module_name.isidentifier():
         return None
     try:
-        return importlib.machinery.PathFinder.find_spec(module_name)
+        spec = importlib.machinery.PathFinder.find_spec(module_name)
+        if spec is not None:
+            return spec
+        return importlib.util.find_spec(module_name)
     except (ImportError, ModuleNotFoundError, ValueError):
         return None
 
@@ -126,7 +151,7 @@ def scenario_with_readiness(scenario: dict) -> dict:
         )
         return result
 
-    weight_path = _weight_path(model.file_path)
+    weight_path = _weight_path(model.file_path, library=model.library)
     enabled = model.status == "0"
     contract = evaluate_scenario_contract(
         scenario,
@@ -145,5 +170,34 @@ def scenario_with_readiness(scenario: dict) -> dict:
         apiReady=contract.api_ready,
         reason=contract.reason,
         supportedPrecisions=list(contract.supported_precisions),
+    )
+    return result
+
+
+def group_with_readiness(group: dict) -> dict:
+    """Join a merged scenario group with per-model readiness and aggregate flags."""
+    models = [scenario_with_readiness(item) for item in group.get("models") or []]
+    any_ready = any(bool(item.get("apiReady") or item.get("ready")) for item in models)
+    # Prefer the first ready model as default; otherwise keep registry order.
+    default_model_key = group.get("defaultModelKey")
+    for item in models:
+        if item.get("apiReady") or item.get("ready"):
+            default_model_key = item["modelKey"]
+            break
+    result = dict(group)
+    result.update(
+        models=models,
+        modelCount=len(models),
+        defaultModelKey=default_model_key,
+        anyReady=any_ready,
+        apiReady=any_ready,
+        ready=any_ready,
+        configured=any(item.get("configured") for item in models),
+        weightsPresent=any(item.get("weightsPresent") for item in models),
+        runtimeAvailable=any(item.get("runtimeAvailable") for item in models),
+        reason=None if any_ready else next(
+            (item.get("reason") for item in models if item.get("reason")),
+            "no model in this scenario is ready",
+        ),
     )
     return result

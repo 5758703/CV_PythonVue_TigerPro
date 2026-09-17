@@ -4,18 +4,37 @@
       <div class="panel-title"><span class="pt-bar"></span>检测配置</div>
       <el-form :inline="true">
         <el-form-item label="模型分类">
-          <el-select v-model="category" placeholder="全部分类" clearable style="width: 160px" @change="onCategoryChange">
+          <el-select
+            v-model="category"
+            placeholder="全部分类"
+            clearable
+            filterable
+            style="width: 180px"
+            @change="onCategoryChange"
+          >
             <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
         <el-form-item label="检测模型">
-          <el-select v-model="modelId" placeholder="选择模型" style="width: 220px" @change="clearResult">
+          <el-select
+            v-model="modelId"
+            placeholder="搜索名称 / 标识，如 omdet"
+            filterable
+            clearable
+            style="width: 340px"
+            @change="clearResult"
+          >
             <el-option
               v-for="m in filteredModels"
               :key="m.id"
-              :label="`${m.modelName}（${m.category || '未分类'}）`"
+              :label="`${m.modelName} · ${m.modelKey || ''}`"
               :value="m.id"
-            />
+            >
+              <span>{{ m.modelName }}</span>
+              <span style="float: right; color: var(--el-text-color-secondary); font-size: 12px; margin-left: 12px">
+                {{ m.category || '未分类' }} · {{ m.modelKey }}
+              </span>
+            </el-option>
           </el-select>
         </el-form-item>
         <el-form-item label="置信度">
@@ -83,7 +102,7 @@
         :closable="false"
         show-icon
         class="alert-tip"
-        title="OmDet-Turbo 开放词汇检测：填写英文类别（逗号分隔）。留空则使用 person/car/truck 等默认类。首次需到「模型管理」拉取权重。"
+        title="OmDet-Turbo 开放词汇检测：填写英文类别（逗号分隔），例如 tomato,orange。留空则使用 person/car/truck 等默认类。"
       />
       <el-alert
         v-if="isVlmFo1Model"
@@ -92,6 +111,14 @@
         show-icon
         class="alert-tip"
         title="VLM-FO1：填写自然语言或快捷类别。需先 python scripts/setup_vlm_fo1.py 安装官方代码，并在模型管理拉取约 9GB 权重；建议 GPU。"
+      />
+      <el-alert
+        v-if="category && allModels.length && !filteredModels.some((m) => (m.modelKey || '').includes('omdet'))"
+        type="info"
+        :closable="false"
+        show-icon
+        class="alert-tip"
+        title="当前分类下没有 OmDet。请将「模型分类」清空或选「开放词汇检测」，并在检测模型框中搜索 omdet。"
       />
       <el-alert
         v-if="!allModels.length"
@@ -153,6 +180,26 @@
 
       <div v-if="!detecting && result" class="result-meta">
         <el-alert :title="`检测到 ${result.count} 个目标（图像 ${result.width}×${result.height}）·点击表格行或图中框可联动高亮`" type="success" :closable="false" />
+        <div v-if="classCountSummary.length" class="class-count-bar">
+          <span class="cc-label">按类别计数</span>
+          <div class="cc-chips">
+            <button
+              v-for="(item, i) in classCountSummary"
+              :key="item.className"
+              type="button"
+              class="cc-chip"
+              :class="{ active: activeClassName === item.className }"
+              :title="`高亮全部 ${item.className}`"
+              @click="onClassChipClick(item.className)"
+            >
+              <span class="cls-dot" :style="{ background: classColor(item.className, i) }"></span>
+              <span class="cc-name">{{ item.className }}</span>
+              <b>×{{ item.count }}</b>
+              <i class="cc-conf">{{ (item.avgConf * 100).toFixed(0) }}%</i>
+            </button>
+          </div>
+          <span class="cc-total">合计 <b>{{ result.count }}</b></span>
+        </div>
         <el-table
           ref="tableRef"
           :data="result.detections"
@@ -376,12 +423,20 @@ const fmtSize = (bytes) => {
 const categories = computed(() => categoriesFromModels(
   filterWorkbenchModels(allModels.value, { alertEnabled: alertEnabled.value }),
 ))
-const filteredModels = computed(() =>
-  filterWorkbenchModels(allModels.value, {
+const filteredModels = computed(() => {
+  const list = filterWorkbenchModels(allModels.value, {
     alertEnabled: alertEnabled.value,
     category: category.value,
-  }),
-)
+  })
+  // 开放词汇模型靠前，便于在长列表中找到 OmDet / VLM-FO1
+  const prefer = new Set(['omdet-turbo-swin-tiny', 'vlm-fo1-3b'])
+  return [...list].sort((a, b) => {
+    const pa = prefer.has(a.modelKey) ? 0 : 1
+    const pb = prefer.has(b.modelKey) ? 0 : 1
+    if (pa !== pb) return pa - pb
+    return String(a.modelName || '').localeCompare(String(b.modelName || ''), 'zh')
+  })
+})
 const selectedModel = computed(() => filteredModels.value.find((m) => m.id === modelId.value)
   || allModels.value.find((m) => m.id === modelId.value)
   || null)
@@ -431,7 +486,62 @@ const PALETTE = ['#67c23a', '#409eff', '#e6a23c', '#9254de', '#13c2c2', '#fa8c16
 const HIGHLIGHT = '#ff1744'
 const boxColor = (i) => PALETTE[i % PALETTE.length]
 
-const rowClass = ({ rowIndex }) => (rowIndex === activeIndex.value ? 'active-row' : '')
+/** 按 className 聚合：数量 + 平均置信度（检测结果条用） */
+const classCountSummary = computed(() => {
+  const dets = result.value?.detections
+  if (!Array.isArray(dets) || !dets.length) return []
+  const map = new Map()
+  for (const d of dets) {
+    const name = String(d?.className ?? 'unknown')
+    const conf = Number(d?.confidence) || 0
+    const cur = map.get(name)
+    if (cur) {
+      cur.count += 1
+      cur.confSum += conf
+    } else {
+      map.set(name, { className: name, count: 1, confSum: conf })
+    }
+  }
+  return [...map.values()]
+    .map((x) => ({
+      className: x.className,
+      count: x.count,
+      avgConf: x.confSum / x.count,
+    }))
+    .sort((a, b) => b.count - a.count || a.className.localeCompare(b.className))
+})
+
+const classColor = (className, fallbackIndex = 0) => {
+  const idx = classCountSummary.value.findIndex((x) => x.className === className)
+  return PALETTE[(idx >= 0 ? idx : fallbackIndex) % PALETTE.length]
+}
+
+const activeClassName = ref('')
+const onClassChipClick = (className) => {
+  const turningOff = activeClassName.value === className
+  activeClassName.value = turningOff ? '' : className
+  const dets = result.value?.detections || []
+  if (turningOff) {
+    activeIndex.value = -1
+    tableRef.value?.setCurrentRow?.(null)
+    drawBoxes()
+    return
+  }
+  const idx = dets.findIndex((d) => String(d?.className ?? '') === className)
+  if (idx >= 0) {
+    activeIndex.value = idx
+    tableRef.value?.setCurrentRow?.(dets[idx])
+  }
+  drawBoxes()
+}
+
+const rowClass = ({ rowIndex }) => {
+  const classes = []
+  if (rowIndex === activeIndex.value) classes.push('active-row')
+  const name = result.value?.detections?.[rowIndex]?.className
+  if (activeClassName.value && name === activeClassName.value) classes.push('class-hl-row')
+  return classes.join(' ')
+}
 
 // 让 canvas 内部分辨率=原图像素，显示尺寸/位置对齐 contain 后的图片
 const syncCanvas = () => {
@@ -453,7 +563,8 @@ const drawBoxes = () => {
   ctx.textBaseline = 'top'
   result.value.detections.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.bbox
-    const active = i === activeIndex.value
+    const classActive = !!activeClassName.value && d.className === activeClassName.value
+    const active = i === activeIndex.value || classActive
     const color = active ? HIGHLIGHT : boxColor(i)
     ctx.lineWidth = active ? lw * 2 : lw
     ctx.strokeStyle = color
@@ -553,6 +664,7 @@ const loadModels = async () => {
 const clearResult = () => {
   result.value = null
   activeIndex.value = -1
+  activeClassName.value = ''
   report.value = null
   lastAlertTitle.value = ''
   liveOverlay.value = null
@@ -598,6 +710,7 @@ const detect = async () => {
     result.value = res.data
     report.value = null
     activeIndex.value = -1
+    activeClassName.value = ''
     if (alertEnabled.value && res.data?.detections?.length) {
       try {
         const ar = await alertApi.evaluate({
@@ -703,6 +816,7 @@ const clearAll = () => {
   result.value = null
   imageInfo.value = null
   activeIndex.value = -1
+  activeClassName.value = ''
   report.value = null
 }
 
@@ -822,9 +936,65 @@ onBeforeUnmount(() => {
 .stage-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .stage-canvas { position: absolute; cursor: pointer; }
 .result-meta { margin-top: 16px; }
+.class-count-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-lighter, #ebeef5);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank, #fff);
+}
+.cc-label {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-regular, #606266);
+}
+.cc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--el-border-color, #dcdfe6);
+  border-radius: 4px;
+  background: var(--el-fill-color-light, #f5f7fa);
+  font-size: 13px;
+  color: var(--el-text-color-primary, #303133);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.cc-chip:hover { border-color: var(--el-color-primary); }
+.cc-chip.active {
+  border-color: #ff1744;
+  background: #fff3f5;
+}
+.cc-chip .cc-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-chip b { color: var(--el-color-primary); font-variant-numeric: tabular-nums; }
+.cc-chip .cc-conf {
+  font-style: normal;
+  color: var(--el-text-color-secondary, #909399);
+  font-variant-numeric: tabular-nums;
+}
+.cc-total {
+  flex: 0 0 auto;
+  font-size: 13px;
+  color: var(--el-text-color-secondary, #909399);
+}
+.cc-total b { color: var(--el-text-color-primary, #303133); }
 .det-table { margin-top: 12px; }
 .det-table :deep(.el-table__row) { cursor: pointer; }
 .det-table :deep(.active-row > td.el-table__cell) { background: #fff3e0 !important; }
+.det-table :deep(.class-hl-row > td.el-table__cell) { background: #fff5f7 !important; }
 .cls-dot {
   display: inline-block;
   width: 10px;

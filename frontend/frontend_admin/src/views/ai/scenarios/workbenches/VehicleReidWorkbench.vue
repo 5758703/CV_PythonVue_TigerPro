@@ -1,11 +1,11 @@
 <template>
   <div class="wb-grid wb-grid--reid">
-    <section class="wb-controls" aria-label="车辆 ReID 输入与参数">
+    <section class="wb-controls" :aria-label="`${subjectLabel} ReID 输入与参数`">
       <div class="wb-control-group">
-        <h3>查询车辆</h3>
+        <h3>查询{{ subjectLabel }}</h3>
         <label class="wb-dropzone" :class="{ 'is-disabled': busy }" @dragover.prevent @drop.prevent="dropQuery">
           <input type="file" accept="image/*" :disabled="busy" @change="pickQuery">
-          <img v-if="queryPreview" :src="queryPreview" alt="查询车辆缩略图">
+          <img v-if="queryPreview" :src="queryPreview" :alt="`查询${subjectLabel}缩略图`">
           <strong>{{ queryFile ? queryFile.name : '拖入或选择查询图' }}</strong>
           <span>单张查询图 · {{ inputHint }}</span>
         </label>
@@ -21,7 +21,7 @@
         </label>
         <div v-if="galleryItems.length" class="wb-thumbnails" aria-label="候选图列表">
           <figure v-for="(item, index) in galleryItems" :key="item.id">
-            <img :src="item.url" :alt="`候选车辆 ${item.file.name}`">
+            <img :src="item.url" :alt="`候选${subjectLabel} ${item.file.name}`">
             <figcaption :title="item.file.name">{{ item.file.name }}</figcaption>
             <button type="button" :disabled="busy" :aria-label="`移除 ${item.file.name}`" @click="removeGallery(index)">×</button>
           </figure>
@@ -128,12 +128,16 @@ const normalizedResult = ref({ matches: [] })
 const elapsedMs = ref(null)
 let gallerySequence = 0
 
+const workbenchType = computed(() => (
+  props.scenario.workbenchType === 'person_reid' ? 'person_reid' : 'vehicle_reid'
+))
+const subjectLabel = computed(() => (workbenchType.value === 'person_reid' ? '行人' : '车辆'))
 const rankedMatches = computed(() => normalizedResult.value.matches || [])
 const inputHint = computed(() => (
   `${props.scenario.input?.formats?.join(', ') || '图片'} · 单张最大 ${props.scenario.input?.maxSizeMb || '配置'} MB`
   + ` · gallery 最多 ${props.scenario.input?.maxGalleryImages || '配置'} 张`
 ))
-const validationErrors = computed(() => validateWorkbenchState('vehicle_reid', {
+const validationErrors = computed(() => validateWorkbenchState(workbenchType.value, {
   query: queryFile.value,
   gallery: galleryItems.value.map((item) => item.file),
   threshold: threshold.value,
@@ -233,7 +237,7 @@ async function runInference() {
   normalizedResult.value = { matches: [] }
   elapsedMs.value = null
   try {
-    const form = serializeScenarioForm('vehicle_reid', {
+    const form = serializeScenarioForm(workbenchType.value, {
       query: queryFile.value,
       gallery: galleryItems.value.map((item) => item.file),
       threshold: threshold.value,
@@ -242,11 +246,11 @@ async function runInference() {
     if (!requestGuard.isCurrent(requestToken)) return
     runOutput.value = response.data
     elapsedMs.value = Number.isFinite(response.data?.elapsedMs) ? response.data.elapsedMs : null
-    normalizedResult.value = normalizeWorkbenchResult('vehicle_reid', response.data?.result)
+    normalizedResult.value = normalizeWorkbenchResult(workbenchType.value, response.data?.result)
     emit('completed', response.data)
   } catch (requestError) {
     if (requestGuard.isCurrent(requestToken)) {
-      error.value = requestError?.response?.data?.message || requestError?.message || '车辆 ReID 推理失败，请检查输入与运行环境。'
+      error.value = requestError?.response?.data?.message || requestError?.message || `${subjectLabel.value} ReID 推理失败，请检查输入与运行环境。`
     }
   } finally {
     if (requestGuard.isCurrent(requestToken)) busy.value = false

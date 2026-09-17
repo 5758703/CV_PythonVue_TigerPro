@@ -16,9 +16,14 @@ from services.model_scenario_inference import (
     ScenarioPayloadTooLarge,
     run_scenario,
 )
-from services.model_scenario_readiness import scenario_with_readiness
-from services.model_scenarios import get_scenario, list_scenarios
-
+from services.model_scenario_readiness import group_with_readiness, scenario_with_readiness
+from services.model_scenarios import (
+    get_scenario,
+    get_scenario_group,
+    list_scenario_groups,
+    list_scenarios,
+    resolve_group_key,
+)
 
 model_scenario_bp = Blueprint(
     "model_scenario", __name__, url_prefix="/api/ai/model-scenarios",
@@ -77,6 +82,7 @@ def list_model_scenarios():
     request_id = _request_id()
     operation = "list"
     raw_phase = request.args.get("phase")
+    grouped = (request.args.get("grouped") or "1").strip().lower() not in ("0", "false", "flat")
     try:
         phase = int(raw_phase) if raw_phase is not None else None
     except ValueError:
@@ -86,7 +92,10 @@ def list_model_scenarios():
             request_id=request_id, error_type="validation",
         )
     try:
-        data = [scenario_with_readiness(item) for item in list_scenarios(phase=phase)]
+        if grouped:
+            data = [group_with_readiness(item) for item in list_scenario_groups(phase=phase)]
+        else:
+            data = [scenario_with_readiness(item) for item in list_scenarios(phase=phase)]
     except Exception as exc:  # noqa: BLE001 - response/log must not expose model internals
         return _response(
             code=500, message="model scenario lookup failed", data=None,
@@ -106,6 +115,19 @@ def get_model_scenario(model_key: str):
     request_id = _request_id()
     operation = "detail"
     try:
+        group = get_scenario_group(model_key)
+        if group is not None:
+            data = group_with_readiness(group)
+            selected = (request.args.get("model") or "").strip()
+            if selected and any(item["modelKey"] == selected for item in data["models"]):
+                data["selectedModelKey"] = selected
+            else:
+                data["selectedModelKey"] = data["defaultModelKey"]
+            return _response(
+                code=0, message="ok", data=data, http_status=200,
+                operation=operation, started=started, request_id=request_id,
+            )
+
         scenario = get_scenario(model_key)
         if scenario is None:
             return _response(
@@ -114,6 +136,7 @@ def get_model_scenario(model_key: str):
                 request_id=request_id, error_type="not_found",
             )
         data = scenario_with_readiness(scenario)
+        data["groupKey"] = resolve_group_key(model_key)
     except Exception as exc:  # noqa: BLE001
         return _response(
             code=500, message="model scenario lookup failed", data=None,

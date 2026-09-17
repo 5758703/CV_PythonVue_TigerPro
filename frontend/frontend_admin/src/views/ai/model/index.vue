@@ -75,7 +75,15 @@
           <template #default="{ row }">
             <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath" @click="openTest(row)">测试</el-button>
             <el-button v-if="canDownloadWeight(row)" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
-            <el-button v-if="canFetchWeight(row)" v-permission="'ai:model:add'" link type="warning" :icon="Download" :loading="fetchingId === row.id" @click="fetchWeight(row)">{{ row.filePath ? "重新拉取" : "拉取权重" }}</el-button>
+            <el-button
+              v-if="canFetchWeight(row)"
+              v-permission="'ai:model:add'"
+              link
+              :type="row.filePath ? 'info' : 'warning'"
+              :icon="Download"
+              :loading="fetchingId === row.id"
+              @click="fetchWeight(row)"
+            >{{ row.filePath ? "重新拉取" : "拉取权重" }}</el-button>
             <el-button v-if="canConvertRow(row)" v-permission="'ai:model:edit'" link type="warning" :icon="Switch" @click="openConvert(row)">转换</el-button>
             <el-button v-permission="'ai:model:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-permission="'ai:model:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>

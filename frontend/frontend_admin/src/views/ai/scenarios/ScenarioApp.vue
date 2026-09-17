@@ -5,13 +5,13 @@
     <section v-if="loading" class="scenario-state" aria-live="polite">
       <span class="scenario-loader" aria-hidden="true"></span>
       <h1 id="scenario-title">正在装载场景</h1>
-      <p>读取固定模型身份与当前运行就绪状态。</p>
+      <p>读取场景分组与当前模型就绪状态。</p>
     </section>
 
     <section v-else-if="notFound" class="scenario-state scenario-state--error" role="alert">
       <span class="scenario-state__code">SCENARIO 404</span>
       <h1 id="scenario-title">场景不存在</h1>
-      <p>该固定路由没有对应的场景登记，模型 query 不会改变当前页面身份。</p>
+      <p>该固定路由没有对应的场景分组登记。</p>
       <RouterLink class="scenario-button" to="/ai/scenarios">返回场景总览</RouterLink>
     </section>
 
@@ -26,9 +26,21 @@
       <header class="scenario-detail__header">
         <div>
           <p class="scenario-kicker">SCENARIO {{ String(scenario.order).padStart(2, '0') }} · {{ abilityLabel }}</p>
-          <h1 id="scenario-title">{{ scenario.name }}</h1>
+          <h1 id="scenario-title">{{ groupName }}</h1>
           <p>{{ scenario.description }}</p>
-          <code>{{ fixedModelKey }}</code>
+          <code>{{ selectedModelKey }}</code>
+          <label v-if="modelOptions.length > 1" class="scenario-field scenario-model-select">
+            <span>模型</span>
+            <select :value="selectedModelKey" @change="onModelChange">
+              <option
+                v-for="model in modelOptions"
+                :key="model.modelKey"
+                :value="model.modelKey"
+              >
+                {{ model.name }} · {{ modelReady(model) ? '可运行' : '待准备' }}
+              </option>
+            </select>
+          </label>
         </div>
         <div :class="['scenario-health', apiReady ? 'is-ready' : 'is-pending']">
           <span aria-hidden="true"></span>
@@ -49,7 +61,7 @@
       <aside v-if="!apiReady" class="scenario-readiness-note" aria-labelledby="preparation-title">
         <div>
           <p class="scenario-kicker">PREPARATION REQUIRED</p>
-          <h2 id="preparation-title">该场景尚未就绪</h2>
+          <h2 id="preparation-title">该模型尚未就绪</h2>
           <p>{{ readinessReason }}。你仍可查看工作流程、验收指标与 API 契约。</p>
         </div>
         <ol>
@@ -76,12 +88,12 @@
             <p class="scenario-kicker">WORKBENCH</p>
             <h2 id="workbench-title">{{ abilityLabel }}工作台</h2>
           </div>
-          <span class="scenario-workbench__mode">固定模型 · {{ fixedModelKey }}</span>
+          <span class="scenario-workbench__mode">当前模型 · {{ selectedModelKey }}</span>
         </div>
         <component
           :is="workbenchComponent"
           v-if="workbenchComponent"
-          :key="scenario.modelKey"
+          :key="selectedModelKey"
           :scenario="scenario"
           @completed="onWorkbenchCompleted"
         />
@@ -93,7 +105,7 @@
             <div>
               <span class="scenario-state__code">{{ workbench ? workbench.toUpperCase() : 'UNSUPPORTED' }}</span>
               <h3>{{ workbench ? '专用工作台正在接入' : '暂不支持该工作台类型' }}</h3>
-              <p>场景外壳已锁定模型身份；工作台插槽可安全接入输入、运行与结构化结果区域。</p>
+              <p>场景外壳已锁定分组身份；工作台插槽可安全接入输入、运行与结构化结果区域。</p>
               <button class="scenario-button" type="button" disabled>运行推理</button>
             </div>
         </div>
@@ -123,30 +135,55 @@
         </article>
       </section>
 
-      <section class="scenario-api" aria-labelledby="api-title">
-        <div class="scenario-section-heading">
-          <div>
-            <p class="scenario-kicker">OPEN API CONTRACT</p>
-            <h2 id="api-title">API 调用</h2>
-          </div>
-          <button class="scenario-button scenario-button--ghost" type="button" @click="copyCurl">
+      <section
+        class="scenario-api"
+        :class="{ 'is-collapsed': !apiPanelOpen }"
+        aria-labelledby="api-title"
+      >
+        <div class="scenario-section-heading scenario-api__heading">
+          <button
+            class="scenario-api__toggle"
+            type="button"
+            :aria-expanded="apiPanelOpen"
+            aria-controls="scenario-api-panel"
+            @click="apiPanelOpen = !apiPanelOpen"
+          >
+            <div>
+              <p class="scenario-kicker">OPEN API CONTRACT</p>
+              <h2 id="api-title">API 调用</h2>
+            </div>
+            <span class="scenario-api__chevron" aria-hidden="true"></span>
+            <span class="scenario-api__toggle-label">{{ apiPanelOpen ? '收起' : '展开' }}</span>
+          </button>
+          <button
+            v-show="apiPanelOpen"
+            class="scenario-button scenario-button--ghost"
+            type="button"
+            @click="copyCurl"
+          >
             {{ copied ? '已复制' : '复制 curl' }}
           </button>
         </div>
-        <pre class="scenario-code" tabindex="0"><code>{{ curlExample }}</code></pre>
-        <div class="scenario-api__grid">
-          <div>
-            <h3>请求字段</h3>
-            <dl class="scenario-api__fields">
-              <div v-for="field in apiFields" :key="field.name">
-                <dt><code>{{ field.name }}</code><span>{{ field.required ? '必填' : '可选' }}</span></dt>
-                <dd>{{ field.description }}</dd>
-              </div>
-            </dl>
-          </div>
-          <div>
-            <h3>响应示例</h3>
-            <pre class="scenario-code" tabindex="0"><code>{{ responseExample }}</code></pre>
+        <div
+          v-show="apiPanelOpen"
+          id="scenario-api-panel"
+          class="scenario-api__body"
+        >
+          <pre class="scenario-code" tabindex="0"><code>{{ curlExample }}</code></pre>
+          <div class="scenario-api__grid">
+            <div>
+              <h3>请求字段</h3>
+              <dl class="scenario-api__fields">
+                <div v-for="field in apiFields" :key="field.name">
+                  <dt><code>{{ field.name }}</code><span>{{ field.required ? '必填' : '可选' }}</span></dt>
+                  <dd>{{ field.description }}</dd>
+                </div>
+              </dl>
+            </div>
+            <div>
+              <h3>响应示例</h3>
+              <pre class="scenario-code" tabindex="0"><code>{{ responseExample }}</code></pre>
+            </div>
           </div>
         </div>
       </section>
@@ -156,51 +193,105 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { scenarioApi } from '../../../api/modelScenarios'
+import BodyPoseWorkbench from './workbenches/BodyPoseWorkbench.vue'
+import ClassificationWorkbench from './workbenches/ClassificationWorkbench.vue'
+import FaceRecognitionWorkbench from './workbenches/FaceRecognitionWorkbench.vue'
+import InpaintingWorkbench from './workbenches/InpaintingWorkbench.vue'
+import MultimodalGroundingWorkbench from './workbenches/MultimodalGroundingWorkbench.vue'
 import ObbDetectionWorkbench from './workbenches/ObbDetectionWorkbench.vue'
+import ObjectDetectionWorkbench from './workbenches/ObjectDetectionWorkbench.vue'
 import PlateDetectionWorkbench from './workbenches/PlateDetectionWorkbench.vue'
+import PlatePoseWorkbench from './workbenches/PlatePoseWorkbench.vue'
 import SegmentationWorkbench from './workbenches/SegmentationWorkbench.vue'
+import SpeechAsrWorkbench from './workbenches/SpeechAsrWorkbench.vue'
+import SpeechTtsWorkbench from './workbenches/SpeechTtsWorkbench.vue'
+import TalkingHeadWorkbench from './workbenches/TalkingHeadWorkbench.vue'
+import TextNlpWorkbench from './workbenches/TextNlpWorkbench.vue'
 import VehicleReidWorkbench from './workbenches/VehicleReidWorkbench.vue'
 import {
   buildScenarioApiDocumentation,
   isLatestScenarioRequest,
-  resolveFixedModelKey,
+  mergeSelectedScenario,
+  pickScenarioModel,
+  resolveFixedGroupKey,
+  resolveQueryModelKey,
   resolveWorkbench,
 } from './scenarioState'
 import './scenarios.css'
 
 const props = defineProps({
-  modelKey: {
+  groupKey: {
     type: String,
     default: '',
   },
 })
 
 const route = useRoute()
+const router = useRouter()
 const loading = ref(true)
-const scenario = ref(null)
+const group = ref(null)
+const selectedModelKey = ref('')
 const loadError = ref('')
 const notFound = ref(false)
 const copied = ref(false)
+const apiPanelOpen = ref(false)
 const lastCompletedKey = ref('')
 let requestSequence = 0
+let syncingQuery = false
 
-const fixedModelKey = computed(() => resolveFixedModelKey(route) || props.modelKey || null)
+const fixedGroupKey = computed(() => resolveFixedGroupKey(route) || props.groupKey || null)
+const queryModelKey = computed(() => resolveQueryModelKey(route))
+const modelOptions = computed(() => (Array.isArray(group.value?.models) ? group.value.models : []))
+const groupName = computed(() => group.value?.name || '')
+const scenario = computed(() => mergeSelectedScenario(group.value, selectedModelKey.value))
 const workbench = computed(() => resolveWorkbench(scenario.value?.workbenchType))
 const workbenchComponent = computed(() => ({
   segmentation: SegmentationWorkbench,
   vehicle_reid: VehicleReidWorkbench,
+  person_reid: VehicleReidWorkbench,
   plate_detection: PlateDetectionWorkbench,
   obb_detection: ObbDetectionWorkbench,
+  plate_pose: PlatePoseWorkbench,
+  face_recognition: FaceRecognitionWorkbench,
+  object_detection: ObjectDetectionWorkbench,
+  instance_segmentation: ObjectDetectionWorkbench,
+  document_ocr: ObjectDetectionWorkbench,
+  image_inpainting: InpaintingWorkbench,
+  image_classification: ClassificationWorkbench,
+  multimodal_grounding: MultimodalGroundingWorkbench,
+  industrial_diagnosis: MultimodalGroundingWorkbench,
+  body_pose: BodyPoseWorkbench,
+  hand_pose: BodyPoseWorkbench,
+  text_nlp: TextNlpWorkbench,
+  speech_asr: SpeechAsrWorkbench,
+  speech_tts: SpeechTtsWorkbench,
+  talking_head: TalkingHeadWorkbench,
 })[workbench.value] || null)
 
 const ABILITY_LABELS = {
   segmentation: '交互分割',
   vehicle_reid: '车辆 ReID',
+  person_reid: '行人 ReID',
   plate_detection: '车牌检测',
   obb_detection: 'OBB 检测',
+  plate_pose: '车牌四点',
+  face_recognition: '人脸识别',
+  object_detection: '目标检测',
+  instance_segmentation: '实例分割',
+  document_ocr: '文档 OCR',
+  image_inpainting: '图像修复',
+  image_classification: '图像分类',
+  multimodal_grounding: '多模态定位',
+  industrial_diagnosis: '工业诊断',
+  body_pose: '人体姿态',
+  hand_pose: '手部姿态',
+  text_nlp: '文本 NLP',
+  speech_asr: '语音识别',
+  speech_tts: '语音合成',
+  talking_head: '数字人',
 }
 
 const abilityLabel = computed(() => ABILITY_LABELS[workbench.value] || '未知能力')
@@ -224,7 +315,7 @@ const readinessReason = computed(() => {
 
 const preparationSteps = computed(() => {
   const steps = []
-  if (!scenario.value?.configured) steps.push('在模型管理中登记与当前路由一致的模型 key。')
+  if (!scenario.value?.configured) steps.push('在模型管理中登记与当前所选模型一致的模型 key。')
   if (scenario.value?.configured && !scenario.value?.enabled) steps.push('在模型管理中启用该模型。')
   if (!scenario.value?.weightsPresent) steps.push('由管理员配置已验证的本地权重资产；页面不会自动下载。')
   if (!scenario.value?.runtimeAvailable) steps.push('安装并验证该模型适配器所需的运行库。')
@@ -253,6 +344,10 @@ const apiFields = computed(() => apiDocumentation.value.fields)
 const curlExample = computed(() => apiDocumentation.value.curl)
 const responseExample = computed(() => JSON.stringify(apiDocumentation.value.response, null, 2))
 
+function modelReady(model) {
+  return Boolean(model?.apiReady ?? model?.ready)
+}
+
 async function copyCurl() {
   try {
     if (navigator.clipboard?.writeText) {
@@ -276,32 +371,64 @@ async function copyCurl() {
 }
 
 function onWorkbenchCompleted(result) {
-  lastCompletedKey.value = result?.modelKey || fixedModelKey.value || ''
+  lastCompletedKey.value = result?.modelKey || selectedModelKey.value || ''
+}
+
+function applySelectedModel(modelKey, { syncQuery = true } = {}) {
+  const picked = pickScenarioModel(group.value, modelKey)
+  const nextKey = picked?.modelKey || ''
+  selectedModelKey.value = nextKey
+  if (!syncQuery || !nextKey || !fixedGroupKey.value) return
+  const currentQuery = resolveQueryModelKey(route)
+  if (currentQuery === nextKey) return
+  syncingQuery = true
+  router.replace({
+    path: route.path,
+    query: { ...route.query, model: nextKey },
+  }).finally(() => {
+    syncingQuery = false
+  })
+}
+
+function onModelChange(event) {
+  const nextKey = event?.target?.value
+  if (!nextKey || nextKey === selectedModelKey.value) return
+  lastCompletedKey.value = ''
+  apiPanelOpen.value = false
+  applySelectedModel(nextKey)
 }
 
 async function loadScenario() {
-  const requestedKey = fixedModelKey.value
+  const requestedKey = fixedGroupKey.value
   const sequence = ++requestSequence
   const isCurrent = () => isLatestScenarioRequest(
     sequence,
     requestSequence,
     requestedKey,
-    fixedModelKey.value,
+    fixedGroupKey.value,
   )
   loading.value = true
   lastCompletedKey.value = ''
+  apiPanelOpen.value = false
   loadError.value = ''
   notFound.value = false
-  scenario.value = null
+  group.value = null
+  selectedModelKey.value = ''
   if (!requestedKey) {
     notFound.value = true
     loading.value = false
     return
   }
   try {
-    const response = await scenarioApi.get(requestedKey)
+    const params = {}
+    if (queryModelKey.value) params.model = queryModelKey.value
+    const response = await scenarioApi.get(requestedKey, params)
     if (!isCurrent()) return
-    scenario.value = response.data
+    group.value = response.data
+    applySelectedModel(
+      queryModelKey.value || response.data?.selectedModelKey || response.data?.defaultModelKey,
+      { syncQuery: true },
+    )
   } catch (error) {
     if (!isCurrent()) return
     if (error?.response?.status === 404) notFound.value = true
@@ -311,5 +438,14 @@ async function loadScenario() {
   }
 }
 
-watch(fixedModelKey, loadScenario, { immediate: true })
+watch(fixedGroupKey, loadScenario, { immediate: true })
+
+watch(queryModelKey, (nextKey) => {
+  if (syncingQuery || loading.value || !group.value || !nextKey) return
+  if (nextKey === selectedModelKey.value) return
+  if (!pickScenarioModel(group.value, nextKey)) return
+  lastCompletedKey.value = ''
+  apiPanelOpen.value = false
+  applySelectedModel(nextKey, { syncQuery: false })
+})
 </script>

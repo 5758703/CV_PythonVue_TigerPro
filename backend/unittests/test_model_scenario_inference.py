@@ -93,10 +93,12 @@ def _file(name: str = "sample.png", payload: bytes | None = None) -> FileStorage
     return FileStorage(stream=io.BytesIO(payload or _png_bytes()), filename=name)
 
 
-def _files(*, image: FileStorage | None = None, query=None, gallery=()) -> MultiDict:
+def _files(*, image: FileStorage | None = None, mask=None, query=None, gallery=()) -> MultiDict:
     values = []
     if image is not None:
         values.append(("file", image))
+    if mask is not None:
+        values.append(("mask", mask))
     if query is not None:
         values.append(("query", query))
     values.extend(("gallery", item) for item in gallery)
@@ -117,7 +119,7 @@ def _register_model(
     if weight_extension is not None:
         relative = f"{key}{weight_extension}"
         payload = b"x" * 100_001
-    elif library in ("clip-reid", "transreid", "vit-reid", "opencv-sam"):
+    elif library in ("clip-reid", "transreid", "vit-reid", "opencv-sam", "opencv-lama", "opencv-dnn", "rtmlib"):
         relative = (
             "image_segmentation_efficientsam_ti_2025april.onnx"
             if key == "efficient-sam"
@@ -406,6 +408,92 @@ def test_segmentation_rejects_detector_confidence_as_an_unknown_field(scenario_a
         _run(app, "mobile-sam", _files(image=_file()), {
             "mode": "auto", "conf": "0.5",
         })
+
+
+def test_inpainting_requires_mask_and_rejects_unknown_fields(scenario_app):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app, model_folder, key="inpainting-lama",
+        task="image-inpainting", library="opencv-lama",
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="mask is required"):
+        _run(app, "inpainting-lama", _files(image=_file()))
+    with pytest.raises(_dispatcher().ScenarioInputError, match="unknown form field: conf"):
+        _run(app, "inpainting-lama", _files(image=_file(), mask=_file("mask.png")), {
+            "conf": "0.5",
+        })
+
+
+def test_classification_rejects_invalid_top_k(scenario_app):
+    app, _headers, model_folder = scenario_app
+    _register_model(
+        app, model_folder, key="mobilenet-v2",
+        task="image-classification", library="opencv-dnn",
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="topK must be an integer between 1 and 20"):
+        _run(app, "mobilenet-v2", _files(image=_file()), {"topK": "0"})
+
+
+def test_multimodal_grounding_requires_prompt(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    key = "vlm-fo1-3b"
+    # Directory-style weights: config + safetensors index.
+    (model_folder / "config.json").write_text('{"model_type":"vlm"}', encoding="utf-8")
+    (model_folder / "model.safetensors").write_bytes(b"x" * 100_001)
+    with app.app_context():
+        db.session.add(AiModel(
+            model_name=key,
+            model_key=key,
+            task="object-detection",
+            library="vlm-fo1",
+            file_path="models",
+            status="0",
+        ))
+        db.session.commit()
+    monkeypatch.setattr(
+        "services.model_scenario_contract.resolve_vlm_fo1_root",
+        lambda: str(model_folder),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "services.vlm_fo1.resolve_vlm_fo1_root",
+        lambda: str(model_folder),
+    )
+
+    with pytest.raises(_dispatcher().ScenarioInputError, match="prompt is required"):
+        _run(app, key, _files(image=_file()), {"prompt": "   "})
+
+
+def test_body_pose_forwards_conf_to_rtmlib(scenario_app, monkeypatch):
+    app, _headers, model_folder = scenario_app
+    key = "rtmo-s"
+    _register_model(
+        app, model_folder, key=key,
+        task="pose-estimation", library="rtmlib",
+    )
+    calls = []
+
+    def pose_call(model_key, path, raw, conf=0.25, draw=True):
+        calls.append({"model_key": model_key, "path": path, "conf": conf, "draw": draw})
+        return {
+            "count": 1,
+            "persons": [{"keypoints": [[1, 2, 0.9]]}],
+            "imageBase64": None,
+            "width": 2,
+            "height": 2,
+            "keypointCount": 17,
+            "poseType": "body17",
+        }
+
+    monkeypatch.setattr("inference.estimate_pose_rtmlib", pose_call)
+    payload = _run(app, key, _files(image=_file()), {"conf": "0.4"})
+
+    assert payload["workbench"] == "body_pose"
+    assert payload["result"]["count"] == 1
+    assert calls and calls[0]["conf"] == 0.4
+    assert calls[0]["model_key"] == key
 
 
 def test_efficientsam_forwards_points_labels_and_box(scenario_app, monkeypatch):
@@ -1011,7 +1099,8 @@ def test_infer_route_preserves_request_too_large_as_413(scenario_app, monkeypatc
 @pytest.mark.parametrize(
     ("path", "target"),
     [
-        ("/api/ai/model-scenarios?phase=1", "routes.model_scenario.list_scenarios"),
+        ("/api/ai/model-scenarios?phase=1", "routes.model_scenario.list_scenario_groups"),
+        ("/api/ai/model-scenarios?phase=1&grouped=0", "routes.model_scenario.list_scenarios"),
         ("/api/ai/model-scenarios/yolo26n-obb", "routes.model_scenario.get_scenario"),
     ],
 )

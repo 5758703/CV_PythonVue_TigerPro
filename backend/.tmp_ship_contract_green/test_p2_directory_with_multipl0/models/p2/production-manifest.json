@@ -1,0 +1,1 @@
+{"modelKey": "yolo26n-p2-plate", "task": "object-detection", "trainingComplete": true, "classes": ["license_plate"], "artifactFile": "one.pt", "artifactSha256": "a13c260b2abc204715a64ea602d8fa96422782c596be931f66feaa95e4cc8c05"}

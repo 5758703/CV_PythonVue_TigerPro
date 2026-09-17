@@ -2,11 +2,15 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import { useUserStore } from '../store/user'
 import Layout from '../layout/index.vue'
-import { createScenarioRouteRecords } from '../views/ai/scenarios/scenarioState'
+import {
+  createLegacyScenarioRedirectRecords,
+  createScenarioRouteRecords,
+} from '../views/ai/scenarios/scenarioState'
 
 const scenarioRouteRecords = createScenarioRouteRecords(
   () => import('../views/ai/scenarios/ScenarioApp.vue'),
 )
+const legacyScenarioRedirects = createLegacyScenarioRedirectRecords()
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('../views/Login.vue'), meta: { public: true } },
@@ -21,6 +25,7 @@ const routes = [
       { path: 'ai/model', name: 'aiModel', component: () => import('../views/ai/model/index.vue'), meta: { title: '模型列表' } },
       { path: 'ai/scenarios', name: 'aiScenarios', component: () => import('../views/ai/scenarios/index.vue'), meta: { title: '生产模型场景' } },
       ...scenarioRouteRecords,
+      ...legacyScenarioRedirects,
       { path: 'ai/image', name: 'aiImage', component: () => import('../views/ai/image/index.vue'), meta: { title: '图片检测' } },
       { path: 'ai/video', name: 'aiVideo', component: () => import('../views/ai/video/index.vue'), meta: { title: '视频检测' } },
       { path: 'ai/track', name: 'aiTrack', component: () => import('../views/ai/track/index.vue'), meta: { title: '目标追踪' } },

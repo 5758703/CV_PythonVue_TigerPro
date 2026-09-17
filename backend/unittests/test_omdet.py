@@ -30,10 +30,17 @@ def test_detect_image_omdet_formats_detections(monkeypatch):
         def __call__(self, pil, text=None, return_tensors=None):
             return {"pixel_values": types.SimpleNamespace(to=lambda d: "pv")}
 
-        def post_process_grounded_object_detection(self, outputs, classes, target_sizes, score_threshold, nms_threshold):
+        def post_process_grounded_object_detection(
+            self, outputs, text_labels=None, threshold=0.3, nms_threshold=0.5,
+            target_sizes=None, max_num_det=None, **kwargs,
+        ):
+            # 兼容旧调用残留的 classes/score_threshold
+            labels = text_labels or kwargs.get("classes") or []
+            if labels and isinstance(labels[0], str):
+                labels = labels
             return [{
                 "scores": [0.91, 0.55],
-                "classes": ["cat", "remote"],
+                "text_labels": ["cat", "remote"],
                 "boxes": [
                     types.SimpleNamespace(tolist=lambda: [10.0, 20.0, 100.0, 200.0]),
                     types.SimpleNamespace(tolist=lambda: [30.0, 40.0, 80.0, 90.0]),

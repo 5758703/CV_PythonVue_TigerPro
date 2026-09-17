@@ -3,7 +3,10 @@ import test from 'node:test'
 import * as scenarioState from './scenarioState.js'
 
 import {
-  PHASE_ONE_ROUTE_KEYS,
+  LEGACY_MODEL_ROUTE_KEYS,
+  MODEL_TO_GROUP,
+  SCENARIO_GROUP_ROUTE_KEYS,
+  SCENARIO_MODEL_COUNT,
   buildScenarioApiDocumentation,
   clampImagePoint,
   deriveMaskMetrics,
@@ -12,7 +15,9 @@ import {
   normalizeWorkbenchResult,
   scaleDetectionGeometry,
   isLatestScenarioRequest,
-  resolveFixedModelKey,
+  mergeSelectedScenario,
+  resolveFixedGroupKey,
+  resolveGroupKey,
   resolveWorkbench,
   serializeScenarioForm,
   undoSegmentationPrompt,
@@ -22,8 +27,24 @@ import {
 test('resolves each supported workbench type', () => {
   assert.equal(resolveWorkbench('segmentation'), 'segmentation')
   assert.equal(resolveWorkbench('vehicle_reid'), 'vehicle_reid')
+  assert.equal(resolveWorkbench('person_reid'), 'person_reid')
   assert.equal(resolveWorkbench('plate_detection'), 'plate_detection')
   assert.equal(resolveWorkbench('obb_detection'), 'obb_detection')
+  assert.equal(resolveWorkbench('plate_pose'), 'plate_pose')
+  assert.equal(resolveWorkbench('face_recognition'), 'face_recognition')
+  assert.equal(resolveWorkbench('object_detection'), 'object_detection')
+  assert.equal(resolveWorkbench('instance_segmentation'), 'instance_segmentation')
+  assert.equal(resolveWorkbench('document_ocr'), 'document_ocr')
+  assert.equal(resolveWorkbench('image_inpainting'), 'image_inpainting')
+  assert.equal(resolveWorkbench('image_classification'), 'image_classification')
+  assert.equal(resolveWorkbench('multimodal_grounding'), 'multimodal_grounding')
+  assert.equal(resolveWorkbench('industrial_diagnosis'), 'industrial_diagnosis')
+  assert.equal(resolveWorkbench('body_pose'), 'body_pose')
+  assert.equal(resolveWorkbench('hand_pose'), 'hand_pose')
+  assert.equal(resolveWorkbench('text_nlp'), 'text_nlp')
+  assert.equal(resolveWorkbench('speech_asr'), 'speech_asr')
+  assert.equal(resolveWorkbench('speech_tts'), 'speech_tts')
+  assert.equal(resolveWorkbench('talking_head'), 'talking_head')
 })
 
 test('marks an unknown workbench type unsupported', () => {
@@ -63,6 +84,69 @@ test('serializes an explicit zero detector confidence', () => {
   assert.equal(form.get('imgsz'), '640')
 })
 
+test('serializes face recognition thresholds with the shared field names', () => {
+  const form = serializeScenarioForm('face_recognition', {
+    file: new Blob(['face']),
+    threshold: 0.4,
+    detThresh: 0.5,
+  })
+
+  assert.equal(form.get('file').size, 4)
+  assert.equal(form.get('threshold'), '0.4')
+  assert.equal(form.get('detThresh'), '0.5')
+  assert.equal(form.get('conf'), null)
+})
+
+test('serializes plate pose and object detection like plate detection', () => {
+  for (const type of ['plate_pose', 'object_detection']) {
+    const form = serializeScenarioForm(type, {
+      file: new Blob(['image']),
+      conf: 0.25,
+      imgsz: 640,
+    })
+    assert.equal(form.get('conf'), '0.25')
+    assert.equal(form.get('imgsz'), '640')
+  }
+})
+
+test('serializes phase-three inpainting, classification, grounding and pose fields', () => {
+  const inpaint = serializeScenarioForm('image_inpainting', {
+    file: new Blob(['image']),
+    mask: new Blob(['mask']),
+    dilatePx: 8,
+  })
+  assert.equal(inpaint.get('file').size, 5)
+  assert.equal(inpaint.get('mask').size, 4)
+  assert.equal(inpaint.get('dilatePx'), '8')
+
+  const classify = serializeScenarioForm('image_classification', {
+    file: new Blob(['image']),
+    topK: 5,
+    precision: 'int8',
+    conf: 0.3,
+  })
+  assert.equal(classify.get('topK'), '5')
+  assert.equal(classify.get('precision'), 'int8')
+  assert.equal(classify.get('conf'), '0.3')
+  assert.equal(classify.get('imgsz'), null)
+
+  const grounding = serializeScenarioForm('multimodal_grounding', {
+    file: new Blob(['image']),
+    prompt: 'person, car',
+    conf: 0.25,
+  })
+  assert.equal(grounding.get('prompt'), 'person, car')
+  assert.equal(grounding.get('conf'), '0.25')
+  assert.equal(grounding.get('imgsz'), null)
+
+  const pose = serializeScenarioForm('body_pose', {
+    file: new Blob(['image']),
+    conf: 0.4,
+  })
+  assert.equal(pose.get('conf'), '0.4')
+  assert.equal(pose.get('imgsz'), null)
+})
+
 test('serializes a ReID query and repeated gallery fields', () => {
   const query = new Blob(['query'])
   const galleryOne = new Blob(['one'])
@@ -78,34 +162,120 @@ test('serializes a ReID query and repeated gallery fields', () => {
   assert.equal(form.get('threshold'), '0.7')
 })
 
-test('exposes exactly the approved phase-one model route keys', () => {
-  assert.deepEqual(PHASE_ONE_ROUTE_KEYS, [
-    'efficient-sam',
-    'mobile-sam',
-    'clip-reid-vehicle',
-    'keremberke-yolov5m-license-plate',
-    'keremberke-yolov5n-license-plate',
-    'transreid-vehicle',
-    'vehicle-vit-reid',
-    'yolo26n-obb',
-    'yolo26n-p2-plate',
+test('exposes exactly the thirty-nine scenario group route keys', () => {
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 39)
+  assert.deepEqual(SCENARIO_GROUP_ROUTE_KEYS.slice(0, 11), [
+    'interactive-segmentation',
+    'vehicle-reid',
+    'plate-detection',
+    'obb-detection',
+    'plate-pose',
+    'face-recognition',
+    'medical-detection',
+    'image-inpainting',
+    'image-classification',
+    'multimodal-grounding',
+    'body-pose',
   ])
+  assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('person-reid'))
+  assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('text-to-speech'))
+  assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('talking-head'))
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.at(-1), 'talking-head')
 })
 
-test('builds the nine real fixed router records from the shared manifest', () => {
+test('maps all ninety legacy model keys onto the thirty-nine groups', () => {
+  assert.equal(SCENARIO_MODEL_COUNT, 90)
+  assert.equal(LEGACY_MODEL_ROUTE_KEYS.length, 90)
+  assert.equal(resolveGroupKey('interactive-segmentation'), 'interactive-segmentation')
+  assert.equal(resolveGroupKey('efficient-sam'), 'interactive-segmentation')
+  assert.equal(resolveGroupKey('mobile-sam'), 'interactive-segmentation')
+  assert.equal(resolveGroupKey('clip-reid-vehicle'), 'vehicle-reid')
+  assert.equal(resolveGroupKey('yolo26n-obb'), 'obb-detection')
+  assert.equal(resolveGroupKey('brain-tumor-yolo-opennoor'), 'medical-detection')
+  assert.equal(resolveGroupKey('inpainting-lama'), 'image-inpainting')
+  assert.equal(resolveGroupKey('mobilenet-v2'), 'image-classification')
+  assert.equal(resolveGroupKey('vlm-fo1-3b'), 'multimodal-grounding')
+  assert.equal(resolveGroupKey('dwpose-m'), 'body-pose')
+  assert.equal(resolveGroupKey('unknown-model'), null)
+  assert.equal(MODEL_TO_GROUP['yolo26n-p2-plate'], 'plate-detection')
+  assert.equal(MODEL_TO_GROUP['insightface-buffalo-l'], 'face-recognition')
+  assert.equal(MODEL_TO_GROUP['yolo-master-cls-n'], 'image-classification')
+  assert.equal(MODEL_TO_GROUP['rtmpose-m'], 'body-pose')
+  assert.equal(MODEL_TO_GROUP['osnet-x1-0'], 'person-reid')
+  assert.equal(resolveGroupKey('talking-head'), 'talking-head')
+  assert.equal(resolveGroupKey('linly-talker'), 'talking-head')
+})
+
+test('builds thirty-nine group router records and ninety legacy redirects', () => {
   const component = () => Promise.resolve('ScenarioApp')
   assert.equal(typeof scenarioState.createScenarioRouteRecords, 'function')
+  assert.equal(typeof scenarioState.createLegacyScenarioRedirectRecords, 'function')
   const records = scenarioState.createScenarioRouteRecords(component)
+  const redirects = scenarioState.createLegacyScenarioRedirectRecords()
 
-  assert.equal(records.length, 9)
-  assert.deepEqual(records.map((record) => record.path), PHASE_ONE_ROUTE_KEYS.map(
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 39)
+  assert.equal(records.length, 39)
+  assert.deepEqual(records.map((record) => record.path), SCENARIO_GROUP_ROUTE_KEYS.map(
     (key) => `ai/scenarios/${key}`,
   ))
+  assert.deepEqual(records.map((record) => record.meta.groupKey), SCENARIO_GROUP_ROUTE_KEYS)
   for (const record of records) {
     assert.equal(record.component, component)
-    assert.equal(record.props.modelKey, record.meta.modelKey)
-    assert.equal(record.path, `ai/scenarios/${record.meta.modelKey}`)
+    assert.equal(record.props.groupKey, record.meta.groupKey)
+    assert.equal(record.path, `ai/scenarios/${record.meta.groupKey}`)
   }
+
+  assert.equal(redirects.length, 90)
+  const efficientRedirect = redirects.find((item) => item.path === 'ai/scenarios/efficient-sam')
+  assert.equal(typeof efficientRedirect.redirect, 'function')
+  assert.deepEqual(efficientRedirect.redirect({ query: {} }), {
+    path: '/ai/scenarios/interactive-segmentation',
+    query: { model: 'efficient-sam' },
+  })
+  const poseRedirect = redirects.find((item) => item.path === 'ai/scenarios/rtmo-m')
+  assert.deepEqual(poseRedirect.redirect({ query: {} }), {
+    path: '/ai/scenarios/body-pose',
+    query: { model: 'rtmo-m' },
+  })
+})
+
+test('merges group shared fields with the selected model identity', () => {
+  const merged = mergeSelectedScenario({
+    groupKey: 'interactive-segmentation',
+    name: '交互分割',
+    project: '缺陷与目标精细轮廓提取',
+    description: 'group description',
+    workbenchType: 'segmentation',
+    defaultModelKey: 'efficient-sam',
+    models: [
+      {
+        modelKey: 'efficient-sam',
+        name: 'EfficientSAM-Ti（OpenCV）',
+        defaults: { precision: 'fp32' },
+        apiReady: true,
+        adapter: 'efficient_sam',
+        apiPath: '/openapi/v1/model-scenarios/efficient-sam/infer',
+        input: { formats: ['.png'] },
+      },
+      {
+        modelKey: 'mobile-sam',
+        name: 'MobileSAM 交互分割',
+        defaults: { mode: 'prompt' },
+        apiReady: false,
+        adapter: 'mobile_sam',
+        apiPath: '/openapi/v1/model-scenarios/mobile-sam/infer',
+        input: { formats: ['.jpg'] },
+      },
+    ],
+  }, 'mobile-sam')
+
+  assert.equal(merged.groupKey, 'interactive-segmentation')
+  assert.equal(merged.name, '交互分割')
+  assert.equal(merged.modelKey, 'mobile-sam')
+  assert.equal(merged.modelName, 'MobileSAM 交互分割')
+  assert.equal(merged.apiReady, false)
+  assert.deepEqual(merged.defaults, { mode: 'prompt' })
+  assert.equal(merged.adapter, 'mobile_sam')
 })
 
 test('invalidates stale inference completions after a newer run or unmount', () => {
@@ -121,13 +291,13 @@ test('invalidates stale inference completions after a newer run or unmount', () 
   assert.equal(guard.begin(), null)
 })
 
-test('keeps the route model key fixed when a query tries to switch models', () => {
+test('keeps the route group key fixed when a query tries to switch groups', () => {
   assert.equal(
-    resolveFixedModelKey({
-      meta: { modelKey: 'efficient-sam' },
-      query: { modelKey: 'mobile-sam' },
+    resolveFixedGroupKey({
+      meta: { groupKey: 'interactive-segmentation' },
+      query: { model: 'mobile-sam' },
     }),
-    'efficient-sam',
+    'interactive-segmentation',
   )
 })
 
@@ -292,6 +462,41 @@ test('validates each workbench form at its business input boundaries', () => {
     conf: 0.5,
     imgsz: 4097,
   }), ['推理尺寸必须是 32 到 4096 的整数。'])
+  assert.deepEqual(validateWorkbenchState('image_inpainting', {
+    file: image,
+    mask: image,
+    dilatePx: 8,
+  }), [])
+  assert.deepEqual(validateWorkbenchState('image_inpainting', {
+    file: image,
+    dilatePx: 8,
+  }), ['请选择遮罩图片。'])
+  assert.deepEqual(validateWorkbenchState('image_classification', {
+    file: image,
+    topK: 5,
+  }), [])
+  assert.deepEqual(validateWorkbenchState('image_classification', {
+    file: image,
+    topK: 21,
+  }), ['Top-K 必须是 1 到 20 的整数。'])
+  assert.deepEqual(validateWorkbenchState('multimodal_grounding', {
+    file: image,
+    prompt: 'person',
+    conf: 0.25,
+  }), [])
+  assert.deepEqual(validateWorkbenchState('multimodal_grounding', {
+    file: image,
+    prompt: '   ',
+    conf: 0.25,
+  }), ['请填写定位提示词。'])
+  assert.deepEqual(validateWorkbenchState('body_pose', {
+    file: image,
+    conf: 0.25,
+  }), [])
+  assert.deepEqual(validateWorkbenchState('body_pose', {
+    file: image,
+    conf: 1.2,
+  }), ['置信度阈值必须在 0 到 1 之间。'])
 })
 
 test('rejects workbench uploads outside the declared image policy', () => {

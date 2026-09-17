@@ -80,9 +80,9 @@ def test_phase_one_catalog_returns_nine_entries_and_requires_authentication(scen
     """Removing the registered catalog route must reject anonymous catalog access."""
     client, headers, _tmp_path = scenario_api_client
 
-    assert client.get("/api/ai/model-scenarios?phase=1").status_code == 401
+    assert client.get("/api/ai/model-scenarios?phase=1&grouped=0").status_code == 401
 
-    payload = _assert_envelope(client.get("/api/ai/model-scenarios?phase=1", headers=headers))
+    payload = _assert_envelope(client.get("/api/ai/model-scenarios?phase=1&grouped=0", headers=headers))
     assert payload["code"] == 0
     assert len(payload["data"]) == 9
     assert {entry["modelKey"] for entry in payload["data"]} == {
@@ -95,6 +95,36 @@ def test_phase_one_catalog_returns_nine_entries_and_requires_authentication(scen
         "vehicle-vit-reid",
         "yolo26n-obb",
         "yolo26n-p2-plate",
+    }
+
+    grouped = _assert_envelope(client.get("/api/ai/model-scenarios", headers=headers))
+    assert {entry["groupKey"] for entry in grouped["data"]} >= {
+        "interactive-segmentation",
+        "vehicle-reid",
+        "plate-detection",
+        "obb-detection",
+        "face-recognition",
+        "image-inpainting",
+        "image-classification",
+        "multimodal-grounding",
+        "body-pose",
+    }
+    plate = next(item for item in grouped["data"] if item["groupKey"] == "plate-detection")
+    assert plate["modelCount"] >= 2
+    assert all("modelKey" in model for model in plate["models"])
+
+    phase3 = _assert_envelope(client.get("/api/ai/model-scenarios?phase=3&grouped=0", headers=headers))
+    assert len(phase3["data"]) == 9
+    assert {entry["modelKey"] for entry in phase3["data"]} == {
+        "inpainting-lama",
+        "mobilenet-v2",
+        "vit-base",
+        "yolo-master-cls-n",
+        "vlm-fo1-3b",
+        "dwpose-m",
+        "rtmo-m",
+        "rtmo-s",
+        "rtmpose-m",
     }
 
 

@@ -987,7 +987,12 @@ def _yolov5_hub_root() -> str:
 
 
 def _load_legacy_yolov5_model(abs_path: str):
-    """加载旧版 YOLOv5 .pt（keremberke 等），通过 hub 源码 + 命名空间重映射，无需 pip install yolov5。"""
+    """加载旧版 YOLOv5 .pt（keremberke 等），通过 hub 源码 + 命名空间重映射，无需 pip install yolov5。
+
+    YOLOv5 hub 顶层包名也是 ``models``，与本仓库 Flask ``models`` 冲突。加载期间必须
+    临时让出该命名空间，否则 pickle 会解析到业务 ORM 包并抛出
+    ``ModuleNotFoundError: No module named 'models.yolo'``。
+    """
     import pickle
     import sys
     import types
@@ -1002,36 +1007,56 @@ def _load_legacy_yolov5_model(abs_path: str):
             return cached[1]
 
     hub_root = _yolov5_hub_root()
-    if hub_root not in sys.path:
-        sys.path.insert(0, hub_root)
+    path_inserted = False
+    shadowed = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == "models" or name.startswith("models.")
+    }
+    try:
+        if hub_root not in sys.path:
+            sys.path.insert(0, hub_root)
+            path_inserted = True
 
-    class _RemapUnpickler(pickle.Unpickler):
-        def find_class(self, module, name):
-            if module.startswith("yolov5."):
-                module = module[len("yolov5.") :]
-            return super().find_class(module, name)
+        class _RemapUnpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module.startswith("yolov5."):
+                    module = module[len("yolov5.") :]
+                return super().find_class(module, name)
 
-    remap_pickle = types.ModuleType("yolov5_remap_pickle")
-    remap_pickle.Unpickler = _RemapUnpickler
-    remap_pickle.load = pickle.load
-    remap_pickle.dump = pickle.dump
-    remap_pickle.dumps = pickle.dumps
-    remap_pickle.loads = pickle.loads
+        remap_pickle = types.ModuleType("yolov5_remap_pickle")
+        remap_pickle.Unpickler = _RemapUnpickler
+        remap_pickle.load = pickle.load
+        remap_pickle.dump = pickle.dump
+        remap_pickle.dumps = pickle.dumps
+        remap_pickle.loads = pickle.loads
 
-    ckpt = torch.load(abs_path, map_location="cpu", pickle_module=remap_pickle, weights_only=False)
-    raw = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-    if hasattr(raw, "float"):
-        raw = raw.float()
-    if hasattr(raw, "fuse"):
-        try:
-            raw = raw.fuse()
-        except Exception:  # noqa: BLE001
-            pass
-    raw.eval()
+        ckpt = torch.load(abs_path, map_location="cpu", pickle_module=remap_pickle, weights_only=False)
+        raw = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+        if hasattr(raw, "float"):
+            raw = raw.float()
+        if hasattr(raw, "fuse"):
+            try:
+                raw = raw.fuse()
+            except Exception:  # noqa: BLE001
+                pass
+        raw.eval()
 
-    from models.common import AutoShape  # noqa: WPS433  hub 路径注入后可用
+        from models.common import AutoShape  # noqa: WPS433  hub 路径注入后可用
 
-    model = AutoShape(raw)
+        model = AutoShape(raw)
+    finally:
+        for name in list(sys.modules):
+            if name == "models" or name.startswith("models."):
+                if name not in shadowed:
+                    sys.modules.pop(name, None)
+        sys.modules.update(shadowed)
+        if path_inserted:
+            try:
+                sys.path.remove(hub_root)
+            except ValueError:
+                pass
+
     with _lock:
         _cache[cache_key] = (mtime, model)
     return model
@@ -2807,18 +2832,34 @@ def detect_image_omdet(model_dir, image_bytes, conf=0.25, draw=True, classes=Non
     inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
     with torch.no_grad():
         outputs = model(**inputs)
+    # transformers>=5：classes/score_threshold 已改为 text_labels/threshold；返回 text_labels 而非 classes
     results = processor.post_process_grounded_object_detection(
         outputs,
-        classes=prompt,
+        text_labels=prompt,
         target_sizes=[pil.size[::-1]],
-        score_threshold=float(conf),
+        threshold=float(conf),
         nms_threshold=0.3,
     )[0]
 
     detections = []
-    scores = results.get("scores") or []
-    names = results.get("classes") or []
-    boxes = results.get("boxes") or []
+    scores = results.get("scores")
+    names = results.get("text_labels")
+    if names is None:
+        names = results.get("classes")
+    boxes = results.get("boxes")
+    if scores is None:
+        scores = []
+    if names is None:
+        names = []
+    if boxes is None:
+        boxes = []
+    # transformers 可能返回 Tensor；统一转成可迭代的 python 序列
+    if hasattr(scores, "detach"):
+        scores = scores.detach().cpu().tolist()
+    if hasattr(boxes, "detach"):
+        boxes = boxes.detach().cpu().tolist()
+    if hasattr(names, "detach"):
+        names = names.detach().cpu().tolist()
     for i, (score, class_name, box) in enumerate(zip(scores, names, boxes)):
         try:
             xyxy = box.tolist() if hasattr(box, "tolist") else list(box)
