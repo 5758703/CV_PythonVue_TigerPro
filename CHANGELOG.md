@@ -10,6 +10,8 @@
 
 ### 新增
 
+- **健身蹲起计数生产场景**：复用 RTMO、RTMPose 与 YOLO Pose 模型，支持上传视频、本地摄像头和已登记网络摄像头；提供单主训练者锁定、膝角滞回状态机、实时次数/阶段/跟踪状态、训练摘要及可下载标注视频。
+
 - **边缘 AI 视频分析流水线 Phase 0 骨架**：DAG 契约（Frame/Event Envelope）、表 `ai_pipeline`/`ai_pipeline_version`/`ai_pipeline_run`、Runtime（SharedMjpegHub→YOLO→Overlay）、REST `/api/ai/pipeline/*`、控制台 `/ai/pipeline` JSON 启停页；文档见 `docs/edge-ai-video-pipeline-engine.md`
 - **边缘 AI 视频分析流水线 Phase 1 MVP**：ByteTrack / 告警规则 / DB 落库 / Webhook Sink；Vue Flow 拖拽编辑器；官方模板（安防、区域入侵）；监控墙「流水线 AI」叠加
 - **边缘 AI 视频分析流水线 Phase 2**：`sink.mqtt`（`mqtt_bus` + EMQX Topic）、`logic.vlm_gate`（Qwen-VL ROI 确认）、断流 `sourceStalled`/`reconnects`、Webhook/MQTT 短重试；模板「VLM门控+MQTT」
