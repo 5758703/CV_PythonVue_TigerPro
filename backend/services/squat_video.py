@@ -212,6 +212,7 @@ def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, prog
     counter = SquatCounter(config)
     processed = 0
     rep_timestamps = []
+    last_valid_state = None
     started = time.perf_counter()
     try:
         while True:
@@ -220,6 +221,12 @@ def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, prog
                 break
             timestamp = processed / fps
             state = counter.update(estimator.infer(frame), timestamp)
+            if state["trackingStatus"] == "tracking":
+                last_valid_state = {
+                    "trackingStatus": state["trackingStatus"],
+                    "stage": state["stage"],
+                    "kneeAngle": state["kneeAngle"],
+                }
             if state["completedRep"]:
                 rep_timestamps.append(round(timestamp, 3))
             _write_bgr(
@@ -237,6 +244,11 @@ def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, prog
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     summary = counter.snapshot()
+    result_state = last_valid_state or {
+        "trackingStatus": summary["trackingStatus"],
+        "stage": summary["stage"],
+        "kneeAngle": summary["kneeAngle"],
+    }
     return {
         "frames": processed,
         "count": summary["count"],
@@ -247,4 +259,5 @@ def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, prog
         "activeSeconds": summary["activeSeconds"],
         "minKneeAngle": summary["minKneeAngle"],
         "averageKneeAngle": summary["averageKneeAngle"],
+        **result_state,
     }

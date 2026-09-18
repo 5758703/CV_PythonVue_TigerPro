@@ -96,6 +96,31 @@ def test_process_video_counts_and_reports_progress(tmp_path):
     assert progress[-1] == (6, 6)
 
 
+def test_process_video_reports_last_valid_tracking_state_when_video_ends_without_person(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.mp4"
+    _write_video(source, frame_count=7)
+
+    class EndingLossEstimator:
+        def __init__(self):
+            self.poses = iter([170, 170, 95, 95, 170, 170, None])
+
+        def infer(self, _frame):
+            angle = next(self.poses)
+            return [] if angle is None else [_person(angle)]
+
+    stats = process_squat_video(
+        EndingLossEstimator(),
+        source,
+        output,
+        SquatConfig(confirm_frames=2, smoothing_window=1),
+    )
+
+    assert stats["trackingStatus"] == "tracking"
+    assert stats["stage"] == "standing"
+    assert stats["kneeAngle"] == 170.0
+
+
 def test_process_video_uses_browser_playable_h264(tmp_path):
     source = tmp_path / "source.mp4"
     output = tmp_path / "output.mp4"
