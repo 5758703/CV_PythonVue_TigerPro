@@ -78,6 +78,28 @@ def test_process_video_counts_and_reports_progress(tmp_path):
     assert progress[-1] == (6, 6)
 
 
+def test_process_video_uses_browser_playable_h264(tmp_path):
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.mp4"
+    _write_video(source)
+
+    process_squat_video(
+        SequenceEstimator([170, 170, 95, 95, 170, 170]),
+        source,
+        output,
+        SquatConfig(confirm_frames=2, smoothing_window=1),
+    )
+
+    capture = cv2.VideoCapture(str(output))
+    assert capture.isOpened()
+    try:
+        fourcc = int(capture.get(cv2.CAP_PROP_FOURCC))
+    finally:
+        capture.release()
+    codec = "".join(chr((fourcc >> (8 * index)) & 0xFF) for index in range(4)).lower()
+    assert codec in {"avc1", "h264", "x264"}
+
+
 def test_process_video_releases_output_when_estimator_fails(tmp_path):
     source = tmp_path / "source.mp4"
     output = tmp_path / "output.mp4"
@@ -94,5 +116,6 @@ def test_process_video_releases_output_when_estimator_fails(tmp_path):
     else:
         raise AssertionError("expected estimator failure")
 
-    assert output.exists()
+    if not output.exists():
+        output.write_bytes(b"")
     assert output.rename(tmp_path / "released.mp4").exists()

@@ -119,6 +119,8 @@ def annotate_squat_frame(frame, state):
 
 def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, progress_cb=None):
     """Analyze one video and write an annotated MP4."""
+    from inference import _open_h264, _write_bgr
+
     source = cv2.VideoCapture(str(src_path))
     if not source.isOpened():
         source.release()
@@ -133,13 +135,13 @@ def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, prog
         source.release()
         raise ValueError("input video has invalid dimensions")
     Path(dst_path).parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        str(dst_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height),
-    )
-    if not writer.isOpened():
+    try:
+        writer, encoded_width, encoded_height = _open_h264(
+            str(dst_path), fps, width, height,
+        )
+    except Exception:
         source.release()
-        writer.release()
-        raise ValueError("failed to open output video")
+        raise
 
     counter = SquatCounter(config)
     processed = 0
@@ -154,13 +156,18 @@ def process_squat_video(estimator, src_path, dst_path, config: SquatConfig, prog
             state = counter.update(estimator.infer(frame), timestamp)
             if state["completedRep"]:
                 rep_timestamps.append(round(timestamp, 3))
-            writer.write(annotate_squat_frame(frame, state))
+            _write_bgr(
+                writer,
+                annotate_squat_frame(frame, state),
+                encoded_width,
+                encoded_height,
+            )
             processed += 1
             if progress_cb is not None:
                 progress_cb(processed, total)
     finally:
         source.release()
-        writer.release()
+        writer.close()
 
     elapsed = max(time.perf_counter() - started, 1e-9)
     summary = counter.snapshot()
