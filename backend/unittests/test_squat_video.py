@@ -55,6 +55,24 @@ def test_annotate_squat_frame_does_not_mutate_input():
     assert not np.array_equal(annotated, original)
 
 
+def test_annotate_squat_frame_draws_count_in_a_separate_prominent_card():
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    state = {
+        "stage": "ascending",
+        "kneeAngle": 150.6,
+        "trackingStatus": "tracking",
+        "primaryPerson": {},
+    }
+
+    count_four = annotate_squat_frame(frame, {**state, "count": 4})
+    count_eight = annotate_squat_frame(frame, {**state, "count": 8})
+
+    status_panel_diff = cv2.absdiff(count_four[8:112, 8:330], count_eight[8:112, 8:330])
+    count_card_diff = cv2.absdiff(count_four[8:150, 480:632], count_eight[8:150, 480:632])
+    assert np.count_nonzero(status_panel_diff) == 0
+    assert np.count_nonzero(count_card_diff) > 250
+
+
 def test_process_video_counts_and_reports_progress(tmp_path):
     source = tmp_path / "source.mp4"
     output = tmp_path / "output.mp4"

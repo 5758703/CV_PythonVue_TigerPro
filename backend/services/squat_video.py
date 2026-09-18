@@ -17,6 +17,23 @@ _SKELETON = (
 )
 
 
+def _filled_rounded_rect(image, left, top, right, bottom, radius, color):
+    """Draw a filled rounded rectangle, clipped to the image bounds."""
+    height, width = image.shape[:2]
+    left, right = max(0, left), min(width - 1, right)
+    top, bottom = max(0, top), min(height - 1, bottom)
+    if left >= right or top >= bottom:
+        return
+    radius = max(1, min(radius, (right - left) // 2, (bottom - top) // 2))
+    cv2.rectangle(image, (left + radius, top), (right - radius, bottom), color, -1)
+    cv2.rectangle(image, (left, top + radius), (right, bottom - radius), color, -1)
+    for center in (
+        (left + radius, top + radius), (right - radius, top + radius),
+        (left + radius, bottom - radius), (right - radius, bottom - radius),
+    ):
+        cv2.circle(image, center, radius, color, -1, cv2.LINE_AA)
+
+
 def _person_bbox(person: dict, keypoint_conf: float = 0.05):
     bbox = person.get("bbox")
     if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
@@ -104,16 +121,65 @@ def annotate_squat_frame(frame, state):
     angle = state.get("kneeAngle")
     angle_text = "--" if angle is None else f"{float(angle):.1f} deg"
     lines = (
-        f"SQUATS  {int(state.get('count') or 0)}",
         f"STAGE   {state.get('stage') or 'waiting_stand'}",
         f"KNEE    {angle_text}",
         f"STATUS  {state.get('trackingStatus') or 'no_person'}",
     )
+    height, width = canvas.shape[:2]
+    scale = max(0.45, min(1.5, min(width / 640.0, height / 360.0)))
+    margin = max(4, int(8 * scale))
+    card_width = min(max(int(128 * scale), 56), max(1, width - 2 * margin))
+    card_height = min(max(int(112 * scale), 48), max(1, height - 2 * margin))
+    card_left = width - margin - card_width
+    card_top = margin
+
     overlay = canvas.copy()
-    cv2.rectangle(overlay, (8, 8), (310, 104), (16, 22, 30), -1)
-    cv2.addWeighted(overlay, 0.78, canvas, 0.22, 0, canvas)
+    panel_width = min(int(310 * scale), max(1, card_left - 2 * margin))
+    panel_height = min(int(82 * scale), max(1, height - 2 * margin))
+    _filled_rounded_rect(
+        overlay, margin, margin, margin + panel_width, margin + panel_height,
+        max(4, int(10 * scale)), (16, 22, 30),
+    )
+    _filled_rounded_rect(
+        overlay, card_left, card_top, width - margin, card_top + card_height,
+        max(5, int(14 * scale)), (10, 50, 63),
+    )
+    cv2.addWeighted(overlay, 0.80, canvas, 0.20, 0, canvas)
+
+    accent = (56, 220, 255)
+    cv2.rectangle(
+        canvas, (card_left, card_top), (width - margin, card_top + card_height),
+        accent, max(1, int(2 * scale)), cv2.LINE_AA,
+    )
     for index, text in enumerate(lines):
-        cv2.putText(canvas, text, (18, 30 + index * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (240, 245, 250), 1, cv2.LINE_AA)
+        cv2.putText(
+            canvas, text,
+            (margin + int(10 * scale), margin + int((23 + index * 22) * scale)),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.55 * scale, (240, 245, 250),
+            max(1, int(1.5 * scale)), cv2.LINE_AA,
+        )
+
+    label = "SQUATS"
+    label_scale = 0.48 * scale
+    label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, label_scale, 1)[0]
+    label_x = card_left + max(2, (card_width - label_size[0]) // 2)
+    cv2.putText(
+        canvas, label, (label_x, card_top + int(25 * scale)),
+        cv2.FONT_HERSHEY_SIMPLEX, label_scale, (190, 225, 232),
+        max(1, int(scale)), cv2.LINE_AA,
+    )
+    count_text = str(int(state.get("count") or 0))
+    count_scale = 2.15 * scale
+    count_thickness = max(2, int(4 * scale))
+    count_size = cv2.getTextSize(
+        count_text, cv2.FONT_HERSHEY_DUPLEX, count_scale, count_thickness,
+    )[0]
+    count_x = card_left + max(2, (card_width - count_size[0]) // 2)
+    count_y = card_top + min(card_height - int(12 * scale), int(91 * scale))
+    cv2.putText(
+        canvas, count_text, (count_x, count_y), cv2.FONT_HERSHEY_DUPLEX,
+        count_scale, (255, 255, 255), count_thickness, cv2.LINE_AA,
+    )
     return canvas
 
 
