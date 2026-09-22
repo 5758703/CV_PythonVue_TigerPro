@@ -40,6 +40,39 @@ CASES = [
                       "必要时更换更匹配的数据域模型，避免单次 AI 结果直接用于临床决策。",
     },
     {
+        "id": "medical-abdomen-gallstones",
+        "category": "医学影像-腹部CT",
+        "title": "胆结石高分提示",
+        "scene": "RADAR findings 中 gallstones 分数较高",
+        "keywords": ["gallstones", "胆石", "胆囊", "腹部", "radar"],
+        "match_classes": ["gallstones"],
+        "risk_level": "中",
+        "suggestion": "胆结石相关分数偏高，建议结合临床症状与超声/MRCP 等检查，"
+                      "由腹部放射科医师复核 CT 影像后再决定处理方案。",
+    },
+    {
+        "id": "medical-abdomen-hepatic-steatosis",
+        "category": "医学影像-腹部CT",
+        "title": "肝脏脂肪变提示",
+        "scene": "hepatic_steatosis / hepatomegaly 分数升高",
+        "keywords": ["hepatic_steatosis", "hepatomegaly", "脂肪肝", "肝肿大", "腹部"],
+        "match_classes": ["hepatic_steatosis", "hepatomegaly"],
+        "risk_level": "中",
+        "suggestion": "肝脏相关 finding 升高，建议结合肝功能与代谢指标评估，"
+                      "并由专科医师综合判读，避免仅凭 AI 分数下结论。",
+    },
+    {
+        "id": "medical-abdomen-low-positive",
+        "category": "医学影像-腹部CT",
+        "title": "腹部 CT 阳性项较少",
+        "scene": "多数 finding 低于阈值或仅少量弱阳性",
+        "keywords": ["腹部", "radar", "低阳性", "筛查"],
+        "match_classes": [],
+        "risk_level": "低",
+        "suggestion": "当前阳性项较少，仍须结合临床问诊与原始影像质量判断；"
+                      "如症状明显，建议专科复查，勿因 AI 阴性结果延误诊疗。",
+    },
+    {
         "id": "rocket-landing-tracking",
         "category": "航天-火箭回收",
         "title": "火箭回收阶段目标跟踪",

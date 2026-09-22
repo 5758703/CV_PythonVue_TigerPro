@@ -20,6 +20,7 @@ const SUPPORTED_WORKBENCHES = new Set([
   'speech_asr',
   'speech_tts',
   'talking_head',
+  'abdominal_ct',
 ])
 
 export const SCENARIO_GROUP_ROUTE_KEYS = [
@@ -30,6 +31,7 @@ export const SCENARIO_GROUP_ROUTE_KEYS = [
   'plate-pose',
   'face-recognition',
   'medical-detection',
+  'abdominal-ct',
   'image-inpainting',
   'image-classification',
   'multimodal-grounding',
@@ -86,6 +88,7 @@ export const MODEL_TO_GROUP = {
   'insightface-buffalo-s': 'face-recognition',
   'opencv-yunet-sface': 'face-recognition',
   'brain-tumor-yolo-opennoor': 'medical-detection',
+  'radar-abdominal-ct': 'abdominal-ct',
   'inpainting-lama': 'image-inpainting',
   'mobilenet-v2': 'image-classification',
   'vit-base': 'image-classification',
@@ -170,6 +173,7 @@ const GROUP_ROUTE_META = [
   ['aiScenarioPlatePose', '车牌四点场景'],
   ['aiScenarioFaceRecognition', '人脸识别场景'],
   ['aiScenarioMedicalDetection', '脑部影像病灶检测场景'],
+  ['aiScenarioAbdominalCt', '腹部 CT 诊断场景'],
   ['aiScenarioImageInpainting', '图像修复场景'],
   ['aiScenarioImageClassification', '图像分类场景'],
   ['aiScenarioMultimodalGrounding', '多模态定位场景'],
@@ -449,6 +453,12 @@ function apiFields(scenario) {
     return [
       { name: 'file', required: true, description: '人物图片。' },
       { name: 'audio', required: true, description: '驱动音频。' },
+    ]
+  }
+  if (scenario.workbenchType === 'abdominal_ct') {
+    return [
+      { name: 'file', required: false, description: '可选 NIfTI（.nii / .nii.gz）或 JPG/PNG 等影像；演示引擎下可省略。真推理需 NIfTI。' },
+      { name: 'threshold', required: false, description: `0—1 阳性阈值，默认 ${scenario.defaults?.threshold ?? 0.5}。` },
     ]
   }
   return [
@@ -864,6 +874,20 @@ export function validateWorkbenchState(type, state = {}, inputPolicy = {}) {
   if (type === 'talking_head') {
     if (!state.file) errors.push('请选择人物图片。')
     if (!state.audio) errors.push('请选择驱动音频。')
+    return errors
+  }
+
+  if (type === 'abdominal_ct') {
+    if (state.file) {
+      const name = String(state.file.name || '').toLowerCase()
+      const allowed = ['.nii', '.nii.gz', '.jpg', '.jpeg', '.png', '.bmp', '.webp']
+      if (!allowed.some((ext) => name.endsWith(ext))) {
+        errors.push('仅支持 .nii / .nii.gz，或 .jpg / .jpeg / .png / .bmp / .webp 文件。')
+      }
+    }
+    if (!validUnitInterval(Number(state.threshold ?? 0.5))) {
+      errors.push('阳性阈值必须在 0 到 1 之间。')
+    }
     return errors
   }
 

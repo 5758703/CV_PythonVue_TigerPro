@@ -25,6 +25,7 @@ from .defect import defect_bp
 from .pipeline import pipeline_bp
 from .model_scenario import model_scenario_bp
 from .squat import squat_bp
+from .radar import radar_bp
 
 all_blueprints = [auth_bp, user_bp, role_bp, dept_bp, job_bp, menu_bp, ai_model_bp,
                   camera_bp, water_level_bp, training_bp, badminton_bp, face_bp, reid_bp, alert_bp,
@@ -32,6 +33,7 @@ all_blueprints = [auth_bp, user_bp, role_bp, dept_bp, job_bp, menu_bp, ai_model_
                   portal_bp, mtmc_bp, defect_bp, pipeline_bp]
 all_blueprints.append(model_scenario_bp)
 all_blueprints.append(squat_bp)
+all_blueprints.append(radar_bp)
 
 __all__ = ["all_blueprints", "auth_bp", "user_bp", "role_bp", "dept_bp", "job_bp", "menu_bp",
            "ai_model_bp", "camera_bp", "water_level_bp", "training_bp", "badminton_bp", "face_bp",
@@ -39,3 +41,4 @@ __all__ = ["all_blueprints", "auth_bp", "user_bp", "role_bp", "dept_bp", "job_bp
            "fall_bp", "openapi_v1_bp", "open_app_bp", "portal_bp", "mtmc_bp", "defect_bp", "pipeline_bp"]
 __all__.append("model_scenario_bp")
 __all__.append("squat_bp")
+__all__.append("radar_bp")

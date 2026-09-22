@@ -130,6 +130,10 @@ PHASE_TEN_KEYS = (
     'yolo26s',
 )
 
+PHASE_ELEVEN_KEYS = (
+    'radar-abdominal-ct',
+)
+
 WORKBENCH_TYPES = (
     "segmentation",
     "vehicle_reid",
@@ -152,11 +156,28 @@ WORKBENCH_TYPES = (
     "speech_asr",
     "speech_tts",
     "talking_head",
+    "abdominal_ct",
 )
 
 _IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+_NIFTI_EXTENSIONS = (".nii", ".nii.gz")
+_RADAR_UPLOAD_EXTENSIONS = _NIFTI_EXTENSIONS + _IMAGE_EXTENSIONS
 _MAX_UPLOAD_SIZE_MB = Config.SCENARIO_MAX_IMAGE_BYTES // (1024 * 1024)
 _IMAGE_INPUT = {"formats": list(_IMAGE_EXTENSIONS), "maxSizeMb": _MAX_UPLOAD_SIZE_MB}
+_NIFTI_INPUT = {
+    "formats": list(_NIFTI_EXTENSIONS),
+    "maxSizeMb": max(_MAX_UPLOAD_SIZE_MB, 256),
+    "optionalFile": True,
+}
+_RADAR_INPUT = {
+    "formats": list(_RADAR_UPLOAD_EXTENSIONS),
+    "maxSizeMb": max(_MAX_UPLOAD_SIZE_MB, 256),
+    "optionalFile": True,
+    "notes": (
+        "优先上传 NIfTI 体积（.nii / .nii.gz）；"
+        "JPG/PNG 等二维切片可用于演示引擎。"
+    ),
+}
 _IMAGE_INPUT["maxPixels"] = Config.SCENARIO_MAX_PIXELS
 _SEGMENT_INPUT = {
     **_IMAGE_INPUT,
@@ -2199,6 +2220,31 @@ _SCENARIOS = (
         "route": "/ai/scenarios/yolo26s",
         "apiPath": "/openapi/v1/model-scenarios/yolo26s/infer",
     },
+    {
+        "phase": 11,
+        "order": 91,
+        "modelKey": "radar-abdominal-ct",
+        "name": "RADAR 腹部 CT 诊断",
+        "category": "医学影像-腹部CT",
+        "ability": "abdominal-ct-diagnosis",
+        "adapter": "radar",
+        "published": True,
+        "apiEnabled": True,
+        "workbenchType": "abdominal_ct",
+        "project": "腹部增强 CT 多发现辅助筛查",
+        "description": (
+            "阿里达摩院 RADAR：腹部 CT 多 finding 阳性分数。"
+            "首期无权重时走演示引擎，可联动 DeepSeek 生成中文辅助报告。"
+        ),
+        "workflow": "上传 NIfTI 或 JPG/PNG 切片（或演示空跑）→ 输出 findings 分数 → 可选生成辅助报告。",
+        "outputs": "各 finding 阳性分数、阈值判定与辅助报告；不替代医生诊断。",
+        "metrics": "外部集 AUC、阳性阈值校准与人工复核一致率。",
+        "risks": "仅作科研/辅助；需医疗合规与数据脱敏；真推理需高端 GPU 与官方权重及 NIfTI 体积。",
+        "defaults": {"threshold": 0.5},
+        "input": _RADAR_INPUT,
+        "route": "/ai/scenarios/abdominal-ct",
+        "apiPath": "/openapi/v1/model-scenarios/radar-abdominal-ct/infer",
+    },
 )
 
 
@@ -2338,6 +2384,22 @@ _SCENARIO_GROUPS = (
         "risks": "仅作科研/辅助，不得替代医生诊断；需医疗合规与数据脱敏。",
         "modelKeys": ("brain-tumor-yolo-opennoor",),
         "route": "/ai/scenarios/medical-detection",
+    },
+    {
+        "groupKey": "abdominal-ct",
+        "order": 7.5,
+        "name": "腹部 CT 诊断（RADAR）",
+        "category": "医学影像-腹部CT",
+        "ability": "abdominal-ct-diagnosis",
+        "workbenchType": "abdominal_ct",
+        "project": "腹部增强 CT 多发现辅助筛查",
+        "description": "RADAR 输出腹部 CT findings 阳性分数，可联动辅助报告；首期支持演示引擎。",
+        "workflow": "上传 NIfTI / JPG / PNG 或演示空跑 → findings 列表 → 可选 DeepSeek 辅助报告。",
+        "outputs": "finding 分数、阳性判定与辅助报告；供专业人员复核。",
+        "metrics": "外部集 AUC 与人工复核一致率。",
+        "risks": "仅作辅助，不得替代医生诊断；真推理需高端 GPU 与 NIfTI。",
+        "modelKeys": ("radar-abdominal-ct",),
+        "route": "/ai/scenarios/abdominal-ct",
     },
     {
         "groupKey": "image-inpainting",

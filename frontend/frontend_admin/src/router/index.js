@@ -64,6 +64,7 @@ const routes = [
       { path: 'ai/generate', name: 'aiGenerate', component: () => import('../views/ai/generate/index.vue'), meta: { title: '文本生成' } },
       { path: 'ai/ner', name: 'aiNer', component: () => import('../views/ai/ner/index.vue'), meta: { title: '实体识别' } },
       { path: 'ai/qa', name: 'aiQa', component: () => import('../views/ai/qa/index.vue'), meta: { title: '智能问答' } },
+      { path: 'ai/radar', name: 'aiRadar', component: () => import('../views/ai/radar/index.vue'), meta: { title: '腹部CT诊断' } },
       { path: 'ai/asr', name: 'aiAsr', component: () => import('../views/ai/asr/index.vue'), meta: { title: '语音识别' } },
       { path: 'ai/talker', name: 'aiTalker', component: () => import('../views/ai/talker/index.vue'), meta: { title: '数字人合成' } },
       { path: 'ai/tts', name: 'aiTts', component: () => import('../views/ai/tts/index.vue'), meta: { title: '文本转语音' } },

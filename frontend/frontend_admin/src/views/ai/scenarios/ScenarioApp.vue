@@ -212,6 +212,7 @@ import SquatCountingWorkbench from './workbenches/SquatCountingWorkbench.vue'
 import TalkingHeadWorkbench from './workbenches/TalkingHeadWorkbench.vue'
 import TextNlpWorkbench from './workbenches/TextNlpWorkbench.vue'
 import VehicleReidWorkbench from './workbenches/VehicleReidWorkbench.vue'
+import AbdominalCtWorkbench from './workbenches/AbdominalCtWorkbench.vue'
 import {
   buildScenarioApiDocumentation,
   isLatestScenarioRequest,
@@ -271,6 +272,7 @@ const workbenchComponent = computed(() => ({
   speech_asr: SpeechAsrWorkbench,
   speech_tts: SpeechTtsWorkbench,
   talking_head: TalkingHeadWorkbench,
+  abdominal_ct: AbdominalCtWorkbench,
 })[workbench.value] || null)
 
 const ABILITY_LABELS = {
@@ -295,6 +297,7 @@ const ABILITY_LABELS = {
   speech_asr: '语音识别',
   speech_tts: '语音合成',
   talking_head: '数字人',
+  abdominal_ct: '腹部 CT',
 }
 
 const abilityLabel = computed(() => ABILITY_LABELS[workbench.value] || '未知能力')

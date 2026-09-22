@@ -119,6 +119,18 @@ class Config:
     except ValueError:
         YOLO_OPENVINO_IMGSZ = 640
 
+    # RADAR 腹部 CT（damo-radar）：auto 时权重+官方代码就绪则 real，否则 mock
+    RADAR_ENGINE = (os.getenv("RADAR_ENGINE") or "auto").strip().lower()
+    RADAR_CKPT_DIR = os.getenv("RADAR_CKPT_DIR") or os.path.join(MODEL_FOLDER, "radar")
+    RADAR_VENDOR_DIR = os.getenv("RADAR_VENDOR_DIR") or os.path.join(
+        MODEL_FOLDER, "third_party", "damo-radar"
+    )
+    RADAR_DEVICE = (os.getenv("RADAR_DEVICE") or "auto").strip().lower()
+    try:
+        RADAR_POSITIVE_THRESHOLD = float(os.getenv("RADAR_POSITIVE_THRESHOLD") or "0.5")
+    except ValueError:
+        RADAR_POSITIVE_THRESHOLD = 0.5
+
     # DeepSeek（检测结果 AI 分析报告）：OpenAI 兼容接口
     DEEPSEEK_API_KEY = os.getenv(
         "DEEPSEEK_API_KEY", ""

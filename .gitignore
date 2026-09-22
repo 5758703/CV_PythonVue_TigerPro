@@ -25,6 +25,17 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# ===== 本地代理/临时目录（绝不推送远程；远程仅保留截图级根目录结构）=====
+.superpowers/
+.superpowers/**
+docs/superpowers/
+docs/superpowers/**
+.tmp_*/
+.tmp_verify_phase/
+.tmp_verify_phase/**
+backend/.tmp_*/
+backend/.tmp_pytest_*/
+
 # ===== 模型权重 / 上传媒体 / 推理输出（大文件，不提交）=====
 backend/uploads/
 mobileclip2_b.ts
@@ -42,11 +53,11 @@ backend/debug_*.jpg
 # ===== 第三方推理代码（vendored，体积大，部署时各自 git clone）=====
 third_party/
 
-# ===== 设计/计划文档（本地保留，不推送远程）=====
+# ===== 设计/计划文档（本地保留，不推送远程；远程仅 docs/community/）=====
 docs/*
 !docs/community/
 !docs/community/**
-# docs/articles/ 本地文章/排版稿，不推送远程
+# docs/articles/、docs/superpowers/ 等本地稿，不推送远程
 
 # ===== 公众号封面/排版稿（根目录设计产物，不推送远程）=====
 AI解放双手*

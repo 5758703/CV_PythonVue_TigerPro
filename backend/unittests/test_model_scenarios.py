@@ -9,6 +9,7 @@ from services.model_scenarios import (
     PHASE_EIGHT_KEYS,
     PHASE_NINE_KEYS,
     PHASE_TEN_KEYS,
+    PHASE_ELEVEN_KEYS,
     WORKBENCH_TYPES,
     get_scenario,
     list_scenarios,
@@ -136,6 +137,10 @@ EXPECTED_PHASE_TEN_KEYS = (
     'yolo26s',
 )
 
+EXPECTED_PHASE_ELEVEN_KEYS = (
+    'radar-abdominal-ct',
+)
+
 _ZERO_LATER_WORKBENCHES = {
     "image_inpainting": 0,
     "image_classification": 0,
@@ -151,6 +156,7 @@ _ZERO_LATER_WORKBENCHES = {
     "speech_asr": 0,
     "speech_tts": 0,
     "talking_head": 0,
+    "abdominal_ct": 0,
 }
 
 
@@ -196,11 +202,19 @@ def test_phase_four_through_ten_scenarios_are_unique_and_in_document_order():
         assert len(scenarios) == len(set(item["modelKey"] for item in scenarios)) == 9
 
 
-def test_full_catalog_covers_ninety_models():
+def test_full_catalog_covers_ninety_one_models():
     scenarios = list_scenarios()
-    assert len(scenarios) == 90
-    assert len({item["modelKey"] for item in scenarios}) == 90
-    assert [item["order"] for item in scenarios] == list(range(1, 91))
+    assert len(scenarios) == 91
+    assert len({item["modelKey"] for item in scenarios}) == 91
+    assert [item["order"] for item in scenarios] == list(range(1, 92))
+
+
+def test_phase_eleven_radar_scenario():
+    scenarios = list_scenarios(phase=11)
+    assert PHASE_ELEVEN_KEYS == EXPECTED_PHASE_ELEVEN_KEYS
+    assert tuple(item["modelKey"] for item in scenarios) == EXPECTED_PHASE_ELEVEN_KEYS
+    assert scenarios[0]["workbenchType"] == "abdominal_ct"
+    assert scenarios[0]["ability"] == "abdominal-ct-diagnosis"
 
 def test_phase_one_workbench_distribution_matches_supported_capabilities():
     scenarios = list_scenarios(phase=1)
@@ -266,6 +280,7 @@ def test_phase_three_workbench_distribution_matches_supported_capabilities():
         "speech_asr": 0,
         "speech_tts": 0,
         "talking_head": 0,
+        "abdominal_ct": 0,
     }
 
 
@@ -394,7 +409,7 @@ def test_registry_exposes_the_callable_open_api_inference_paths():
 
 def test_image_inputs_use_the_independent_scenario_resource_policy():
     max_size_mb = Config.SCENARIO_MAX_IMAGE_BYTES // (1024 * 1024)
-    non_image = {"text_nlp", "speech_asr", "speech_tts", "talking_head"}
+    non_image = {"text_nlp", "speech_asr", "speech_tts", "talking_head", "abdominal_ct"}
 
     for scenario in list_scenarios():
         if scenario["workbenchType"] in non_image:
@@ -443,7 +458,7 @@ def test_same_task_models_are_merged_into_scenario_groups():
 
     groups = list_scenario_groups()
     assert SCENARIO_GROUP_KEYS == tuple(item["groupKey"] for item in groups)
-    assert len(groups) == 40
+    assert len(groups) == 41
 
     plate = next(item for item in groups if item["groupKey"] == "plate-detection")
     assert len(plate["models"]) == 8
@@ -480,3 +495,4 @@ def test_same_task_models_are_merged_into_scenario_groups():
     assert resolve_group_key("rtmo-s") == "body-pose"
     assert resolve_group_key("omdet-turbo-swin-tiny") == "open-vocab-detection"
     assert resolve_group_key("paraformer-zh") == "speech-recognition"
+    assert resolve_group_key("radar-abdominal-ct") == "abdominal-ct"

@@ -117,6 +117,7 @@ def _regroup_ai_menus():
         (278, 230, "/ai/table"),
         (286, 230, "/ai/inpaint"),
         (296, 230, "/ai/defect"),
+        (310, 230, "/ai/radar"),
         # 280/282 已并入目标追踪场景
         (280, 230, "/ai/track"),
         (282, 230, "/ai/track"),
@@ -595,6 +596,11 @@ def seed_ai_menus():
                     path="/ai/defect", component="ai/defect/index", icon="DocumentChecked",
                     order=17, grant_common=True)
     _ensure_ai_menu(2961, 296, "缺陷诊断查询", "F", "ai:defect:query", grant_common=True)
+    # RADAR 腹部 CT 诊断（独立页 + 场景工作台共用后端）
+    _ensure_ai_menu(310, 230, "腹部CT诊断", "C", "ai:model:query",
+                    path="/ai/radar", component="ai/radar/index", icon="FirstAidKit",
+                    order=18, grant_common=True)
+    _ensure_ai_menu(3101, 310, "腹部CT查询", "F", "ai:model:query", grant_common=True)
     # EVA 流水编排根目录 + 子菜单（先建目录，再挂叶子；老库由 _regroup_eva_pipeline_menus 迁移）
     _ensure_ai_menu(297, 0, "EVA流水编排", "M", None,
                     path="/eva", icon="Share", order=2, grant_common=True)
@@ -1247,6 +1253,18 @@ def seed_ai_models():
         source_url="https://huggingface.co/OpenNoorIlm/Noor-Ul-Ilm-Brain-Tumor-Yolo-1.0-24-06-2026",
         file_path="models/OpenNoorIlmNoor-Ul-Ilm-Brain-Tumor-Yolo",
         description="脑肿瘤医学影像检测模型（best.pt / best.onnx），用于图片检测并生成 DeepSeek 诊断辅助报告。", status="0",
+    ))
+    created |= _ensure_ai_model("radar-abdominal-ct", dict(
+        model_name="RADAR 腹部 CT 诊断", category="医学影像-腹部CT",
+        task="abdominal-ct-diagnosis", library="radar", version="pretrain",
+        source_url="https://github.com/alibaba-damo-academy/damo-radar",
+        file_path="models/radar",
+        description=(
+            "阿里达摩院 RADAR：腹部增强 CT 多 finding 辅助筛查。"
+            "无 checkpoint 时使用演示引擎；有权重后可切换真推理。"
+            "辅助报告可联动 DeepSeek。"
+        ),
+        status="0",
     ))
     created |= _ensure_ai_model("rocket-detect-nasaspaceflight", dict(
         model_name="火箭回收跟踪检测（NASASpaceflight）", category="航天-火箭回收",

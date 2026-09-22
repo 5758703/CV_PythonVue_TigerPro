@@ -226,7 +226,8 @@ def _resolve_model(scenario: dict, *, precision: str | None = None) -> tuple[AiM
     if not contract.api_ready:
         raise ScenarioInputError(contract.reason or "model scenario is unavailable")
     path = contract.weight_path
-    if path is None and str(model.library or "").strip().lower() != "qwen-vl-api":
+    library = str(model.library or "").strip().lower()
+    if path is None and library not in ("qwen-vl-api", "radar"):
         raise ScenarioInputError(contract.reason or "model scenario is unavailable")
     if path is None:
         path = Path(".")
@@ -1148,6 +1149,32 @@ def _document_ocr(model: AiModel, path: Path, raw: bytes, form, scenario: dict) 
         raise ScenarioInputError(str(exc) or "document OCR failed") from exc
 
 
+def _abdominal_ct(files, form, scenario: dict) -> dict:
+    from services import radar as radar_svc
+
+    upload = files.get("file")
+    filename = upload.filename if upload and getattr(upload, "filename", None) else None
+    data = upload.read() if upload and filename else None
+    threshold = form.get("threshold")
+    thr = None
+    if threshold not in (None, ""):
+        try:
+            thr = float(threshold)
+        except (TypeError, ValueError) as exc:
+            raise ScenarioInputError("threshold must be a number between 0 and 1") from exc
+    forced = (form.get("engine") or "").strip() or None
+    default_thr = float(scenario["defaults"].get("threshold", 0.5))
+    try:
+        return radar_svc.infer(
+            filename=filename,
+            data=data,
+            threshold=thr if thr is not None else default_thr,
+            engine=forced,
+        )
+    except radar_svc.RadarError as exc:
+        raise ScenarioInputError(str(exc)) from exc
+
+
 _TEXT_ABILITIES = frozenset((
     "token-classification",
     "text-classification",
@@ -1200,6 +1227,7 @@ def run_scenario(model_key: str, files, form) -> dict:
         "speech-recognition": frozenset(("language",)),
         "text-to-speech": frozenset(("text", "speaker")),
         "talking-head": frozenset(),
+        "abdominal-ct-diagnosis": frozenset(("threshold", "engine")),
     }.get(ability, frozenset())
     unknown_fields = sorted(set(form.keys()) - allowed_fields)
     if unknown_fields:
@@ -1212,13 +1240,17 @@ def run_scenario(model_key: str, files, form) -> dict:
         allowed_files = frozenset()
     elif ability == "talking-head":
         allowed_files = frozenset(("file", "image", "audio"))
+    elif ability == "abdominal-ct-diagnosis":
+        allowed_files = frozenset(("file",))
     else:
         allowed_files = frozenset(("file",))
     unknown_files = sorted(set(files.keys()) - allowed_files)
     if unknown_files:
         raise ScenarioInputError(f"unknown file field: {unknown_files[0]}")
     started = perf_counter()
-    if ability == "vehicle-reid":
+    if ability == "abdominal-ct-diagnosis":
+        result = _abdominal_ct(files, form, scenario)
+    elif ability == "vehicle-reid":
         result = _vehicle_reid(path, files, form, scenario)
     elif ability == "person-reid":
         result = _person_reid(path, files, form, scenario)

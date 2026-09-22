@@ -18,7 +18,18 @@ def _is_medical_scene(model_name, model_category, classes):
         str(model_category or "").lower(),
         " ".join(str(c or "").lower() for c in (classes or [])),
     ])
-    keys = ("脑肿瘤", "医学影像", "brain", "tumor", "glioma", "meningioma", "pituitary")
+    keys = ("脑肿瘤", "医学影像", "brain", "tumor", "glioma", "meningioma", "pituitary",
+            "radar", "腹部", "abdominal", "gallstones", "hepatomegaly")
+    return any(k in text for k in keys)
+
+
+def _is_abdominal_ct_scene(model_name, model_category, classes):
+    text = " ".join([
+        str(model_name or "").lower(),
+        str(model_category or "").lower(),
+        " ".join(str(c or "").lower() for c in (classes or [])),
+    ])
+    keys = ("radar", "腹部", "abdominal", "腹部ct", "腹部 ct")
     return any(k in text for k in keys)
 
 
@@ -56,8 +67,18 @@ def _aggregate(detections):
 
 
 def _build_prompt(model_name, model_category, stats, keywords, cases, conf,
-                  medical=False, rocket=False):
-    if medical:
+                  medical=False, rocket=False, abdominal=False):
+    if abdominal:
+        system = (
+            "你是腹部放射学方向的医学影像分析助手，面向增强腹部 CT 的多 finding 筛查结果。"
+            "你只能基于给定阳性分数与参考案例生成辅助分析，严禁给出确诊结论。"
+            "请使用审慎、医疗合规语气，明确提示“AI 结果仅供辅助，需医生最终判读”。"
+            "只返回 JSON，字段固定为 summary(字符串)、"
+            "risk(对象:{level:\"高|中|低\", desc:字符串})、"
+            "findings(数组:[{className, note}])、"
+            "suggestions(数组:[{title, detail}])、conclusion(字符串)。"
+        )
+    elif medical:
         system = (
             "你是神经影像方向的医学影像分析助手。"
             "你只能基于给定检测结果与参考案例生成辅助分析，严禁给出确诊结论。"
@@ -103,7 +124,7 @@ def _build_prompt(model_name, model_category, stats, keywords, cases, conf,
     return system, user
 
 
-def _fallback(stats, cases, medical=False, rocket=False):
+def _fallback(stats, cases, medical=False, rocket=False, abdominal=False):
     """DeepSeek 不可用时，用案例库内容组装报告核心字段。"""
     level = "低"
     for c in cases:
@@ -113,7 +134,10 @@ def _fallback(stats, cases, medical=False, rocket=False):
     findings = [{"className": b["className"],
                  "note": f"检出 {b['count']} 个，平均置信度 {b['avgConf']:.0%}"}
                 for b in stats["byClass"]]
-    if medical:
+    if abdominal:
+        summary = (f"本次共筛出 {stats['total']} 项阳性/高分 finding，覆盖 {len(stats['byClass'])} 类。"
+                   "AI 服务暂不可用，以下结论基于内置腹部 CT 案例库生成，仅作辅助参考。")
+    elif medical:
         summary = (f"本次共检出 {stats['total']} 个疑似目标，覆盖 {len(stats['byClass'])} 个类别。"
                    "AI 服务暂不可用，以下结论基于内置医学案例库生成，仅作辅助参考。")
     elif rocket:
@@ -135,7 +159,8 @@ def build_report(model_name, model_category, detections, width, height,
                  conf, image_name):
     stats = _aggregate(detections)
     classes = [b["className"] for b in stats["byClass"]]
-    medical_scene = _is_medical_scene(model_name, model_category, classes)
+    abdominal_scene = _is_abdominal_ct_scene(model_name, model_category, classes)
+    medical_scene = _is_medical_scene(model_name, model_category, classes) and not abdominal_scene
     rocket_scene = _is_rocket_scene(model_name, model_category, classes)
     keywords = case_library.extract_keywords(detections, model_category)
     cases = case_library.search_cases(keywords, classes)
@@ -145,7 +170,8 @@ def build_report(model_name, model_category, detections, width, height,
     try:
         system, user = _build_prompt(model_name, model_category, stats,
                                      keywords, cases, conf,
-                                     medical=medical_scene, rocket=rocket_scene)
+                                     medical=medical_scene, rocket=rocket_scene,
+                                     abdominal=abdominal_scene)
         core = deepseek.chat_json(system, user)
         # 校验关键字段，缺失则降级
         if not isinstance(core, dict) or "summary" not in core:
@@ -153,11 +179,12 @@ def build_report(model_name, model_category, detections, width, height,
     except deepseek.DeepSeekError as e:
         ai_available = False
         warning = f"AI 分析服务暂不可用（{e}），已使用内置案例库生成兜底建议。"
-        core = _fallback(stats, cases, medical=medical_scene, rocket=rocket_scene)
+        core = _fallback(stats, cases, medical=medical_scene, rocket=rocket_scene,
+                         abdominal=abdominal_scene)
 
     disclaimer = None
-    if medical_scene:
-        disclaimer = ("医学免责声明：本报告由 AI 基于图像检测结果自动生成，仅用于辅助分析，"
+    if abdominal_scene or medical_scene:
+        disclaimer = ("医学免责声明：本报告由 AI 基于影像分析结果自动生成，仅用于辅助分析，"
                       "不能替代医生诊断、病理结果或临床决策。请以执业医师最终意见为准。")
     elif rocket_scene:
         disclaimer = ("航天视觉辅助声明：本报告基于目标检测框统计生成，"

@@ -381,6 +381,13 @@ _CONTRACTS = {
         "extensions": frozenset(),
         "runtime": (),
     },
+    "radar-abdominal-ct": {
+        "task": "abdominal-ct-diagnosis",
+        "library": "radar",
+        "adapter": "radar",
+        "extensions": frozenset((".pth", ".pt", ".bin", ".safetensors", ".json")),
+        "runtime": (),
+    },
     "omdet-turbo-swin-tiny": {
         "task": "object-detection",
         "library": "transformers",
@@ -896,6 +903,16 @@ def evaluate_scenario_contract(
                 weights_present, False, False, "runtime library is unavailable", configured_path,
             )
         return ScenarioContractResult(True, True, True, None, configured_path)
+
+    if contract["library"] == "radar":
+        # Mock-first: API ready without checkpoint; demo engine always usable.
+        return ScenarioContractResult(
+            True,
+            True,
+            True,
+            None,
+            configured_path if weights_present else None,
+        )
 
     if not weights_present:
         return ScenarioContractResult(False, runtime_available, False, "model weights are missing")

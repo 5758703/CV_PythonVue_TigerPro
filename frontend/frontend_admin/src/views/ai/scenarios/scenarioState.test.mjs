@@ -48,6 +48,7 @@ test('resolves each supported workbench type', () => {
   assert.equal(resolveWorkbench('speech_asr'), 'speech_asr')
   assert.equal(resolveWorkbench('speech_tts'), 'speech_tts')
   assert.equal(resolveWorkbench('talking_head'), 'talking_head')
+  assert.equal(resolveWorkbench('abdominal_ct'), 'abdominal_ct')
 })
 
 test('validates squat thresholds and confirmation parameters', () => {
@@ -184,9 +185,9 @@ test('serializes a ReID query and repeated gallery fields', () => {
   assert.equal(form.get('threshold'), '0.7')
 })
 
-test('exposes exactly the forty scenario group route keys', () => {
-  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 40)
-  assert.deepEqual(SCENARIO_GROUP_ROUTE_KEYS.slice(0, 12), [
+test('exposes exactly the forty-one scenario group route keys', () => {
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 41)
+  assert.deepEqual(SCENARIO_GROUP_ROUTE_KEYS.slice(0, 13), [
     'interactive-segmentation',
     'vehicle-reid',
     'plate-detection',
@@ -194,6 +195,7 @@ test('exposes exactly the forty scenario group route keys', () => {
     'plate-pose',
     'face-recognition',
     'medical-detection',
+    'abdominal-ct',
     'image-inpainting',
     'image-classification',
     'multimodal-grounding',
@@ -203,18 +205,20 @@ test('exposes exactly the forty scenario group route keys', () => {
   assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('person-reid'))
   assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('text-to-speech'))
   assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('talking-head'))
+  assert.ok(SCENARIO_GROUP_ROUTE_KEYS.includes('abdominal-ct'))
   assert.equal(SCENARIO_GROUP_ROUTE_KEYS.at(-1), 'talking-head')
 })
 
-test('maps all ninety legacy model keys onto the forty groups', () => {
-  assert.equal(SCENARIO_MODEL_COUNT, 90)
-  assert.equal(LEGACY_MODEL_ROUTE_KEYS.length, 90)
+test('maps all ninety-one legacy model keys onto the forty-one groups', () => {
+  assert.equal(SCENARIO_MODEL_COUNT, 91)
+  assert.equal(LEGACY_MODEL_ROUTE_KEYS.length, 91)
   assert.equal(resolveGroupKey('interactive-segmentation'), 'interactive-segmentation')
   assert.equal(resolveGroupKey('efficient-sam'), 'interactive-segmentation')
   assert.equal(resolveGroupKey('mobile-sam'), 'interactive-segmentation')
   assert.equal(resolveGroupKey('clip-reid-vehicle'), 'vehicle-reid')
   assert.equal(resolveGroupKey('yolo26n-obb'), 'obb-detection')
   assert.equal(resolveGroupKey('brain-tumor-yolo-opennoor'), 'medical-detection')
+  assert.equal(resolveGroupKey('radar-abdominal-ct'), 'abdominal-ct')
   assert.equal(resolveGroupKey('inpainting-lama'), 'image-inpainting')
   assert.equal(resolveGroupKey('mobilenet-v2'), 'image-classification')
   assert.equal(resolveGroupKey('vlm-fo1-3b'), 'multimodal-grounding')
@@ -229,15 +233,15 @@ test('maps all ninety legacy model keys onto the forty groups', () => {
   assert.equal(resolveGroupKey('linly-talker'), 'talking-head')
 })
 
-test('builds forty group router records and ninety legacy redirects', () => {
+test('builds forty-one group router records and ninety-one legacy redirects', () => {
   const component = () => Promise.resolve('ScenarioApp')
   assert.equal(typeof scenarioState.createScenarioRouteRecords, 'function')
   assert.equal(typeof scenarioState.createLegacyScenarioRedirectRecords, 'function')
   const records = scenarioState.createScenarioRouteRecords(component)
   const redirects = scenarioState.createLegacyScenarioRedirectRecords()
 
-  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 40)
-  assert.equal(records.length, 40)
+  assert.equal(SCENARIO_GROUP_ROUTE_KEYS.length, 41)
+  assert.equal(records.length, 41)
   assert.deepEqual(records.map((record) => record.path), SCENARIO_GROUP_ROUTE_KEYS.map(
     (key) => `ai/scenarios/${key}`,
   ))
@@ -248,7 +252,7 @@ test('builds forty group router records and ninety legacy redirects', () => {
     assert.equal(record.path, `ai/scenarios/${record.meta.groupKey}`)
   }
 
-  assert.equal(redirects.length, 90)
+  assert.equal(redirects.length, 91)
   const efficientRedirect = redirects.find((item) => item.path === 'ai/scenarios/efficient-sam')
   assert.equal(typeof efficientRedirect.redirect, 'function')
   assert.deepEqual(efficientRedirect.redirect({ query: {} }), {
