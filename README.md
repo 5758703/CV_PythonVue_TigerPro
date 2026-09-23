@@ -345,6 +345,12 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 <img width="1920" height="869" alt="a894ca39be5586d2f9bcc7a587404d4d" src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" />
 
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=5758703/CV_PythonVue_TigerPro&type=Date)](https://star-history.com/#5758703/CV_PythonVue_TigerPro&Date)
+
+
+
 
 开源不易，接收赞赏
 
