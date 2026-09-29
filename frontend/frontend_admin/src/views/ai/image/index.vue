@@ -84,12 +84,13 @@
               :closable="false"
               show-icon
               class="alert-tip-inline"
-              title="总开关已开：仅「检测告警」页中已启用的规则会评估；单项开关请到检测告警页配置。越线规则需轨迹 ID，图片检测通常不触发。"
+              title="总开关已开：仅「告警中心」中已启用的规则会评估；单项开关请到告警中心配置。越线规则需轨迹 ID，图片检测通常不触发。"
             />
             <el-button :icon="Refresh" @click="clearAll" style="margin-left: 8px">清空</el-button>
           </div>
         </el-form-item>
       </el-form>
+      <SelectedModelGuide :model="selectedModel" page="image" />
       <div v-if="imageInfo" class="picked">
         <el-icon><Picture /></el-icon>
         <span class="pk-name">{{ file?.name }}</span>
@@ -372,6 +373,7 @@ import {
   ensureModelInList,
   categoriesFromModels,
 } from '../../../utils/alertModels'
+import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 import jsPDF from 'jspdf'
 import html2canvas from 'html2canvas'
 import { syncContainCanvas, canvasOffsetToImageXY } from '../../../utils/containCanvas'

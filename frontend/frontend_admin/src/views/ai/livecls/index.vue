@@ -43,6 +43,7 @@
           <el-button v-else type="danger" :icon="SwitchButton" @click="stop">停止</el-button>
         </el-form-item>
       </el-form>
+      <SelectedModelGuide :model="selectedModel" page="livecls" />
       <el-alert
         v-if="!modelOptions.length"
         type="warning"
@@ -115,6 +116,7 @@ import { ElMessage } from 'element-plus'
 import { VideoCamera, SwitchButton } from '@element-plus/icons-vue'
 import { modelApi } from '../../../api/ai'
 import { loadImageClassificationModels, pickPreferredClsModel } from '../../../utils/clsModels'
+import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 
 const modelOptions = ref([])
 const modelId = ref(null)

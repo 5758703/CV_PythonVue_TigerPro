@@ -95,11 +95,12 @@
               :closable="false"
               show-icon
               class="alert-tip-inline"
-              title="总开关已开：仅「检测告警」页中已启用的规则会生效。单项开关请到检测告警页配置。"
+              title="总开关已开：仅「告警中心」中已启用的规则会生效。单项开关请到告警中心配置。"
             />
           </div>
         </el-form-item>
       </el-form>
+      <SelectedModelGuide :model="selectedModel" page="camera" />
       <el-alert
         v-if="!allModels.length"
         type="warning"
@@ -177,6 +178,7 @@ import {
   ensureModelInList,
   categoriesFromModels,
 } from '../../../utils/alertModels'
+import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 
 const ALERT_SOURCE_KEY = 'camera-live'
 const SOURCE_TYPE_LABEL = { rtsp: 'RTSP', file: '文件', device: '设备' }
@@ -205,6 +207,9 @@ const filteredModels = computed(() =>
     category: category.value,
   }),
 )
+const selectedModel = computed(() => filteredModels.value.find((m) => m.id === modelId.value)
+  || allModels.value.find((m) => m.id === modelId.value)
+  || null)
 const syncModelSelection = () => {
   modelId.value = ensureModelInList(modelId.value, filteredModels.value)
 }

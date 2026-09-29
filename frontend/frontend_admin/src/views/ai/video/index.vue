@@ -35,12 +35,13 @@
               :closable="false"
               show-icon
               class="alert-tip-inline"
-              title="总开关已开：仅「检测告警」页中已启用的规则会叠加到本视频；单项开关请到检测告警页配置。"
+              title="总开关已开：仅「告警中心」中已启用的规则会叠加到本视频；单项开关请到告警中心配置。"
             />
             <el-button :icon="Refresh" @click="clearAll" style="margin-left: 8px">清空</el-button>
           </div>
         </el-form-item>
       </el-form>
+      <SelectedModelGuide :model="selectedModel" page="video" />
 
       <div v-if="fileName" class="picked">
         <el-icon><VideoCamera /></el-icon>
@@ -155,6 +156,7 @@ import { ElMessage } from 'element-plus'
 import { UploadFilled, VideoPlay, VideoCamera, Refresh, Download, RefreshLeft, RefreshRight } from '@element-plus/icons-vue'
 
 import { modelApi } from '../../../api/ai'
+import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 import {
   filterWorkbenchModels,
   ensureModelInList,

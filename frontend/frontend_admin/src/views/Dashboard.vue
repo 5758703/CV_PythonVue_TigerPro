@@ -157,7 +157,7 @@ const heroTags = [
   { label: "车辆追踪 · 车牌测速", color: "#2f54eb" },
   { label: "人员离岗 · 运动补偿", color: "#c2255c" },
   { label: "人脸识别 1:N", color: "#36cfc9" },
-  { label: "检测告警 · 监控墙", color: "#fa541c" },
+  { label: "告警中心 · 监控墙", color: "#fa541c" },
   { label: "图像修复 LaMa", color: "#722ed1" },
   { label: "EfficientSAM 分割", color: "#2f54eb" },
   { label: "表格识别", color: "#a0672c" },
@@ -264,7 +264,7 @@ const sceneCards = [
     to: { path: "/ai/reid" },
   },
   {
-    title: "检测告警",
+    title: "告警中心",
     desc: "烟火 / 聚集 / PPE / 越线 / 跌倒 / 吸烟规则 · 事件与叠加",
     to: { path: "/ai/alert" },
   },

@@ -140,7 +140,7 @@
               :closable="false"
               show-icon
               class="alert-tip-inline"
-              title="总开关已开：仅「检测告警」页已启用的「陌生人脸」规则会生效。单项开关请到检测告警页配置。"
+              title="总开关已开：仅「告警中心」已启用的「陌生人脸」规则会生效。单项开关请到告警中心配置。"
             />
           </el-form-item>
         </el-form>

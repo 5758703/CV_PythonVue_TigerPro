@@ -122,7 +122,7 @@ def _regroup_ai_menus():
         (250, 230, "/ai/water"), (270, 230, "/ai/badminton"), (272, 230, "/ai/segment"),
         (274, 230, "/ai/face"),
         (288, 230, "/ai/reid"),
-        (276, 230, "/ai/alert"),
+        # 276 告警中心已提升为根级菜单，见 _promote_alert_center_menu
         (278, 230, "/ai/table"),
         (286, 230, "/ai/inpaint"),
         (296, 230, "/ai/defect"),
@@ -231,7 +231,7 @@ def _regroup_model_menus():
         m260.order_num = 3
         changed = True
 
-    # 根级排序：模型管理(0) → AI智能识别(1) → EVA流水编排(2) → 视频监控(3) → 系统管理(4)
+    # 根级排序：模型管理(0) → AI智能识别(1) → EVA流水编排(2) → 视频监控(3) → 告警中心(4) → 系统管理(5)
     m200 = Menu.query.get(200)
     if m200 and m200.order_num != 1:
         m200.order_num = 1
@@ -245,9 +245,13 @@ def _regroup_model_menus():
     if m245 and m245.order_num != 3:
         m245.order_num = 3
         changed = True
+    m276 = Menu.query.get(276)
+    if m276 and m276.order_num != 4:
+        m276.order_num = 4
+        changed = True
     m1 = Menu.query.get(1)
-    if m1 and m1.order_num != 4:
-        m1.order_num = 4
+    if m1 and m1.order_num != 5:
+        m1.order_num = 5
         changed = True
 
     if changed:
@@ -257,7 +261,7 @@ def _regroup_model_menus():
 def _regroup_eva_pipeline_menus():
     """将流水线 / 指标提升为根级「EVA流水编排」目录（幂等）。
 
-    顺序：模型管理 → AI智能识别 → EVA流水编排 → 视频监控 → 系统管理。
+    顺序：模型管理 → AI智能识别 → EVA流水编排 → 视频监控 → 告警中心 → 系统管理。
     """
     changed = False
     if not Menu.query.get(297):
@@ -345,7 +349,7 @@ def _patch_video_surveillance_menu():
         if m245.menu_name != "视频监控":
             m245.menu_name = "视频监控"
             changed = True
-        # 根级顺序：模型管理(0) / AI(1) / EVA(2) / 视频监控(3) / 系统(4)
+        # 根级顺序：模型管理(0) / AI(1) / EVA(2) / 视频监控(3) / 告警中心(4) / 系统(5)
         if m245.order_num != 3:
             m245.order_num = 3
             changed = True
@@ -354,9 +358,59 @@ def _patch_video_surveillance_menu():
         m241.menu_name = "监控墙"
         changed = True
     m1 = Menu.query.get(1)
-    if m1 and m1.order_num != 4:
-        m1.order_num = 4
+    if m1 and m1.order_num != 5:
+        m1.order_num = 5
         changed = True
+    if changed:
+        db.session.commit()
+
+
+def _promote_alert_center_menu():
+    """将「检测告警」提升为根级「告警中心」，插在视频监控与系统管理之间（幂等）。"""
+    changed = False
+    m276 = Menu.query.get(276)
+    if m276:
+        if (
+            m276.parent_id != 0
+            or m276.menu_name != "告警中心"
+            or m276.path != "/ai/alert"
+            or m276.order_num != 4
+            or m276.menu_type != "C"
+        ):
+            m276.parent_id = 0
+            m276.menu_name = "告警中心"
+            m276.path = "/ai/alert"
+            m276.component = m276.component or "ai/alert/index"
+            m276.perms = m276.perms or "ai:alert:list"
+            m276.icon = m276.icon or "Bell"
+            m276.menu_type = "C"
+            m276.order_num = 4
+            changed = True
+
+    # 功能按钮仍挂在告警中心下
+    for bid, name, perms in (
+        (2761, "告警查询", "ai:alert:query"),
+        (2762, "告警确认", "ai:alert:edit"),
+        (2763, "告警删除", "ai:alert:remove"),
+        (2764, "规则配置", "ai:alert:edit"),
+    ):
+        b = Menu.query.get(bid)
+        if b and b.parent_id != 276:
+            b.parent_id = 276
+            changed = True
+        if b and not b.perms:
+            b.perms = perms
+            changed = True
+
+    m245 = Menu.query.get(245)
+    if m245 and m245.order_num != 3:
+        m245.order_num = 3
+        changed = True
+    m1 = Menu.query.get(1)
+    if m1 and m1.order_num != 5:
+        m1.order_num = 5
+        changed = True
+
     if changed:
         db.session.commit()
 
@@ -622,14 +676,15 @@ def seed_ai_menus():
                     path="/ai/pipeline/metrics", component="ai/pipeline/metrics", icon="DataLine",
                     order=2, grant_common=True)
     _regroup_eva_pipeline_menus()
-    # 检测告警（视觉识别 230 下）
-    _ensure_ai_menu(276, 230, "检测告警", "C", "ai:alert:list",
+    # 告警中心（根级，插在视频监控与系统管理之间）
+    _ensure_ai_menu(276, 0, "告警中心", "C", "ai:alert:list",
                     path="/ai/alert", component="ai/alert/index", icon="Bell",
-                    order=14, grant_common=True)
+                    order=4, grant_common=True)
     _ensure_ai_menu(2761, 276, "告警查询", "F", "ai:alert:query", grant_common=True)
     _ensure_ai_menu(2762, 276, "告警确认", "F", "ai:alert:edit")
     _ensure_ai_menu(2763, 276, "告警删除", "F", "ai:alert:remove")
     _ensure_ai_menu(2764, 276, "规则配置", "F", "ai:alert:edit")  # 与确认共用 edit 权限，管理员可改规则/样式
+    _promote_alert_center_menu()
     # 老库曾误写 WaterMelon（非 Element Plus 图标名），修正为 Pouring
     _m250 = Menu.query.get(250)
     if _m250 and _m250.icon in (None, "", "WaterMelon", "Watermelon"):
@@ -649,6 +704,7 @@ def seed_ai_menus():
     _ensure_ai_menu(2604, 260, "训练删除", "F", "ai:training:remove")
     _regroup_model_menus()
     _regroup_eva_pipeline_menus()
+    _promote_alert_center_menu()
     return True
 
 
@@ -2638,7 +2694,7 @@ def seed_alert_rules():
             rule_type="class_presence",
             config_json=json.dumps(fire_cfg, ensure_ascii=False),
             severity="high",
-            status="1",  # 默认不启用，需在检测告警页手动打开单项开关
+            status="1",  # 默认不启用，需在告警中心手动打开单项开关
         ),
         dict(
             rule_key="crowd-gathering",

@@ -26,6 +26,7 @@
           <el-button :icon="Refresh" @click="clearAll">清空</el-button>
         </el-form-item>
       </el-form>
+      <SelectedModelGuide :model="selectedModel" page="ocr" />
       <el-alert v-if="!modelOptions.length" type="warning" :closable="false"
                 title="暂无可用模型：文字识别需 task=ocr 的模型（如 GOT-OCR2），请到「模型管理」新增并拉取权重。" />
     </el-card>
@@ -65,6 +66,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, Document, Refresh, Download, CopyDocument } from '@element-plus/icons-vue'
 import { modelApi } from '../../../api/ai'
+import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 
 const modelOptions = ref([])
 const modelId = ref(null)
@@ -80,6 +82,9 @@ const chars = ref(0)
 const categories = computed(() => [...new Set(modelOptions.value.map((m) => m.category).filter(Boolean))])
 const filteredModels = computed(() =>
   category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value)
+const selectedModel = computed(() => filteredModels.value.find((m) => m.id === modelId.value)
+  || modelOptions.value.find((m) => m.id === modelId.value)
+  || null)
 const onCategoryChange = () => { modelId.value = filteredModels.value[0]?.id || null }
 
 const loadModels = async () => {

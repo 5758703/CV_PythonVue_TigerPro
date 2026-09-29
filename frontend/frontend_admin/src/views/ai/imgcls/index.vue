@@ -33,6 +33,7 @@
           <el-button :icon="Refresh" @click="clearAll">清空</el-button>
         </el-form-item>
       </el-form>
+      <SelectedModelGuide :model="selectedModel" page="imgcls" />
       <div v-if="imageInfo" class="picked">
         <span class="pk-name">{{ file?.name }}</span>
         <el-tag size="small" type="info" effect="plain">{{ imageInfo.width }}×{{ imageInfo.height }}</el-tag>
@@ -97,6 +98,7 @@ import { UploadFilled, MagicStick, Refresh } from '@element-plus/icons-vue'
 import { modelApi } from '../../../api/ai'
 import { useInferProgress } from '../../../composables/useInferProgress'
 import { loadImageClassificationModels, pickPreferredClsModel } from '../../../utils/clsModels'
+import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 
 const modelOptions = ref([])
 const modelId = ref(null)

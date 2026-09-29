@@ -54,7 +54,7 @@
       <el-alert v-if="!modelOptions.length" type="warning" :closable="false"
                 title="暂无可用模型：请到「模型管理」拉取 YOLO-pose / RTMO / RTMPose 权重并启用。" />
       <el-alert type="info" :closable="false" class="tip-alert"
-                title="四个阈值在「检测告警」页的「跌倒检测告警」规则中配置；该规则需先启用，本页才会判定与记事件。" />
+                title="四个阈值在「告警中心」的「跌倒检测告警」规则中配置；该规则需先启用，本页才会判定与记事件。" />
       <el-alert v-if="mode === 'video'" type="warning" :closable="false" class="tip-alert"
                 title="红框每帧画、事件列表稀疏：合成视频里每一帧只要判定为跌倒都会画红框（计入 fallFrames），但右侧「触发记录」受规则的连续帧确认与冷却时间（默认 60 秒）约束，只在满足条件时记一条，数量远少于红框帧数，并非漏检。开启「告警声音」后，播放结果视频并到达触发时刻时会播警告音。" />
     </el-card>

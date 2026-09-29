@@ -66,7 +66,7 @@
               :closable="false"
               show-icon
               class="alert-tip-inline"
-              title="总开关已开：仅「检测告警」页已启用规则会烧录叠加；单项开关请到检测告警页配置。"
+              title="总开关已开：仅「告警中心」已启用规则会烧录叠加；单项开关请到告警中心配置。"
             />
             <el-button :icon="Refresh" @click="clearAll" style="margin-left: 8px">清空</el-button>
           </div>
@@ -107,7 +107,7 @@
               :closable="false"
               show-icon
               class="alert-tip-inline"
-              title="总开关已开：仅「检测告警」页中已启用的规则会生效；画警戒线/多边形后可触发越线或区域越界。单项开关请到检测告警页配置。"
+              title="总开关已开：仅「告警中心」中已启用的规则会生效；画警戒线/多边形后可触发越线或区域越界。单项开关请到告警中心配置。"
             />
             <el-button v-if="camLine" link type="primary" @click="clearCamLine">清除线</el-button>
             <el-button v-if="camRegion" link type="primary" @click="clearCamRegion">清除区域</el-button>
