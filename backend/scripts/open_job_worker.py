@@ -83,10 +83,12 @@ def main():
     loops = 0
     with flask_app.app_context():
         while True:
+            job_store.recover_stale_jobs(["vision:detect"])
             job = job_store.claim_next_job(["vision:detect"])
             if job:
                 print(f"[open-worker] claim {job['id']} {job.get('capability')}", flush=True)
-                process_job(flask_app, job)
+                with job_store.lease_heartbeat(flask_app, job):
+                    process_job(flask_app, job)
             else:
                 time.sleep(args.interval)
             loops += 1

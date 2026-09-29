@@ -5,7 +5,6 @@
 import json
 import os
 import shutil
-import threading
 import time
 import uuid
 from urllib.parse import urlparse
@@ -16,6 +15,8 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import AiModel
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
+from services import admin_jobs
 
 ai_model_bp = Blueprint("ai_model", __name__, url_prefix="/api/ai/model")
 
@@ -162,6 +163,8 @@ def create_model():
     key = (data.get("modelKey") or "").strip()
     if key and AiModel.query.filter_by(model_key=key).first():
         return jsonify(code=400, message="模型标识已存在"), 400
+    if data.get("filePath") and _managed_model_path(data["filePath"]) is None:
+        return jsonify(code=400, message="模型文件路径必须位于受管理的模型目录"), 400
 
     m = AiModel(
         model_name=data["modelName"],
@@ -189,6 +192,8 @@ def update_model(mid):
     key = data.get("modelKey")
     if key and key != m.model_key and AiModel.query.filter_by(model_key=key).first():
         return jsonify(code=400, message="模型标识已存在"), 400
+    if data.get("filePath") and _managed_model_path(data["filePath"]) is None:
+        return jsonify(code=400, message="模型文件路径必须位于受管理的模型目录"), 400
 
     for field, attr in [("modelName", "model_name"), ("category", "category"),
                         ("modelKey", "model_key"), ("task", "task"),
@@ -202,11 +207,18 @@ def update_model(mid):
     return jsonify(code=0, message="修改成功", data=m.to_dict())
 
 
+def _managed_model_path(file_path):
+    return resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], file_path)
+
+
 def _remove_weight_file(m):
     """删除模型本地权重（单文件或 transformers 目录）。"""
     if not m.file_path:
         return
-    abs_path = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    path = _managed_model_path(m.file_path)
+    if path is None or m.file_path == "insightface" or m.file_path.startswith("insightface/"):
+        return
+    abs_path = str(path)
     try:
         if os.path.isdir(abs_path):
             shutil.rmtree(abs_path, ignore_errors=True)
@@ -252,7 +264,10 @@ def _abs_weight(m):
     """
     if not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    path = _managed_model_path(m.file_path)
+    if path is None:
+        return None
+    p = str(path)
     if os.path.isfile(p):
         return p
     if os.path.isdir(p):
@@ -264,7 +279,10 @@ def _abs_model_path(m):
     """模型本地路径（文件或目录均可，transformers 为目录）；无则 None。"""
     if not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    path = _managed_model_path(m.file_path)
+    if path is None:
+        return None
+    p = str(path)
     return p if os.path.exists(p) else None
 
 
@@ -365,59 +383,32 @@ def weight_info(mid):
     })
 
 
-_convert_jobs = {}
-_convert_jobs_lock = threading.Lock()
-
-
 def _convert_worker(job_id: str, src_path: str, target: str, out_dir: str, opts: dict):
-    """通用格式转换线程。"""
+    """Worker-side model conversion."""
     t0 = time.time()
     try:
         from services.model_convert import convert_file
 
         result = convert_file(src_path, target, out_dir=out_dir, opts=opts)
-        with _convert_jobs_lock:
-            j = _convert_jobs.get(job_id)
-            if j:
-                j.update({
-                    "status": "done",
-                    "output": result.get("outputName"),
-                    "outputPath": result.get("output"),
-                    "outputSize": result.get("outputSize") or 0,
-                    "isDir": bool(result.get("isDir")),
-                    "target": target,
-                    "elapsed": round(time.time() - t0, 1),
-                })
+        admin_jobs.complete(
+            job_id, output=result.get("outputName"), outputPath=result.get("output"),
+            outputSize=result.get("outputSize") or 0, isDir=bool(result.get("isDir")),
+            target=target, elapsed=round(time.time() - t0, 1),
+        )
     except Exception as e:  # noqa: BLE001
-        with _convert_jobs_lock:
-            j = _convert_jobs.get(job_id)
-            if j:
-                j.update({"status": "error", "error": str(e), "elapsed": round(time.time() - t0, 1)})
+        admin_jobs.fail(job_id, str(e))
 
 
 def _start_convert_job(src_path: str, target: str, out_dir: str, opts: dict, extra: dict | None = None):
-    job_id = uuid.uuid4().hex
-    meta = {
-        "status": "running",
-        "output": None,
-        "outputPath": None,
-        "outputSize": 0,
-        "isDir": False,
-        "error": None,
-        "elapsed": 0,
-        "target": target,
-        "srcName": os.path.basename(src_path),
-    }
+    display = {"output": None, "outputPath": None, "outputSize": 0,
+               "isDir": False, "error": None, "elapsed": 0,
+               "target": target, "srcName": os.path.basename(src_path)}
     if extra:
-        meta.update(extra)
-    with _convert_jobs_lock:
-        _convert_jobs[job_id] = meta
-    threading.Thread(
-        target=_convert_worker,
-        args=(job_id, src_path, target, out_dir, opts),
-        daemon=True,
-    ).start()
-    return job_id
+        display.update(extra)
+    return admin_jobs.enqueue(
+        "admin:model-convert", args=[src_path, target, out_dir, opts],
+        model_id=(extra or {}).get("modelId"), display=display,
+    )
 
 
 def _as_bool(val, default=False):
@@ -572,8 +563,7 @@ def convert_standalone():
 @ai_model_bp.get("/convert/progress/<job_id>")
 @permission_required("ai:model:list")
 def convert_standalone_progress(job_id):
-    with _convert_jobs_lock:
-        j = _convert_jobs.get(job_id)
+    j = admin_jobs.state(job_id)
     if j is None:
         return jsonify(code=404, message="任务不存在"), 404
     return jsonify(code=0, data=j)
@@ -641,8 +631,7 @@ def convert_weight(mid):
 @ai_model_bp.get("/<int:mid>/convert-progress/<job_id>")
 @permission_required("ai:model:list")
 def convert_progress(mid, job_id):
-    with _convert_jobs_lock:
-        j = _convert_jobs.get(job_id)
+    j = admin_jobs.state(job_id, model_id=mid)
     if j is None:
         return jsonify(code=404, message="任务不存在"), 404
     return jsonify(code=0, data=j)
@@ -787,9 +776,8 @@ def _is_dir_weight_lib(lib):
     return (lib or "").lower() in _DIR_WEIGHT_LIBS
 
 
-def _normalize_dir_model_path(upload_root, rel_path):
+def _normalize_dir_model_path(base):
     """目录型权重：若 file_path 指向目录内单文件，归一到模型目录。"""
-    base = os.path.join(upload_root, rel_path)
     if os.path.isdir(base):
         return base
     if os.path.isfile(base):
@@ -804,8 +792,10 @@ def _resolve_detect_runtime(m):
     if not m.file_path:
         raise ValueError("该模型暂无本地权重，请先上传或拉取权重")
     lib = _detect_lib(m)
-    upload_root = current_app.config["UPLOAD_FOLDER"]
-    base = _normalize_dir_model_path(upload_root, m.file_path) if _is_dir_weight_lib(lib) else os.path.join(upload_root, m.file_path)
+    managed = _managed_model_path(m.file_path)
+    if managed is None:
+        raise ValueError("模型文件路径无效")
+    base = _normalize_dir_model_path(str(managed)) if _is_dir_weight_lib(lib) else str(managed)
 
     if os.path.isfile(base):
         if lib in ("transformers", "modelscope", "vlm-fo1"):
@@ -1862,13 +1852,9 @@ def segment_route(mid):
 
 def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_key,
                     lib="rfdetr", classes=None):
-    """后台线程：RF-DETR-Seg / Ultralytics 逐帧视频分割。"""
+    """Worker-side RF-DETR-Seg / Ultralytics video segmentation."""
     def cb(processed, total):
-        with _video_jobs_lock:
-            j = _video_jobs.get(job_id)
-            if j:
-                j["processed"] = processed
-                j["total"] = total
+        admin_jobs.progress(job_id, processed, total)
     try:
         if lib == "ultralytics":
             from inference import segment_video_ultralytics
@@ -1882,12 +1868,9 @@ def _segment_worker(job_id, abs_path, src_path, out_path, out_name, conf, model_
             stats = segment_video_rfdetr(abs_path, src_path, out_path, conf=conf,
                                          model_key=model_key or "rf-detr-seg-medium", progress_cb=cb)
         stats["output"] = out_name
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="done", stats=stats,
-                                       processed=stats["frames"], total=stats["frames"])
+        admin_jobs.complete(job_id, stats=stats, processed=stats["frames"], total=stats["frames"])
     except Exception as e:  # noqa: BLE001
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="error", error=str(e))
+        admin_jobs.fail(job_id, str(e))
     finally:
         if os.path.isfile(src_path):
             try:
@@ -1933,15 +1916,10 @@ def segment_video_route(mid):
     out_path = os.path.join(out_folder, out_name)
     file.save(src_path)
 
-    job_id = uuid.uuid4().hex
-    with _video_jobs_lock:
-        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
-                               "stats": None, "error": None}
-    threading.Thread(
-        target=_segment_worker,
-        args=(job_id, abs_path, src_path, out_path, out_name, conf, m.model_key or "", lib, classes),
-        daemon=True,
-    ).start()
+    job_id = admin_jobs.enqueue(
+        "admin:model-segment-video", model_id=mid,
+        args=[abs_path, src_path, out_path, out_name, conf, m.model_key or "", lib, classes],
+    )
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
@@ -1976,11 +1954,6 @@ def analyze_report(mid):
     return jsonify(code=0, message="报告生成完成", data=result)
 
 
-# 视频检测异步任务进度表：jobId -> {status, processed, total, output, stats, error}
-_video_jobs = {}
-_video_jobs_lock = threading.Lock()
-
-
 def _video_worker(
     job_id,
     library,
@@ -1993,13 +1966,9 @@ def _video_worker(
     model_key="",
     alert_rules_payload=None,
 ):
-    """后台线程：逐帧检测，按帧上报进度，完成写结果。"""
+    """Worker-side frame detection with durable progress."""
     def cb(processed, total):
-        with _video_jobs_lock:
-            j = _video_jobs.get(job_id)
-            if j:
-                j["processed"] = processed
-                j["total"] = total
+        admin_jobs.progress(job_id, processed, total)
     try:
         lib = (library or "ultralytics").lower()
         if lib == "transformers":
@@ -2029,12 +1998,9 @@ def _video_worker(
                                  alert_rules=alert_rules_payload,
                                  alert_source_key=job_id)
         stats["output"] = out_name
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="done", stats=stats,
-                                       processed=stats["frames"], total=stats["frames"])
+        admin_jobs.complete(job_id, stats=stats, processed=stats["frames"], total=stats["frames"])
     except Exception as e:  # noqa: BLE001
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="error", error=str(e))
+        admin_jobs.fail(job_id, str(e))
     finally:
         if os.path.isfile(src_path):
             try:
@@ -2099,16 +2065,11 @@ def detect_video_route(mid):
     out_path = os.path.join(out_folder, out_name)
     file.save(src_path)
 
-    job_id = uuid.uuid4().hex
-    with _video_jobs_lock:
-        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
-                               "stats": None, "error": None}
-    threading.Thread(
-        target=_video_worker,
-        args=(job_id, lib, m.task or "object-detection", abs_path, src_path, out_path, out_name, conf,
-              m.model_key or "", rules_payload),
-        daemon=True,
-    ).start()
+    job_id = admin_jobs.enqueue(
+        "admin:model-detect-video", model_id=mid,
+        args=[lib, m.task or "object-detection", abs_path, src_path, out_path, out_name, conf,
+              m.model_key or "", rules_payload],
+    )
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
@@ -2116,11 +2077,9 @@ def detect_video_route(mid):
 @permission_required("ai:model:query")
 def video_progress(mid, job_id):
     """查询视频检测任务进度。"""
-    with _video_jobs_lock:
-        j = _video_jobs.get(job_id)
-        if j is None:
-            return jsonify(code=404, message="任务不存在或已过期"), 404
-        data = dict(j)
+    data = admin_jobs.state(job_id, model_id=mid)
+    if data is None:
+        return jsonify(code=404, message="任务不存在或已过期"), 404
     # 进度轮询统一 HTTP 200，避免前端 axios 将业务失败误判为 Network Error
     if data["status"] == "error":
         return jsonify(code=0, message=data.get("error") or "视频处理失败", data=data)
@@ -2128,13 +2087,9 @@ def video_progress(mid, job_id):
 
 
 def _pose_worker(job_id, library, model_key, abs_path, src_path, out_path, out_name, conf):
-    """后台线程：逐帧姿态估计，按帧上报进度，完成写结果。"""
+    """Worker-side video pose estimation."""
     def cb(processed, total):
-        with _video_jobs_lock:
-            j = _video_jobs.get(job_id)
-            if j:
-                j["processed"] = processed
-                j["total"] = total
+        admin_jobs.progress(job_id, processed, total)
     try:
         if (library or "ultralytics").lower() == "rtmlib":
             from inference import pose_video_rtmlib
@@ -2147,12 +2102,9 @@ def _pose_worker(job_id, library, model_key, abs_path, src_path, out_path, out_n
             from inference import pose_video
             stats = pose_video(abs_path, src_path, out_path, conf=conf, progress_cb=cb)
         stats["output"] = out_name
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="done", stats=stats,
-                                       processed=stats["frames"], total=stats["frames"])
+        admin_jobs.complete(job_id, stats=stats, processed=stats["frames"], total=stats["frames"])
     except Exception as e:  # noqa: BLE001
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="error", error=str(e))
+        admin_jobs.fail(job_id, str(e))
     finally:
         if os.path.isfile(src_path):
             try:
@@ -2195,28 +2147,19 @@ def pose_video_route(mid):
     out_path = os.path.join(out_folder, out_name)
     file.save(src_path)
 
-    job_id = uuid.uuid4().hex
-    with _video_jobs_lock:
-        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
-                               "stats": None, "error": None}
-    threading.Thread(
-        target=_pose_worker,
-        args=(job_id, lib, m.model_key or "", abs_path, src_path, out_path, out_name, conf),
-        daemon=True,
-    ).start()
+    job_id = admin_jobs.enqueue(
+        "admin:model-pose-video", model_id=mid,
+        args=[lib, m.model_key or "", abs_path, src_path, out_path, out_name, conf],
+    )
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
 def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line,
                   alert_rules_payload=None, region=None, classes=None, class_preset=None,
                   zone_style=None):
-    """后台线程：逐帧追踪，按帧上报进度，完成写结果。"""
+    """Worker-side video tracking."""
     def cb(processed, total):
-        with _video_jobs_lock:
-            j = _video_jobs.get(job_id)
-            if j:
-                j["processed"] = processed
-                j["total"] = total
+        admin_jobs.progress(job_id, processed, total)
     try:
         from inference import track_video
         stats = track_video(
@@ -2227,12 +2170,9 @@ def _track_worker(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, l
             zone_style=zone_style,
         )
         stats["output"] = out_name
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="done", stats=stats,
-                                       processed=stats["frames"], total=stats["frames"])
+        admin_jobs.complete(job_id, stats=stats, processed=stats["frames"], total=stats["frames"])
     except Exception as e:  # noqa: BLE001
-        with _video_jobs_lock:
-            _video_jobs[job_id].update(status="error", error=str(e))
+        admin_jobs.fail(job_id, str(e))
     finally:
         if os.path.isfile(src_path):
             try:
@@ -2362,16 +2302,11 @@ def track_video_route(mid):
     out_path = os.path.join(out_folder, out_name)
     file.save(src_path)
 
-    job_id = uuid.uuid4().hex
-    with _video_jobs_lock:
-        _video_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
-                               "stats": None, "error": None}
-    threading.Thread(
-        target=_track_worker,
-        args=(job_id, abs_path, src_path, out_path, out_name, conf, imgsz, line,
-              rules_payload, region, classes, class_preset, zone_style),
-        daemon=True,
-    ).start()
+    job_id = admin_jobs.enqueue(
+        "admin:model-track-video", model_id=mid,
+        args=[abs_path, src_path, out_path, out_name, conf, imgsz, line,
+              rules_payload, region, classes, class_preset, zone_style],
+    )
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
@@ -2450,27 +2385,16 @@ def get_output(name):
 # ------------------------------------------------------------ Linly-Talker 数字人合成
 _IMAGE_ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
-# 数字人异步任务进度表：jobId -> {status, processed, total, output, error}
-_talker_jobs = {}
-_talker_jobs_lock = threading.Lock()
-
-
 def _talker_worker(job_id, model_dir, image_path, audio_path, out_path, out_name):
-    """后台线程：调 SadTalker 合成说话视频，上报进度，完成写结果。"""
+    """Worker-side talking-head synthesis."""
     def cb(processed, total):
-        with _talker_jobs_lock:
-            j = _talker_jobs.get(job_id)
-            if j:
-                j["processed"] = processed
-                j["total"] = total
+        admin_jobs.progress(job_id, processed, total)
     try:
         from inference import synthesize_talking_head
         synthesize_talking_head(model_dir, image_path, audio_path, out_path, progress_cb=cb)
-        with _talker_jobs_lock:
-            _talker_jobs[job_id].update(status="done", output=out_name)
+        admin_jobs.complete(job_id, output=out_name)
     except Exception as e:  # noqa: BLE001
-        with _talker_jobs_lock:
-            _talker_jobs[job_id].update(status="error", error=str(e))
+        admin_jobs.fail(job_id, str(e))
     finally:
         for p in (image_path, audio_path):
             if p and os.path.isfile(p):
@@ -2516,15 +2440,10 @@ def talking_head_route(mid):
     image.save(image_path)
     audio.save(audio_path)
 
-    job_id = uuid.uuid4().hex
-    with _talker_jobs_lock:
-        _talker_jobs[job_id] = {"status": "running", "processed": 0, "total": 0,
-                                "output": None, "error": None}
-    threading.Thread(
-        target=_talker_worker,
-        args=(job_id, path, image_path, audio_path, out_path, out_name),
-        daemon=True,
-    ).start()
+    job_id = admin_jobs.enqueue(
+        "admin:model-talking-head", model_id=mid,
+        args=[path, image_path, audio_path, out_path, out_name],
+    )
     return jsonify(code=0, message="任务已启动", data={"jobId": job_id})
 
 
@@ -2532,11 +2451,9 @@ def talking_head_route(mid):
 @permission_required("ai:model:query")
 def talking_progress(mid, job_id):
     """查询数字人合成任务进度。"""
-    with _talker_jobs_lock:
-        j = _talker_jobs.get(job_id)
-        if j is None:
-            return jsonify(code=404, message="任务不存在或已过期"), 404
-        data = dict(j)
+    data = admin_jobs.state(job_id, model_id=mid)
+    if data is None:
+        return jsonify(code=404, message="任务不存在或已过期"), 404
     if data["status"] == "error":
         return jsonify(code=500, message=f"数字人合成失败：{data['error']}"), 500
     return jsonify(code=0, data=data)

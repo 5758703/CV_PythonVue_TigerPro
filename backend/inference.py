@@ -29,8 +29,14 @@ except OSError:
 import cv2
 import numpy as np
 
-_cache = {}            # abs_path -> (mtime, YOLO 实例)
-_pipe_cache = {}       # (task, model_dir) -> transformers pipeline
+from services.bounded_cache import BoundedCache
+
+
+def _model_cache(capacity=2):
+    return BoundedCache(capacity)
+
+_cache = _model_cache(4)            # abs_path -> (mtime, YOLO 实例)
+_pipe_cache = _model_cache()       # (task, model_dir) -> transformers pipeline
 _lock = threading.Lock()
 ROBOFLOW_META_FILE = "roboflow_meta.json"
 _ROBOFLOW_COLORS = {
@@ -1711,8 +1717,8 @@ def pose_video(abs_path, src_path, dst_path, conf=0.25, progress_cb=None):
 
 
 # ------------------------------------------------------------ rtmlib 姿态（RTMO / RTMPose / DWPose）
-_rtmlib_cache = {}       # (onnx_path, mtime, model_key) -> RTMO
-_rtmlib_solver_cache = {}  # (variant, mode, device) -> Body | Wholebody
+_rtmlib_cache = _model_cache()       # (onnx_path, mtime, model_key) -> RTMO
+_rtmlib_solver_cache = _model_cache()  # (variant, mode, device) -> Body | Wholebody
 
 _RTMO_WEIGHT_URLS = {
     "rtmo-s": (
@@ -2774,7 +2780,7 @@ def detect_image_hf(model_dir, image_bytes, conf=0.25, draw=True, task="object-d
 
 
 # ------------------------------------------------------------ OmDet-Turbo（开放词汇零样本检测）
-_omdet_cache = {}  # model_dir -> (processor, model)
+_omdet_cache = _model_cache()  # model_dir -> (processor, model)
 _DEFAULT_OMDET_CLASSES = [
     "person", "car", "truck", "bus", "bicycle", "motorcycle",
     "dog", "cat", "backpack", "handbag", "suitcase", "fire extinguisher",
@@ -2982,7 +2988,7 @@ def detect_video_hf(model_dir, src_path, dst_path, conf=0.25, task="object-detec
 
 
 # ------------------------------------------------------------ ModelScope CV 检测（DAMO-YOLO tinynas-detection 等）
-_ms_cv_pipe_cache = {}
+_ms_cv_pipe_cache = _model_cache()
 
 
 def is_modelscope_cv_dir(model_dir):
@@ -3109,7 +3115,7 @@ def detect_video_modelscope(model_dir, src_path, dst_path, conf=0.25, progress_c
 
 
 # ------------------------------------------------------------ RF-DETR 目标检测（Roboflow rfdetr 包）
-_rfdetr_cache = {}
+_rfdetr_cache = _model_cache()
 
 _RFDETR_CLASS = {
     "rf-detr-nano": "RFDETRNano",
@@ -3633,7 +3639,7 @@ def segment_video_ultralytics(abs_path, src_path, dst_path, conf=0.25, classes=N
 
 
 # ------------------------------------------------------------ MobileSAM 交互式分割
-_mobilesam_cache = {}  # abs_path -> (mtime, SamPredictor)
+_mobilesam_cache = _model_cache()  # abs_path -> (mtime, SamPredictor)
 
 
 def _mobilesam_device():
@@ -3935,7 +3941,7 @@ def answer_question(model_dir, question, context, task="question-answering"):
 
 
 # ------------------------------------------------------------ funasr 语音识别（SenseVoice）
-_funasr_cache = {}  # model_dir -> funasr AutoModel
+_funasr_cache = _model_cache()  # model_dir -> funasr AutoModel
 
 # SenseVoice 富文本里的标签 -> 中文（语言 / 情感 / 音频事件）
 _LANG_CN = {"zh": "中文", "en": "英文", "yue": "粤语", "ja": "日语", "ko": "韩语", "nospeech": "无语音"}
@@ -3977,7 +3983,7 @@ def transcribe_audio(model_dir, audio_path):
 
 
 # ------------------------------------------------------------ Fun-ASR-Nano（通义 LLM-ASR，纯 CPU）
-_funasr_nano_cache = {}  # model_dir -> funasr AutoModel
+_funasr_nano_cache = _model_cache()  # model_dir -> funasr AutoModel
 
 _NANO_LANG = {
     "auto": "auto", "zh": "中文", "中文": "中文", "cn": "中文",
@@ -4117,7 +4123,7 @@ def _parse_sensevoice_rich(raw):
 
 
 # ------------------------------------------------------------ funasr_onnx 语音识别（SenseVoice-onnx 量化版，更小更快）
-_funasr_onnx_cache = {}  # model_dir -> funasr_onnx SenseVoiceSmall
+_funasr_onnx_cache = _model_cache()  # model_dir -> funasr_onnx SenseVoiceSmall
 _SENSEVOICE_BPE = "chn_jpn_yue_eng_ko_spectok.bpe.model"
 
 
@@ -4153,7 +4159,7 @@ def transcribe_audio_onnx(model_dir, audio_path):
 
 
 # ------------------------------------------------------------ Whisper 语音识别（transformers，HF whisper 模型目录）
-_whisper_cache = {}  # model_dir -> transformers ASR pipeline
+_whisper_cache = _model_cache()  # model_dir -> transformers ASR pipeline
 # Whisper 语言码 -> 中文（覆盖常见语种）
 _WHISPER_LANG_CN = {"chinese": "中文", "english": "英文", "cantonese": "粤语",
                     "japanese": "日语", "korean": "韩语", "zh": "中文", "en": "英文",
@@ -4267,7 +4273,7 @@ def transcribe_audio_whisper(model_dir, audio_path):
     return {"text": text, "language": language, "emotion": None, "events": []}
 
 
-_whisper_direct_cache = {}  # model_dir -> (processor, model)
+_whisper_direct_cache = _model_cache()  # model_dir -> (processor, model)
 
 
 def _whisper_generate_direct(model_dir, waveform):
@@ -4306,7 +4312,7 @@ def _whisper_generate_direct(model_dir, waveform):
 
 
 # ------------------------------------------------------------ Moonshine ASR（UsefulSensors，transformers）
-_moonshine_cache = {}  # model_dir -> (processor, model)
+_moonshine_cache = _model_cache()  # model_dir -> (processor, model)
 
 
 def _is_moonshine_model(model_dir):
@@ -4357,7 +4363,7 @@ def _decode_audio_for_sr(audio_path, sampling_rate):
 
 
 # ------------------------------------------------------------ MOSS-Transcribe-Diarize 0.9B（多人转写+说话人+时间戳，Transformers Remote Code）
-_moss_mtd_cache = {}  # model_dir -> (device, dtype, model, processor)
+_moss_mtd_cache = _model_cache()  # model_dir -> (device, dtype, model, processor)
 
 
 def _is_moss_mtd_model(model_dir: str) -> bool:
@@ -4606,7 +4612,7 @@ def synthesize_speech_hf(model_dir, text, task="text-to-speech"):
 
 
 # ------------------------------------------------------------ VibeVoice-Realtime 文本转语音（预置音色）
-_vibevoice_cache = {}  # model_dir -> (processor, model)
+_vibevoice_cache = _model_cache()  # model_dir -> (processor, model)
 
 
 def _vibevoice_repo_path():
@@ -4710,7 +4716,7 @@ def synthesize_speech_vibevoice(model_dir, text, speaker="en-Carter_man"):
 
 
 # ------------------------------------------------------------ MeloTTS(sherpa-onnx) 中英混合文本转语音
-_melotts_cache = {}  # model_dir -> sherpa_onnx.OfflineTts
+_melotts_cache = _model_cache()  # model_dir -> sherpa_onnx.OfflineTts
 
 
 def _get_melotts(model_dir):
@@ -4753,7 +4759,7 @@ def synthesize_speech_melotts(model_dir, text, speed=1.0):
 
 
 # ------------------------------------------------------------ VoxCPM2 文本转语音 / 克隆 / 音色设计
-_voxcpm_cache = {}  # model_dir -> VoxCPM 实例
+_voxcpm_cache = _model_cache()  # model_dir -> VoxCPM 实例
 
 
 def _get_voxcpm(model_dir):
@@ -4830,7 +4836,7 @@ def _crosses(prev, curr, line):
 
 
 # ------------------------------------------------------------ GOT-OCR2 文字识别（OCR）
-_ocr_cache = {}  # model_dir -> (processor, model)
+_ocr_cache = _model_cache()  # model_dir -> (processor, model)
 
 
 def _get_ocr(model_dir):
@@ -4875,7 +4881,7 @@ def recognize_text(model_dir, image_bytes, formatted=False):
 
 
 # ------------------------------------------------------------ PaddleOCR onnx（RapidOCR：det+rec）
-_paddle_cache = {}  # (det_onnx, rec_onnx) -> RapidOCR 引擎
+_paddle_cache = _model_cache()  # (det_onnx, rec_onnx) -> RapidOCR 引擎
 
 
 def _find_onnx(model_dir):
@@ -5062,7 +5068,7 @@ def paddle_ocr(det_dir, rec_dir, image_bytes, *, plate_mode: bool = False, rec_o
 
 
 # ------------------------------------------------------------ 表格结构（rapid-table / SLANet_plus）
-_table_cache = {}  # (model_path, model_type) -> RapidTable
+_table_cache = _model_cache()  # (model_path, model_type) -> RapidTable
 
 
 def _resolve_table_model_type(model_key=None, model_type=None):
@@ -5180,7 +5186,7 @@ def table_structure(model_path, image_bgr, ocr_lines, model_key=None, model_type
 # ---------------------------------------------------------------------------
 # InsightFace face recognition (detect + ArcFace embedding)
 # ---------------------------------------------------------------------------
-_face_cache = {}  # (root, pack, providers, det_size) -> FaceAnalysis
+_face_cache = _model_cache()  # (root, pack, providers, det_size) -> FaceAnalysis
 
 
 def _face_providers():

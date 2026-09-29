@@ -15,6 +15,7 @@ from flask import Blueprint, request, jsonify
 
 from models import AiModel
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
 
 water_level_bp = Blueprint("water_level", __name__, url_prefix="/api/ai/water-level")
 
@@ -25,7 +26,10 @@ def _get_model_path(mid):
     m = AiModel.query.get(mid)
     if m is None or not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None
+    p = str(managed)
     return p if os.path.exists(p) else None
 
 

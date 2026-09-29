@@ -72,6 +72,8 @@ class TrainingJob(db.Model):
     log_dir = db.Column(db.String(500))
     run_name = db.Column(db.String(128))
     error_message = db.Column(db.Text)
+    worker_job_id = db.Column(db.String(64))
+    validation_job_id = db.Column(db.String(64))
     create_time = db.Column(db.DateTime, default=datetime.utcnow)
     update_time = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

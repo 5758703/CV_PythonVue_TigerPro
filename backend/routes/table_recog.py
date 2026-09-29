@@ -17,6 +17,7 @@ import os
 
 from models import AiModel
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
 
 table_recog_bp = Blueprint("table_recog", __name__, url_prefix="/api/ai/table")
 
@@ -25,7 +26,10 @@ def _abs_weight_file(m):
     """单文件权重（YOLO / rapidtable onnx）。"""
     if m is None or not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None
+    p = str(managed)
     if os.path.isfile(p):
         return p
     if os.path.isdir(p):
@@ -40,7 +44,10 @@ def _abs_weight_file(m):
 def _abs_model_dir(m):
     if m is None or not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None
+    p = str(managed)
     return p if os.path.exists(p) else None
 
 

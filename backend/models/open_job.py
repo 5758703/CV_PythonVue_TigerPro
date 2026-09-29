@@ -13,6 +13,8 @@ class OpenJob(db.Model):
     app_id = db.Column(db.String(64), index=True)
     capability = db.Column(db.String(64), nullable=False, index=True)
     status = db.Column(db.String(32), default="queued", index=True)  # queued|running|succeeded|failed
+    worker_id = db.Column(db.String(64))
+    lease_expires_at = db.Column(db.DateTime, index=True)
     progress = db.Column(db.Float, default=0.0)
     message = db.Column(db.String(500), default="")
     error = db.Column(db.Text)

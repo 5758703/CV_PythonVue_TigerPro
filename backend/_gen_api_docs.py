@@ -40,7 +40,7 @@ spec("POST", "/api/auth/login",
      example="""```bash
 curl -s -X POST http://127.0.0.1:5001/api/auth/login \\
   -H "Content-Type: application/json" \\
-  -d '{"username":"admin","password":"admin123"}'
+  -d '{"username":"admin","password":"<首次初始化密码>"}'
 ```""")
 
 spec("POST", "/api/auth/register",
@@ -98,7 +98,7 @@ spec("POST", "/api/system/user",
      params=[
          ("Body", "username", "string", "是", "唯一"),
          ("Body", "nickname", "string", "否", "默认同 username"),
-         ("Body", "password", "string", "否", "默认 123456"),
+         ("Body", "password", "string", "是", "至少 6 位"),
          ("Body", "deptId", "int", "否", "主部门"),
          ("Body", "email/phone/sex/status", "string", "否", "sex 默认 0"),
          ("Body", "roleIds", "int[]", "否", "角色"),
@@ -1761,7 +1761,7 @@ def main():
         "```bash",
         'TOKEN=$(curl -s -X POST http://127.0.0.1:5001/api/auth/login \\',
         '  -H "Content-Type: application/json" \\',
-        '  -d \'{"username":"admin","password":"admin123"}\' | python -c "import sys,json;print(json.load(sys.stdin)[\'data\'][\'token\'])")',
+        '  -d \'{"username":"admin","password":"<首次初始化密码>"}\' | python -c "import sys,json;print(json.load(sys.stdin)[\'data\'][\'token\'])")',
         "",
         "curl -s -X POST http://127.0.0.1:5001/api/ai/model/1/detect \\",
         '  -H "Authorization: Bearer $TOKEN" \\',

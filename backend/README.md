@@ -147,10 +147,12 @@ cd backend
 # 或手动激活环境
 conda activate cv_python_tigerpro   # 或 backend\.venv\Scripts\Activate.ps1
 cd backend
-python app.py        # http://0.0.0.0:5001 （debug + 自动重载）
+python app.py        # http://0.0.0.0:5001
 ```
 
-启动时自动：建表 → 轻量迁移 → 写种子（默认账号 admin/admin123、tiger/123456；RBAC 菜单；示例模型）。
+启动时自动：建表 → 轻量迁移 → 写种子。首次建库可在 `.env` 中配置 `INITIAL_ADMIN_PASSWORD` 和 `INITIAL_DEMO_PASSWORD`；留空时随机密码仅在首次启动日志中显示。已有数据库的账号密码不会被更改。`SECRET_KEY` 应配置为固定随机密钥。
+
+模型转换、视频和数字人处理、训练及验证任务使用数据库队列。Windows 的 `run_backend.ps1` 会同时启动管理任务 worker；手动运行 `python app.py` 时，另开终端运行 `python scripts/admin_job_worker.py`。开放平台异步任务另需 `python scripts/open_job_worker.py`。
 
 健康检查：`GET http://127.0.0.1:5001/api/health` → `{"code":0,"message":"ok"}`。
 
@@ -191,7 +193,7 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 
 部署要点：
 - **worker 数宜小**（推理吃内存，模型按进程缓存）；用线程（`--threads`）承载并发，`timeout` 设 0（推理耗时长）。
-- 视频检测 / 数字人为**异步后台任务**（内存任务表 + 轮询进度），多 worker 下任务表不共享 —— 单 worker 或外置任务队列。
+- 模型转换、视频检测、数字人及训练任务由独立管理 worker 消费数据库队列；运行中的任务若 worker 失联，租约过期后标记失败，可手动重新提交。各进程的模型缓存独立占用内存。
 - `uploads/models/third_party/`（VibeVoice）、`.env` 需随部署保留；权重 / 视频文件大，注意磁盘与上传体积上限（默认 500MB）。
 - 首次推理会下载 / 加载模型，存在冷启动延迟；模型按 `model_dir` 进程内缓存复用。
 

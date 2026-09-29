@@ -11,7 +11,8 @@ def current_user():
     """取当前登录用户（每请求缓存到 g）。"""
     if "current_user" not in g:
         uid = get_jwt_identity()
-        g.current_user = User.query.get(int(uid)) if uid is not None else None
+        user = User.query.get(int(uid)) if uid is not None else None
+        g.current_user = user if user and user.status == "0" and user.del_flag == "0" else None
     return g.current_user
 
 

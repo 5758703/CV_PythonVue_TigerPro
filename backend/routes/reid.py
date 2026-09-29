@@ -16,6 +16,7 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import AiModel, ReidEmbedding, ReidPerson
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
 from services.reid_gallery import (
     avg_embeddings,
     invalidate_gallery,
@@ -41,7 +42,10 @@ def _resolve_reid_model(mid: int):
         return None, "请选择 library=opencv-reid 的行人重识别模型"
     if not m.file_path:
         return None, "ReID 模型未就绪，请先在模型管理页拉取权重"
-    root = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None, "模型文件路径无效"
+    root = str(managed)
     if not os.path.isdir(root) and not os.path.isfile(root):
         return None, f"权重目录不存在：{m.file_path}"
     try:
@@ -89,7 +93,10 @@ def _resolve_detector(mid: int | None):
         return None, None, "未找到可用的行人检测模型，请先在模型管理拉取 YOLO"
     if m.status != "0" or not m.file_path:
         return None, None, "检测模型未就绪"
-    abs_path = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None, None, "模型文件路径无效"
+    abs_path = str(managed)
     if os.path.isdir(abs_path):
         preferred = (
             "yolo26n.pt", "yolo26n.onnx", "yolo11n.pt", "yolo11n.onnx",

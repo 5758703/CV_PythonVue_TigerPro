@@ -315,8 +315,13 @@ def _build_ocr_fn_from_ids(det_id, rec_id):
     rec_m = AiModel.query.get(rec_id)
     if not det_m or not rec_m or not det_m.file_path or not rec_m.file_path:
         return None
-    det_dir = os.path.join(current_app.config["UPLOAD_FOLDER"], det_m.file_path)
-    rec_dir = os.path.join(current_app.config["UPLOAD_FOLDER"], rec_m.file_path)
+    from services.model_paths import resolve_managed_model_path
+    upload_root = current_app.config["UPLOAD_FOLDER"]
+    det_path = resolve_managed_model_path(upload_root, det_m.file_path)
+    rec_path = resolve_managed_model_path(upload_root, rec_m.file_path)
+    if det_path is None or rec_path is None:
+        return None
+    det_dir, rec_dir = str(det_path), str(rec_path)
     from inference import paddle_ocr
 
     def _fn(img_bytes: bytes):

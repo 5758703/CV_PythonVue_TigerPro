@@ -1,7 +1,6 @@
 """模型训练接口 /api/ai/training。"""
 import os
 import shutil
-import threading
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +21,6 @@ from services.training import (
     DATASET_FORMATS,
     get_format_specs_list,
     is_allowed_import_path,
-    run_training_worker,
     request_cancel,
     clear_cancel,
     validate_model,
@@ -31,7 +29,6 @@ from services.training import (
     deploy_to_ai_model,
     read_metrics_history,
     parse_results_csv,
-    run_validate_worker,
     IMG_EXTENSIONS,
     list_base_models,
     badminton_deploy_defaults,
@@ -49,15 +46,12 @@ from services.dataset_annotation import (
 )
 from services.dataset_quality import analyze_dataset_quality
 from services.dataset_convert import get_convert_types, run_convert
+from services import admin_jobs
 
 training_bp = Blueprint("training", __name__, url_prefix="/api/ai/training")
 
 _IMG_EXT = set(IMG_EXTENSIONS) | {".xml", ".txt", ".yaml", ".yml", ".zip"}
 _XML_EXT = {".xml"}
-
-_val_jobs = {}
-_val_lock = threading.Lock()
-
 
 def _upload_root():
     return Path(current_app.config["UPLOAD_FOLDER"])
@@ -81,15 +75,20 @@ def _tail_text(path: Path, offset: int, limit: int):
     limit = max(256, min(int(limit or 4000), 20000))
     if not path.exists():
         return {"text": "", "nextOffset": offset, "exists": False}
-    data = path.read_bytes()
-    if offset > len(data):
-        offset = len(data)
-    chunk = data[offset: offset + limit]
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            offset = min(offset, size)
+            stream.seek(offset)
+            chunk = stream.read(limit)
+    except FileNotFoundError:
+        return {"text": "", "nextOffset": offset, "exists": False}
     return {
         "text": chunk.decode("utf-8", errors="replace"),
         "nextOffset": offset + len(chunk),
         "exists": True,
-        "size": len(data),
+        "size": size,
     }
 
 
@@ -873,6 +872,12 @@ def get_job(jid):
 @permission_required("ai:training:query")
 def job_progress(jid):
     job = TrainingJob.query.get_or_404(jid)
+    if job.worker_job_id and job.status in ("pending", "running", "cancelling"):
+        task = admin_jobs.state(job.worker_job_id)
+        if task and task["status"] == "error":
+            job.status = "failed"
+            job.error_message = task.get("error") or "训练 worker 已停止"
+            db.session.commit()
     data = job.to_dict(detail=True)
     # 补充训练曲线图资源路径
     charts = {}
@@ -894,7 +899,7 @@ def job_artifact(jid, filename):
         return jsonify(code=404, message="产物不存在"), 404
     log_abs = _run_dir(job)
     path = (log_abs / filename).resolve()
-    if not str(path).startswith(str(log_abs.resolve())):
+    if not path.is_relative_to(log_abs.resolve()):
         return jsonify(code=403, message="非法路径"), 403
     if not path.exists():
         return jsonify(code=404, message="文件不存在"), 404
@@ -936,6 +941,9 @@ def create_job():
 @permission_required("ai:training:edit")
 def start_job(jid):
     job = TrainingJob.query.get_or_404(jid)
+    active = admin_jobs.state(job.worker_job_id) if job.worker_job_id else None
+    if active and active["status"] in ("queued", "running"):
+        return jsonify(code=400, message="任务已在队列或正在训练中"), 400
     if job.status == "running":
         return jsonify(code=400, message="任务正在训练中"), 400
     if job.status == "done":
@@ -945,10 +953,11 @@ def start_job(jid):
     job.error_message = None
     job.progress = 0
     job.current_epoch = 0
+    clear_cancel(jid, Path(current_app.config["UPLOAD_FOLDER"]))
     db.session.commit()
 
-    app = current_app._get_current_object()
-    threading.Thread(target=run_training_worker, args=(app, jid), daemon=True).start()
+    job.worker_job_id = admin_jobs.enqueue("admin:training-run", args=[jid])
+    db.session.commit()
     return jsonify(code=0, message="训练已启动", data=job.to_dict())
 
 
@@ -970,10 +979,12 @@ def cancel_job(jid):
 
     if force and job.status in ("running", "cancelling", "pending"):
         request_cancel(jid, upload_root)
+        if job.worker_job_id:
+            from services.job_store import cancel_queued_job
+            cancel_queued_job(job.worker_job_id, "用户强制取消训练")
         job.status = "cancelled"
         job.error_message = "用户强制取消训练"
         db.session.commit()
-        clear_cancel(jid, upload_root)
         return jsonify(code=0, message="已强制标记为取消", data=job.to_dict())
 
     if job.status == "cancelling":
@@ -982,6 +993,9 @@ def cancel_job(jid):
 
     if job.status == "pending":
         request_cancel(jid, upload_root)
+        if job.worker_job_id:
+            from services.job_store import cancel_queued_job
+            cancel_queued_job(job.worker_job_id, "用户取消训练")
         job.status = "cancelled"
         job.error_message = "用户取消训练"
         db.session.commit()
@@ -1007,6 +1021,14 @@ def delete_job(jid):
     job = TrainingJob.query.get_or_404(jid)
     if job.status in ("running", "cancelling"):
         return jsonify(code=400, message="请先取消运行中的任务"), 400
+    validation = admin_jobs.state(job.validation_job_id) if job.validation_job_id else None
+    if validation and validation["status"] == "running":
+        return jsonify(code=400, message="验证进行中，请稍后删除"), 400
+    from services.job_store import cancel_queued_job
+    if job.worker_job_id:
+        cancel_queued_job(job.worker_job_id, "训练任务已删除")
+    if job.validation_job_id:
+        cancel_queued_job(job.validation_job_id, "训练任务已删除")
     root = _upload_root() / "training" / "runs" / str(jid)
     wroot = _upload_root() / "training" / "weights" / str(jid)
     for p in (root, wroot):
@@ -1027,39 +1049,25 @@ def validate_job(jid):
     if not job.output_weight_path:
         return jsonify(code=400, message="任务尚无训练权重"), 400
 
-    with _val_lock:
-        j = _val_jobs.get(jid)
-        if j and j.get("status") == "running":
-            return jsonify(code=400, message="验证正在进行中"), 400
-        _val_jobs[jid] = {"status": "running", "progress": 0, "result": None, "error": None}
-
-    app = current_app._get_current_object()
-
-    def _worker():
-        try:
-            with _val_lock:
-                _val_jobs[jid]["progress"] = 10
-            metrics = run_validate_worker(app, jid)
-            with _val_lock:
-                _val_jobs[jid].update(status="done" if metrics is not None else "error",
-                                      progress=100 if metrics is not None else 100,
-                                      result=metrics, error=None if metrics is not None else "验证失败")
-        except Exception as e:  # noqa: BLE001
-            with _val_lock:
-                _val_jobs[jid].update(status="error", progress=100, error=str(e))
-
-    threading.Thread(target=_worker, daemon=True).start()
+    active = admin_jobs.state(job.validation_job_id) if job.validation_job_id else None
+    if active and active["status"] in ("queued", "running"):
+        return jsonify(code=400, message="验证正在进行中"), 400
+    job.validation_job_id = admin_jobs.enqueue("admin:training-validate", args=[jid])
+    db.session.commit()
     return jsonify(code=0, message="验证已启动")
 
 
 @training_bp.get("/jobs/<int:jid>/validate-progress")
 @permission_required("ai:training:query")
 def validate_progress(jid):
-    with _val_lock:
-        j = _val_jobs.get(jid)
-        if not j:
-            return jsonify(code=0, data={"status": "idle", "progress": 0})
-        return jsonify(code=0, data=j)
+    job = TrainingJob.query.get_or_404(jid)
+    state = admin_jobs.state(job.validation_job_id) if job.validation_job_id else None
+    if state is None:
+        return jsonify(code=0, data={"status": "idle", "progress": 0})
+    return jsonify(code=0, data={
+        "status": state["status"], "progress": 100 if state["status"] in ("done", "error") else 10,
+        "result": state.get("result"), "error": state.get("error"),
+    })
 
 
 @training_bp.post("/jobs/<int:jid>/test")
@@ -1112,7 +1120,7 @@ def download_export(jid):
         return jsonify(code=400, message="缺少 file 参数"), 400
     path = (_upload_root() / "training" / "exports" / str(jid) / secure_filename(fname)).resolve()
     export_root = (_upload_root() / "training" / "exports" / str(jid)).resolve()
-    if not str(path).startswith(str(export_root)) or not path.exists():
+    if not path.is_relative_to(export_root) or not path.exists():
         return jsonify(code=404, message="文件不存在"), 404
     return send_file(path, as_attachment=True)
 

@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 from extensions import db
 from models import AiModel, FaceEmbedding, FacePerson
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
 from services.face_gallery import (
     avg_embeddings,
     invalidate_gallery,
@@ -59,7 +60,10 @@ def _resolve_face_model(mid: int):
     if lib in ("opencv-face", "opencv", "yunet-sface", "yunet_sface"):
         if not m.file_path:
             return None, "OpenCV 人脸模型未就绪，请先在模型管理页拉取权重"
-        root = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+        managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+        if managed is None:
+            return None, "模型文件路径无效"
+        root = str(managed)
         if not os.path.isdir(root) and not os.path.isfile(root):
             return None, f"权重目录不存在：{m.file_path}"
         try:

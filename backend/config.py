@@ -1,11 +1,12 @@
 import os
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 class Config:
-    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
+    SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_urlsafe(48)
 
     # JWT
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", SECRET_KEY)

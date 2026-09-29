@@ -20,6 +20,15 @@ from services.openapi_bridge import BRIDGE_USER
 import secrets
 
 
+def _initial_password(username: str, env_name: str) -> str:
+    configured = os.getenv(env_name)
+    if configured:
+        return configured
+    generated = secrets.token_urlsafe(18)
+    print(f"首次初始化账号 {username} 的随机密码：{generated}；请保存并尽快修改。", flush=True)
+    return generated
+
+
 def _dept(id, parent_id, ancestors, name, order, leader=None):
     return Dept(id=id, parent_id=parent_id, ancestors=ancestors,
                 dept_name=name, order_num=order, leader=leader, status="0", del_flag="0")
@@ -2924,14 +2933,14 @@ def init_seed():
 
     admin = User(username="admin", nickname="管理员", dept_id=100,
                  email="admin@tigerpro.com", phone="13800000000", sex="0", status="0")
-    admin.set_password("admin123")
+    admin.set_password(_initial_password("admin", "INITIAL_ADMIN_PASSWORD"))
     admin.roles = [admin_role]
     admin.depts = [dept100]
     admin.posts = [job_ceo]
 
     tiger = User(username="tiger", nickname="测试用户", dept_id=102,
                  email="tiger@tigerpro.com", phone="13900000000", sex="0", status="0")
-    tiger.set_password("123456")
+    tiger.set_password(_initial_password("tiger", "INITIAL_DEMO_PASSWORD"))
     tiger.roles = [common_role]
     tiger.depts = [dept102]
     tiger.posts = [job_user]

@@ -16,7 +16,7 @@ frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://loc
 1. 后端：见 [`backend/README.md`](./backend/README.md)（推荐 Python 3.12 + `scripts/setup_venv.ps1` / `run_backend.ps1`）
 2. 控制台：`cd frontend/frontend_admin && npm install && npm run dev`（:5173）
 3. 门户：`cd frontend/frontend_home && npm install && npm run dev`（:5174）
-4. 浏览器打开 http://localhost:5174 ，点「进入控制台」；默认账号 `admin` / `admin123`
+4. 浏览器打开 http://localhost:5174 ，点「进入控制台」；使用首次启动日志中的 `admin` 随机密码，或 `.env` 里的 `INITIAL_ADMIN_PASSWORD`
 
 > 本机请统一使用 **localhost**（勿混用 `127.0.0.1`）。前端总览见 [`frontend/README.md`](./frontend/README.md)。
 
@@ -199,10 +199,10 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 
 | 账号 | 密码 | 角色 | 数据范围 | 说明 |
 |------|------|------|----------|------|
-| `admin` | `admin123` | 超级管理员(admin) | 全部数据 | 全菜单 + 全部增删改 |
-| `tiger` | `123456` | 普通角色(common) | 本部门(前端组) | 只读，用户列表仅见本部门 |
+| `admin` | `INITIAL_ADMIN_PASSWORD` 或首次启动日志中的随机密码 | 超级管理员(admin) | 全部数据 | 全菜单 + 全部增删改 |
+| `tiger` | `INITIAL_DEMO_PASSWORD` 或首次启动日志中的随机密码 | 普通角色(common) | 本部门(前端组) | 只读，用户列表仅见本部门 |
 
-> 初始化幂等：`sys_user` 无数据时才灌种子（5 部门 / 4 岗位 / 31 菜单 / 2 角色 / 2 用户）。
+> 初始化幂等：`sys_user` 无数据时才灌种子（5 部门 / 4 岗位 / 31 菜单 / 2 角色 / 2 用户）；已有数据库的密码保持原值。
 
 ## 数据表
 
@@ -223,7 +223,7 @@ conda activate cv_python_tigerpro
 cd backend
 pip install -r requirements.txt
 
-cp .env.example .env      # 编辑 .env 填入 MySQL 账号密码（默认 root/123456）
+cp .env.example .env      # 编辑 .env 填入 MySQL 账号密码和固定随机 SECRET_KEY
 # MySQL 建库：
 #   CREATE DATABASE cv_python_tigerpro DEFAULT CHARSET utf8mb4;
 
@@ -335,7 +335,7 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 2. 后端 `python app.py`（:5001，自动建表+种子）
 3. 控制台 `cd frontend/frontend_admin && npm run dev` → http://localhost:5173
 4. 门户 `cd frontend/frontend_home && npm run dev` → http://localhost:5174  
-   打开门户后点「进入控制台」，用 `admin/admin123` 登录
+   打开门户后点「进入控制台」，用 `admin` 和首次初始化密码登录
 <img width="1920" height="869" alt="744ec6c19b3817d1e7c1efe5d66124e7" src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" />
 
 

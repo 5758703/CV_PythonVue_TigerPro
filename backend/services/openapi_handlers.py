@@ -5,12 +5,16 @@ import os
 
 from flask import current_app
 from models import AiModel
+from services.model_paths import resolve_managed_model_path
 
 
 def _abs_model_path(m: AiModel):
     if m is None or not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None
+    p = str(managed)
     return p if os.path.exists(p) else None
 
 

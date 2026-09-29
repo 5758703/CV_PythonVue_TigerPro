@@ -18,6 +18,7 @@ from werkzeug.utils import secure_filename
 
 from models import AiModel
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
 
 badminton_bp = Blueprint("badminton", __name__, url_prefix="/api/ai/badminton")
 
@@ -52,7 +53,10 @@ def _abs_model_path(m, library=None):
     """
     if not m or not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None
+    p = str(managed)
     if not os.path.exists(p):
         return None
     lib = (library or m.library or "ultralytics").lower()

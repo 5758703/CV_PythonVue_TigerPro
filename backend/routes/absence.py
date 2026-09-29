@@ -12,6 +12,7 @@ from werkzeug.utils import secure_filename
 
 from models import AiModel, FacePerson
 from security import permission_required
+from services.model_paths import resolve_managed_model_path
 
 absence_bp = Blueprint("absence", __name__, url_prefix="/api/ai/absence")
 
@@ -96,7 +97,10 @@ def _parse_zones():
 def _abs_weight_file(m):
     if m is None or not m.file_path:
         return None
-    p = os.path.join(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    managed = resolve_managed_model_path(current_app.config["UPLOAD_FOLDER"], m.file_path)
+    if managed is None:
+        return None
+    p = str(managed)
     if os.path.isfile(p):
         return p
     if os.path.isdir(p):

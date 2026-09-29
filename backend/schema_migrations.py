@@ -24,6 +24,10 @@ def migrate_schema(db):
     ])
     add_columns("reid_embedding", [("model_version", "ADD COLUMN model_version VARCHAR(255) NULL")])
     add_columns("training_dataset", [("source_path", "ADD COLUMN source_path VARCHAR(500) NULL")])
+    add_columns("training_job", [
+        ("worker_job_id", "ADD COLUMN worker_job_id VARCHAR(64) NULL"),
+        ("validation_job_id", "ADD COLUMN validation_job_id VARCHAR(64) NULL"),
+    ])
     add_columns("open_app", [
         ("ip_allowlist", "ADD COLUMN ip_allowlist TEXT NULL"),
         ("webhook_url", "ADD COLUMN webhook_url VARCHAR(500) NULL"),
@@ -31,6 +35,10 @@ def migrate_schema(db):
         ("webhook_events", "ADD COLUMN webhook_events TEXT NULL"),
         ("domain_id", "ADD COLUMN domain_id VARCHAR(64) NULL"),
         ("category", "ADD COLUMN category VARCHAR(32) NULL"),
+    ])
+    add_columns("open_job", [
+        ("worker_id", "ADD COLUMN worker_id VARCHAR(64) NULL"),
+        ("lease_expires_at", "ADD COLUMN lease_expires_at DATETIME NULL"),
     ])
     add_columns("camera_topology", [
         ("edge_type", "ADD COLUMN edge_type VARCHAR(32) DEFAULT 'non_overlap'"),
