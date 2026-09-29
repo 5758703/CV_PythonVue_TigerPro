@@ -35,6 +35,7 @@ from services.training import (
     IMG_EXTENSIONS,
     list_base_models,
     badminton_deploy_defaults,
+    normalize_train_hyperparams,
 )
 from services.dataset_annotation import (
     ensure_annotation_dirs,
@@ -914,13 +915,7 @@ def create_job():
     if not ds or ds.status != "ready":
         return jsonify(code=400, message="数据集未就绪，请先构建"), 400
 
-    hp = {
-        "epochs": int(data.get("epochs") or 100),
-        "batch": int(data.get("batch") or 8),
-        "imgsz": int(data.get("imgsz") or 640),
-        "device": data.get("device") or "cpu",
-        "patience": int(data.get("patience") or 20),
-    }
+    hp = normalize_train_hyperparams(data)
     job = TrainingJob(
         job_name=name,
         dataset_id=dataset_id,

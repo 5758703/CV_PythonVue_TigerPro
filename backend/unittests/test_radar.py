@@ -81,12 +81,18 @@ def test_radar_reject_bad_ext(monkeypatch, tmp_path):
         radar.infer(filename="notes.txt", data=b"x")
 
 
-def test_radar_real_rejects_2d_image(monkeypatch, tmp_path):
-    monkeypatch.setattr(radar.Config, "RADAR_ENGINE", "mock")
+def test_radar_real_falls_back_to_mock_for_2d_image(monkeypatch, tmp_path):
+    """When weights are ready (engine=real), JPG/PNG still run via demo engine."""
+    monkeypatch.setattr(radar.Config, "RADAR_ENGINE", "auto")
     monkeypatch.setattr(radar, "resolve_engine", lambda forced=None: "real")
     monkeypatch.setattr(radar.Config, "RADAR_CKPT_DIR", str(tmp_path))
-    with pytest.raises(radar.RadarError, match="NIfTI"):
-        radar.infer(filename="slice.png", data=b"x")
+    out = radar.infer(filename="slice.png", data=b"png-bytes")
+    assert out["engine"] == "mock"
+    assert out["meta"]["fallbackFrom"] == "real"
+    assert out["meta"]["fallbackReason"] == "2d_image"
+    assert "演示引擎" in out["meta"]["disclaimer"]
+    assert out["findings"]
+    assert out["meta"]["contentFingerprint"]
 
 
 def test_radar_real_without_weights_raises(monkeypatch, tmp_path):
@@ -140,6 +146,105 @@ def test_radar_parse_result_csv(tmp_path):
     names = dict(selected)
     assert names["gallstones"] == pytest.approx(0.91)
     assert names["atherosclerosis"] == pytest.approx(0.42)
+
+
+def test_import_inference_demo_puts_vendor_on_path(monkeypatch, tmp_path):
+    """Regression: evaluate path used to import before sys.path was patched."""
+    import sys
+    import types
+
+    vendor = tmp_path / "vendor"
+    infer = vendor / "RADAR_inference"
+    infer.mkdir(parents=True)
+    (infer / "inference_demo.py").write_text(
+        "RADAR = object\ndef evaluate(*a, **k):\n    return None\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(radar_real, "vendor_dir", lambda: vendor)
+    monkeypatch.setattr(radar_real, "inference_dir", lambda: infer)
+    # Drop any previously loaded stub and ensure path was not already present.
+    sys.modules.pop("inference_demo", None)
+    while str(infer.resolve()) in sys.path:
+        sys.path.remove(str(infer.resolve()))
+
+    demo = radar_real.import_inference_demo()
+    assert isinstance(demo, types.ModuleType)
+    assert hasattr(demo, "evaluate")
+    assert str(infer.resolve()) == sys.path[0]
+
+
+def test_transformers_compat_patch_exposes_chunking_helpers(monkeypatch):
+    """med.py imports apply_chunking_to_forward from modeling_utils (transformers 4.x)."""
+    from transformers import modeling_utils
+
+    # Simulate a transformers 5 install missing the re-exports.
+    for name in (
+        "apply_chunking_to_forward",
+        "prune_linear_layer",
+        "find_pruneable_heads_and_indices",
+    ):
+        if hasattr(modeling_utils, name):
+            monkeypatch.delattr(modeling_utils, name, raising=False)
+
+    radar_real._patch_transformers_for_damo_radar()
+    assert callable(modeling_utils.apply_chunking_to_forward)
+    assert callable(modeling_utils.prune_linear_layer)
+    assert callable(modeling_utils.find_pruneable_heads_and_indices)
+
+
+def test_transformers_compat_init_weights_sets_tied_keys():
+    """Vendor BertModel calls init_weights() without post_init(); transformers 5 needs tied keys."""
+    from transformers import modeling_utils
+    from transformers.models.bert.configuration_bert import BertConfig
+
+    radar_real._patch_transformers_for_damo_radar()
+
+    class TinyBert(modeling_utils.PreTrainedModel):
+        config_class = BertConfig
+
+        def __init__(self, config):
+            super().__init__(config)
+            import torch.nn as nn
+
+            self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
+            # Mimic damo-radar BertModel: call init_weights without post_init.
+            self.init_weights()
+
+        def _init_weights(self, module):  # noqa: ANN001
+            return None
+
+    cfg = BertConfig(vocab_size=32, hidden_size=8, num_hidden_layers=1, num_attention_heads=2, intermediate_size=16)
+    model = TinyBert(cfg)
+    assert hasattr(model, "all_tied_weights_keys")
+    assert isinstance(model.all_tied_weights_keys, dict)
+
+
+def test_transformers_compat_set_output_embeddings_without_lm_head():
+    """XBertEncoder uses cls.predictions.decoder; transformers 5 set_output_embeddings wants lm_head."""
+    import torch.nn as nn
+    from transformers import modeling_utils
+    from transformers.models.bert.configuration_bert import BertConfig
+
+    radar_real._patch_transformers_for_damo_radar()
+
+    class LegacyBertHead(modeling_utils.PreTrainedModel):
+        config_class = BertConfig
+
+        def __init__(self, config):
+            super().__init__(config)
+            self.cls = nn.Module()
+            self.cls.predictions = nn.Module()
+            self.cls.predictions.decoder = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+
+        def _init_weights(self, module):  # noqa: ANN001
+            return None
+
+    cfg = BertConfig(vocab_size=32, hidden_size=8, num_hidden_layers=1, num_attention_heads=2, intermediate_size=16)
+    model = LegacyBertHead(cfg)
+    assert not hasattr(model, "lm_head")
+    replacement = nn.Linear(cfg.hidden_size, cfg.vocab_size, bias=False)
+    model.set_output_embeddings(replacement)
+    assert model.cls.predictions.decoder is replacement
 
 
 def test_radar_infer_real_uses_adapter(monkeypatch, tmp_path):

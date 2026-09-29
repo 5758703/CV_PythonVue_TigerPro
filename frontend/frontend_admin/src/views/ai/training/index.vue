@@ -271,8 +271,8 @@
     </el-dialog>
 
     <!-- 新建训练任务 -->
-    <el-dialog v-model="jobDialog" title="新建训练任务" width="560px" @closed="resetJobForm">
-      <el-form :model="jobForm" label-width="100px">
+    <el-dialog v-model="jobDialog" title="新建训练任务" width="720px" @closed="resetJobForm">
+      <el-form :model="jobForm" label-width="120px" class="job-form">
         <el-form-item label="任务名称" required>
           <el-input v-model="jobForm.jobName" placeholder="如：水位尺-v1" />
         </el-form-item>
@@ -300,12 +300,104 @@
         <el-form-item label="图像尺寸">
           <el-input-number v-model="jobForm.imgsz" :min="320" :max="1280" :step="32" />
         </el-form-item>
+        <el-form-item label="早停 patience">
+          <el-input-number v-model="jobForm.patience" :min="0" :max="200" />
+          <span class="field-hint-inline">验证指标无提升时提前停止（0=关闭）</span>
+        </el-form-item>
         <el-form-item label="设备">
           <el-radio-group v-model="jobForm.device">
             <el-radio value="cpu">CPU</el-radio>
             <el-radio value="0">GPU (cuda:0)</el-radio>
           </el-radio-group>
         </el-form-item>
+
+        <el-divider content-position="left">数据增强</el-divider>
+        <el-form-item label="增强模式">
+          <div class="aug-field">
+            <div class="aug-field-row">
+              <el-switch
+                v-model="jobForm.enhancedAug"
+                inline-prompt
+                active-text="增强"
+                inactive-text="标准"
+              />
+              <el-tooltip placement="top" :show-after="200">
+                <template #content>
+                  <div class="aug-tip-box">
+                    标准模式仅使用 mosaic / mixup / copy_paste / scale / fliplr。<br>
+                    增强模式额外开启几何变换、HSV 颜色扰动、随机擦除，并默认启用余弦学习率（cos_lr）。<br>
+                    适合小样本或场景多变的数据；强度过大可能让收敛变慢、验证指标抖动。
+                  </div>
+                </template>
+                <el-icon class="aug-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <div class="aug-desc">开启后追加旋转/透视/HSV/擦除等，并启用 cos_lr</div>
+          </div>
+        </el-form-item>
+
+        <div class="aug-grid">
+          <el-form-item v-for="p in basicAugParams" :key="p.key">
+            <template #label>
+              <span class="aug-label">
+                {{ p.key }}
+                <el-tooltip placement="top" :show-after="200">
+                  <template #content>
+                    <div class="aug-tip-box">{{ p.detail }}</div>
+                  </template>
+                  <el-icon class="aug-help"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+            </template>
+            <div class="aug-field">
+              <el-input-number
+                v-model="jobForm[p.key]"
+                :min="p.min"
+                :max="p.max"
+                :step="p.step"
+                :precision="p.precision"
+                controls-position="right"
+              />
+              <div class="aug-desc">{{ p.summary }}</div>
+            </div>
+          </el-form-item>
+        </div>
+
+        <template v-if="jobForm.enhancedAug">
+          <div class="aug-grid">
+            <el-form-item v-for="p in enhancedAugParams" :key="p.key">
+              <template #label>
+                <span class="aug-label">
+                  {{ p.key }}
+                  <el-tooltip placement="top" :show-after="200">
+                    <template #content>
+                      <div class="aug-tip-box">{{ p.detail }}</div>
+                    </template>
+                    <el-icon class="aug-help"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
+              <div class="aug-field">
+                <el-switch v-if="p.type === 'switch'" v-model="jobForm[p.key]" />
+                <el-input-number
+                  v-else
+                  v-model="jobForm[p.key]"
+                  :min="p.min"
+                  :max="p.max"
+                  :step="p.step"
+                  :precision="p.precision"
+                  controls-position="right"
+                />
+                <div class="aug-desc">{{ p.summary }}</div>
+              </div>
+            </el-form-item>
+          </div>
+        </template>
+        <el-alert type="info" :closable="false" class="aug-tip">
+          <template #title>
+            鼠标悬停参数旁「?」可查看详细说明。数值多为概率或幅度：0 表示关闭该增强；过大可能导致过拟合/难收敛。
+          </template>
+        </el-alert>
       </el-form>
       <template #footer>
         <el-button @click="jobDialog = false">取消</el-button>
@@ -590,7 +682,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Refresh, Edit, Delete, Upload, Document, VideoCamera } from '@element-plus/icons-vue'
+import { Plus, Refresh, Edit, Delete, Upload, Document, VideoCamera, QuestionFilled } from '@element-plus/icons-vue'
 import { trainingApi } from '../../../api/ai'
 import AnnotateToolsPanel from './annotateTools.vue'
 import QualityPanel from './quality.vue'
@@ -876,10 +968,131 @@ const jobTotal = ref(0)
 const jobQuery = reactive({ status: '' })
 const jobDialog = ref(false)
 const jobSaving = ref(false)
-const jobForm = reactive({
-  jobName: '', datasetId: null, baseModel: 'yolo11n.pt',
-  epochs: 100, batch: 8, imgsz: 640, device: 'cpu'
+const defaultJobForm = () => ({
+  jobName: '',
+  datasetId: null,
+  baseModel: 'yolo11n.pt',
+  epochs: 100,
+  batch: 8,
+  imgsz: 640,
+  patience: 20,
+  device: 'cpu',
+  enhancedAug: false,
+  mosaic: 1.0,
+  mixup: 0.1,
+  copy_paste: 0.1,
+  scale: 0.5,
+  fliplr: 0.5,
+  flipud: 0.5,
+  degrees: 15.0,
+  translate: 0.15,
+  hsv_h: 0.02,
+  hsv_s: 0.7,
+  hsv_v: 0.5,
+  perspective: 0.001,
+  shear: 5.0,
+  erasing: 0.3,
+  cos_lr: true,
 })
+const jobForm = reactive(defaultJobForm())
+
+/** 标准数据增强：简要说明 + 悬停详细说明 */
+const basicAugParams = [
+  {
+    key: 'mosaic',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '四图拼接概率，提升小目标与上下文',
+    detail: 'Mosaic：将 4 张训练图拼成一张再缩放裁剪。概率 0~1，默认 1.0（几乎每张都用）。有利于多尺度与小目标，但末期训练常会自动关闭；设为 0 可完全关闭。',
+  },
+  {
+    key: 'mixup',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '两图像素混合概率，增强鲁棒性',
+    detail: 'MixUp：按系数线性混合两张图及其标签。概率越高混合越频繁。常用 0~0.15；过大易使边界变糊、收敛变慢。小样本时可适度提高。',
+  },
+  {
+    key: 'copy_paste',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '目标实例拷贝粘贴，缓解类别不均',
+    detail: 'Copy-Paste：把一张图中的目标实例粘贴到另一张图。适合目标稀疏、类别不平衡的检测任务。分割任务更常见，检测也可受益；过高可能引入不合理遮挡。',
+  },
+  {
+    key: 'scale',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '随机缩放增益，模拟远近变化',
+    detail: 'Scale：图像随机缩放幅度（相对原图）。例如 0.5 表示约在 0.5×~1.5× 范围缩放（具体以实现为准）。有助于多尺度泛化；过大可能裁掉关键目标。',
+  },
+  {
+    key: 'fliplr',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '左右翻转概率（水平镜像）',
+    detail: 'Flip Left-Right：水平翻转概率。多数检测任务默认 0.5。若目标有明确左右方向性（如文字、单向交通标志），应降低或设为 0。',
+  },
+]
+
+/** 增强模式下追加的参数 */
+const enhancedAugParams = [
+  {
+    key: 'flipud',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '上下翻转概率（垂直镜像）',
+    detail: 'Flip Up-Down：垂直翻转。无人机俯视、医学影像等可开启；地面场景（行人、车辆直立）通常保持 0，避免不合理姿态。',
+  },
+  {
+    key: 'degrees',
+    min: 0, max: 45, step: 1, precision: 1,
+    summary: '随机旋转角度范围（度）',
+    detail: 'Degrees：随机旋转的最大角度（±degrees）。15° 较温和。角度过大易让直立目标“躺倒”，影响框回归；俯视目标可适当加大。',
+  },
+  {
+    key: 'translate',
+    min: 0, max: 0.5, step: 0.01, precision: 2,
+    summary: '随机平移比例（相对边长）',
+    detail: 'Translate：图像随机平移幅度，相对宽高的比例。0.15 表示最多平移约 15%。模拟目标不在画面中心；过大易把目标移出视野。',
+  },
+  {
+    key: 'shear',
+    min: 0, max: 20, step: 0.5, precision: 1,
+    summary: '剪切变换角度，模拟视角倾斜',
+    detail: 'Shear：剪切（错切）变换最大角度。可模拟拍摄时的轻微倾斜。建议 ≤10~15；过大几何畸变严重，框坐标更难学。',
+  },
+  {
+    key: 'perspective',
+    min: 0, max: 0.001, step: 0.0001, precision: 4,
+    summary: '透视变换强度（通常很小）',
+    detail: 'Perspective：透视变换强度。Ultralytics 中数值通常极小（如 0.0001~0.001）。用于模拟近大远小；过大易严重扭曲图像，一般保持默认即可。',
+  },
+  {
+    key: 'hsv_h',
+    min: 0, max: 0.1, step: 0.005, precision: 3,
+    summary: '色调（Hue）随机扰动幅度',
+    detail: 'HSV-H：色相通道抖动。提高可增强光照/滤镜下的颜色鲁棒性。色相敏感任务（按颜色区分类别）应减小；一般 0.015~0.02。',
+  },
+  {
+    key: 'hsv_s',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '饱和度（Saturation）扰动幅度',
+    detail: 'HSV-S：饱和度抖动，模拟偏色、滤镜。0.7 为较强增强。昏暗或灰度偏多的数据可适当提高；彩色关键任务勿过大。',
+  },
+  {
+    key: 'hsv_v',
+    min: 0, max: 1, step: 0.05, precision: 2,
+    summary: '明度（Value）扰动幅度',
+    detail: 'HSV-V：亮度抖动，模拟曝光不足/过曝。对日夜、室内外混合数据很有用。过大可能压黑细节，建议配合真实光照分布调节。',
+  },
+  {
+    key: 'erasing',
+    min: 0, max: 0.9, step: 0.05, precision: 2,
+    summary: '随机擦除概率，模拟遮挡',
+    detail: 'Random Erasing：随机遮挡一块矩形区域。提升遮挡鲁棒性（树枝、路人遮挡等）。过高会丢失过多信息，建议 0.2~0.4。',
+  },
+  {
+    key: 'cos_lr',
+    type: 'switch',
+    summary: '余弦退火学习率，末期更稳',
+    detail: 'Cosine LR：按余弦曲线衰减学习率，末期更平滑。增强模式默认开启，有助于强增强下的稳定收敛；也可关闭改用默认调度。',
+  },
+]
 const baseModelOptions = ref([])
 const baseModelGroups = computed(() => {
   const groups = [
@@ -986,10 +1199,7 @@ async function loadJobs() {
 }
 
 function resetJobForm() {
-  Object.assign(jobForm, {
-    jobName: '', datasetId: null, baseModel: 'yolo11n.pt',
-    epochs: 100, batch: 8, imgsz: 640, device: 'cpu'
-  })
+  Object.assign(jobForm, defaultJobForm())
 }
 
 function openJobDialog() {
@@ -1676,6 +1886,38 @@ onMounted(async () => {
 .annotate-sub-tabs :deep(.el-tabs__header) { margin-bottom: 12px; }
 .workflow-alert { margin-bottom: 12px; }
 .field-hint-inline { font-size: 12px; color: #909399; margin-left: 8px; }
+.job-form { max-height: 68vh; overflow-y: auto; padding-right: 4px; }
+.aug-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+.aug-grid :deep(.el-form-item) { margin-bottom: 14px; }
+.aug-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.aug-help {
+  color: #909399;
+  cursor: help;
+  font-size: 14px;
+  vertical-align: middle;
+}
+.aug-help:hover { color: #409eff; }
+.aug-field { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.aug-field-row { display: flex; align-items: center; gap: 8px; }
+.aug-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #909399;
+}
+.aug-tip-box {
+  max-width: 320px;
+  line-height: 1.5;
+  font-size: 13px;
+}
+.aug-tip { margin: 4px 0 12px; }
 .preview-desc { margin-bottom: 8px; }
 .format-guide { margin-bottom: 12px; }
 .guide-block { font-size: 13px; color: #606266; }

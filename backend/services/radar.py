@@ -317,6 +317,25 @@ def infer(
     engine: str | None = None,
 ) -> dict[str, Any]:
     resolved = resolve_engine(engine)
+    # JPG/PNG etc. cannot run damo-radar (needs NIfTI volumes) — soft-fallback to mock.
+    if (
+        resolved == "real"
+        and filename
+        and _is_image_name(filename)
+        and not _is_nifti_name(filename)
+    ):
+        out = infer_mock(threshold=threshold, filename=filename, data=data)
+        meta = dict(out.get("meta") or {})
+        meta["fallbackFrom"] = "real"
+        meta["fallbackReason"] = "2d_image"
+        base = str(meta.get("disclaimer") or DISCLAIMER).rstrip()
+        meta["disclaimer"] = (
+            f"{base} 已上传二维影像（JPG/PNG 等），自动改用演示引擎；"
+            "真推理请上传 .nii / .nii.gz。"
+        )
+        out["meta"] = meta
+        return out
+
     require_file = resolved == "real"
     validate_upload(filename, data, required=require_file)
 
@@ -325,12 +344,6 @@ def infer(
             validate_upload(filename, data if data is not None else b"x", required=False)
         return infer_mock(threshold=threshold, filename=filename, data=data)
 
-    # Real damo-radar expects NIfTI volumes; 2D images are demo-only.
-    if filename and _is_image_name(filename) and not _is_nifti_name(filename):
-        raise RadarError(
-            "真推理引擎需要 NIfTI 体积数据（.nii / .nii.gz）。"
-            "JPG/PNG 等二维影像仅在演示引擎下可用，请设置 RADAR_ENGINE=mock 或上传 NIfTI。"
-        )
     root = ckpt_dir() / "uploads"
     root.mkdir(parents=True, exist_ok=True)
     safe_name = os.path.basename(filename or "input.nii.gz")
@@ -339,6 +352,11 @@ def infer(
         target.write_bytes(data)
     elif not target.is_file():
         raise RadarError("真推理需要上传 NIfTI 文件内容")
+    if not _is_nifti_name(safe_name):
+        raise RadarError(
+            "真推理引擎需要 NIfTI 体积数据（.nii / .nii.gz）。"
+            "JPG/PNG 等二维影像将自动使用演示引擎。"
+        )
     return infer_real(nifti_path=target, threshold=threshold)
 
 

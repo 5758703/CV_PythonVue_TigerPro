@@ -30,6 +30,106 @@ DATASET_FORMATS = {
     "import": "导入本地已有数据集目录",
 }
 
+# Ultralytics train() 数据增强白名单： (min, max, default)
+_BASIC_AUG_SPEC = {
+    "mosaic": (0.0, 1.0, 1.0),
+    "mixup": (0.0, 1.0, 0.1),
+    "copy_paste": (0.0, 1.0, 0.1),
+    "scale": (0.0, 1.0, 0.5),
+    "fliplr": (0.0, 1.0, 0.5),
+}
+_ENHANCED_AUG_SPEC = {
+    "flipud": (0.0, 1.0, 0.5),
+    "degrees": (0.0, 45.0, 15.0),
+    "translate": (0.0, 0.5, 0.15),
+    "hsv_h": (0.0, 0.1, 0.02),
+    "hsv_s": (0.0, 1.0, 0.7),
+    "hsv_v": (0.0, 1.0, 0.5),
+    "perspective": (0.0, 0.001, 0.001),
+    "shear": (0.0, 20.0, 5.0),
+    "erasing": (0.0, 0.9, 0.3),
+}
+
+
+def _clamp_float(raw, lo: float, hi: float, default: float) -> float:
+    try:
+        value = float(default if raw is None else raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    if value != value:  # NaN
+        value = float(default)
+    return max(lo, min(hi, value))
+
+
+def normalize_train_hyperparams(data: dict | None) -> dict:
+    """Normalize / whitelist job hyperparams from API JSON (incl. aug + enhanced mode)."""
+    data = data or {}
+    try:
+        epochs = int(data.get("epochs") or 100)
+    except (TypeError, ValueError):
+        epochs = 100
+    try:
+        batch = int(data.get("batch") or 8)
+    except (TypeError, ValueError):
+        batch = 8
+    try:
+        imgsz = int(data.get("imgsz") or 640)
+    except (TypeError, ValueError):
+        imgsz = 640
+    try:
+        patience = int(data.get("patience") or 20)
+    except (TypeError, ValueError):
+        patience = 20
+
+    epochs = max(1, min(500, epochs))
+    batch = max(1, min(128, batch))
+    imgsz = max(320, min(1280, imgsz))
+    patience = max(0, min(200, patience))
+
+    device = str(data.get("device") or "cpu").strip() or "cpu"
+    if device not in ("cpu", "0", "1", "2", "3"):
+        # allow cuda:N style lightly
+        if not (device.isdigit() or device.startswith("cuda")):
+            device = "cpu"
+
+    enhanced = bool(data.get("enhancedAug") or data.get("enhanced") or False)
+    hp = {
+        "epochs": epochs,
+        "batch": batch,
+        "imgsz": imgsz,
+        "device": device,
+        "patience": patience,
+        "enhancedAug": enhanced,
+    }
+    for key, (lo, hi, default) in _BASIC_AUG_SPEC.items():
+        hp[key] = _clamp_float(data.get(key), lo, hi, default)
+    if enhanced:
+        for key, (lo, hi, default) in _ENHANCED_AUG_SPEC.items():
+            hp[key] = _clamp_float(data.get(key), lo, hi, default)
+        cos_raw = data.get("cos_lr", True)
+        if isinstance(cos_raw, str):
+            hp["cos_lr"] = cos_raw.strip().lower() in ("1", "true", "yes", "on")
+        else:
+            hp["cos_lr"] = bool(cos_raw)
+    return hp
+
+
+def train_aug_kwargs_from_hp(hp: dict | None) -> dict:
+    """Extract only Ultralytics-safe augmentation kwargs from stored hyperparams."""
+    hp = hp or {}
+    out = {}
+    for key in _BASIC_AUG_SPEC:
+        if key in hp:
+            out[key] = float(hp[key])
+    if hp.get("enhancedAug"):
+        for key in _ENHANCED_AUG_SPEC:
+            if key in hp:
+                out[key] = float(hp[key])
+        if "cos_lr" in hp:
+            out["cos_lr"] = bool(hp["cos_lr"])
+    return out
+
+
 # 各格式详细说明（供 API / 前端展示）
 FORMAT_SPECS = {
     "auto": {
@@ -1689,6 +1789,7 @@ def run_training_worker(app, job_id):
         imgsz = int(hp.get("imgsz", 640))
         device = str(hp.get("device", "cpu"))
         patience = int(hp.get("patience", 20))
+        aug_kwargs = train_aug_kwargs_from_hp(hp)
 
         runs_root = upload_root / "training" / "runs" / str(job_id)
         runs_root.mkdir(parents=True, exist_ok=True)
@@ -1743,6 +1844,8 @@ def run_training_worker(app, job_id):
         db.session.commit()
 
         _log(f"训练开始: job={job_id} base={job.base_model} epochs={epochs} batch={batch} imgsz={imgsz} device={device}")
+        if aug_kwargs:
+            _log(f"数据增强: enhanced={bool(hp.get('enhancedAug'))} {aug_kwargs}")
         _log(f"data.yaml: {ds.yaml_path}")
 
         def _check_stop(trainer, where=""):
@@ -1827,6 +1930,7 @@ def run_training_worker(app, job_id):
                 workers=0,
                 exist_ok=True,
                 verbose=True,
+                **aug_kwargs,
             )
 
             job = TrainingJob.query.get(job_id)

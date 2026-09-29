@@ -20,7 +20,7 @@
       >
         <div class="upload-inner">
           <strong>{{ file ? file.name : '拖入或选择 CT 影像（NIfTI / JPG / PNG）' }}</strong>
-          <span>真推理需 .nii/.nii.gz + GPU 权重；JPG/PNG 仅演示引擎。未就绪时自动 mock</span>
+          <span>真推理需 .nii/.nii.gz + GPU；JPG/PNG 自动走演示引擎</span>
         </div>
       </el-upload>
       <el-button v-if="file" link type="danger" :disabled="busy" @click="clearFile">清除文件</el-button>

@@ -30,13 +30,13 @@
           class="hero-intro"
           :title="heroIntroFull"
         >
-          <span class="hero-sub">多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 多模态 全栈纳管</span>
+          <span class="hero-sub">多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 医学影像 全栈纳管</span>
           <span class="hero-desc">
             一站式管理与在线测试多种 AI 模型：从 <b>HuggingFace / ModelScope / Roboflow</b> 拉取权重、统一纳管、按任务即点即测。
-            平台现支持 <b>14+ 类 AI 任务</b>，推理引擎涵盖 <b>YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · transformers · funasr / MOSS · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行（大模型建议 GPU）。
-            近期重点：<b>开放词汇检测 OmDet-Turbo</b>、<b>多模态定位 VLM-FO1</b>、<b>ASR（MOSS 多人转写）</b>、
-            <b>跨镜 MTMC</b>（三档门控 · 证据落库 · 候选晋升）、<b>跌倒检测</b>、<b>手势识别</b>、<b>项目门户</b>与 <b>屏幕 RTSP</b>；
-            目标追踪覆盖车辆 / 离岗；图片检测可调 <b>DeepSeek AI</b> 生成分析报告。
+            平台现支持 <b>15+ 类 AI 任务</b>与 <b>91 个生产模型场景</b>，推理引擎涵盖
+            <b>YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · RADAR · transformers · funasr / MOSS · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行（大模型建议 GPU）。
+            近期重点：<b>达摩院 RADAR 腹部 CT</b>、<b>深蹲计数工作台</b>、<b>生产场景目录扩容</b>、<b>训练数据增强超参</b>；
+            同时保留开放词汇检测、多模态定位、跨镜 MTMC、跌倒 / 手势等能力；图片与医学报告可调 <b>DeepSeek AI</b>。
           </span>
         </div>
         <div class="hero-tags" :title="heroTags.map((t) => t.label).join(' · ')">
@@ -130,13 +130,17 @@ import { ArrowRight } from "@element-plus/icons-vue";
 import { modelApi, trainingApi } from "../api/ai";
 
 const heroIntroFull =
-  "多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 多模态 全栈纳管。" +
+  "多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 医学影像 全栈纳管。" +
   "一站式管理与在线测试多种 AI 模型：从 HuggingFace / ModelScope / Roboflow 拉取权重、统一纳管、按任务即点即测。" +
-  "平台现支持 14+ 类 AI 任务，推理引擎涵盖 YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · transformers · funasr / MOSS · RF-DETR 等，纯 CPU 即可运行（大模型建议 GPU）。" +
-  "近期重点：开放词汇检测 OmDet-Turbo、多模态定位 VLM-FO1、ASR（MOSS 多人转写）、跨镜 MTMC（三档门控 + 证据落库 + 候选晋升）、跌倒检测、手势识别、项目门户与 Windows 屏幕 RTSP；" +
-  "目标追踪覆盖车辆 / 离岗；图片检测可调 DeepSeek AI 生成分析报告。";
+  "平台现支持 15+ 类 AI 任务与 91 个生产模型场景，推理引擎涵盖 YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · RADAR · transformers · funasr / MOSS · RF-DETR 等，纯 CPU 即可运行（大模型建议 GPU）。" +
+  "近期重点：达摩院 RADAR 腹部 CT、深蹲计数工作台、生产场景目录扩容、训练数据增强超参；" +
+  "同时保留开放词汇检测、多模态定位、跨镜 MTMC、跌倒 / 手势等能力；图片与医学报告可调 DeepSeek AI。";
 
 const heroTags = [
+  { label: "RADAR · 腹部 CT", color: "#08979c" },
+  { label: "深蹲计数 · 姿态", color: "#d46b08" },
+  { label: "91 生产场景", color: "#0958d9" },
+  { label: "训练增强超参", color: "#389e0d" },
   { label: "OmDet · 开放词汇检测", color: "#0958d9" },
   { label: "VLM-FO1 · 自然语言定位", color: "#531dab" },
   { label: "ASR · MOSS 多人转写", color: "#c41d7f" },
@@ -166,38 +170,56 @@ const heroTags = [
 /** 首页「热门场景」快捷入口（含近期新增能力，精简展示） */
 const sceneCards = [
   {
-    title: "开放词汇检测",
+    title: "腹部 CT 诊断",
     badge: "NEW",
+    desc: "达摩院 RADAR · NIfTI 上传 · 多 finding 筛查 · DeepSeek 报告",
+    to: { path: "/ai/radar" },
+  },
+  {
+    title: "深蹲计数",
+    badge: "NEW",
+    desc: "姿态估计驱动 · 视频/摄像头会话 · 计数叠加与状态回传",
+    to: { path: "/ai/scenarios/squat-counting" },
+  },
+  {
+    title: "生产模型场景",
+    badge: "NEW",
+    desc: "91 场景目录 · 统一合同 · 就绪探测 · Open API / 专用工作台",
+    to: { path: "/ai/scenarios" },
+  },
+  {
+    title: "模型训练",
+    badge: "NEW",
+    desc: "标准/增强数据增强 · mosaic/mixup/HSV 等超参 · 曲线与 mAP",
+    to: { path: "/ai/training" },
+  },
+  {
+    title: "开放词汇检测",
     desc: "OmDet-Turbo · 文本类别零样本检测 · 图像页提示类别",
     to: { path: "/ai/image" },
   },
   {
     title: "多模态定位",
-    badge: "NEW",
     desc: "VLM-FO1 · 自然语言 / REC 定位 · YOLO 候选 + FO1 筛选",
     to: { path: "/ai/image" },
   },
   {
     title: "语音转写 ASR",
-    badge: "NEW",
     desc: "MOSS 多人识别 · 时间戳 · 音/视频 · 字幕导出 SRT/ASS",
     to: { path: "/ai/asr" },
   },
   {
     title: "跨镜重识别",
-    badge: "NEW",
     desc: "三档门控 · 证据落库 · 候选晋升 · 全局 ID · 监控墙叠加",
     to: { path: "/ai/mtmc" },
   },
   {
     title: "跌倒检测",
-    badge: "NEW",
     desc: "姿态四指标判定 · 图片/视频/摄像头 · 告警规则与告警音",
     to: { path: "/ai/fall" },
   },
   {
     title: "手势识别",
-    badge: "NEW",
     desc: "MediaPipe 数字手势 · 中国手语 YOLO · 可多选同跑",
     to: { path: "/ai/handpose" },
   },
@@ -274,6 +296,7 @@ const TASK_LABELS = {
   "automatic-speech-recognition": "语音识别",
   "text-to-speech": "语音合成",
   "talking-head": "数字人",
+  "abdominal-ct-diagnosis": "腹部CT诊断",
 };
 const taskLabel = (t) => TASK_LABELS[t] || t || "其他";
 
@@ -282,7 +305,7 @@ const trainSteps = [
   { title: "视频抽帧", desc: "10s 视频可抽 200+ 张样本" },
   { title: "数据标注", desc: "Canvas 在线画框，YOLO 标签自动保存" },
   { title: "构建", desc: "自动划分 train/val，生成 data.yaml" },
-  { title: "训练任务", desc: "YOLOv8 训练，曲线与 mAP 监控" },
+  { title: "训练任务", desc: "YOLOv8 + 标准/增强数据增强超参，曲线与 mAP" },
   { title: "部署检测", desc: "注册到模型管理，即用于视频检测" },
 ];
 

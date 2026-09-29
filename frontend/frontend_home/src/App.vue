@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity, ArrowRight, Boxes, BrainCircuit, CheckCircle2, ChevronRight, CircleDot,
-  Database, ExternalLink, FolderKanban, GitBranch, Hand, BookOpen, Mic, Play, ScanFace,
-  ScanLine, ShieldCheck, Sparkles, Target, TrendingUp, Users, Workflow,
+  Database, Dumbbell, ExternalLink, FolderKanban, GitBranch, Hand, BookOpen, Mic, Play,
+  ScanFace, ScanLine, ShieldCheck, Sparkles, Stethoscope, TrendingUp, Users, Workflow,
 } from 'lucide-vue-next'
 
 import { fetchHealth, fetchOpenApiHealth, fetchPortalSummary } from './api/portal'
@@ -38,7 +38,7 @@ const links = computed(() => ({
   training: consoleEntryHref('/ai/training'),
   models: consoleEntryHref('/ai/model'),
   openapi: openApiDocsHref(),
-  scenariosAll: consoleEntryHref('/index'),
+  scenariosAll: consoleEntryHref('/ai/scenarios'),
 }))
 
 function onConsoleNav(event, path = '/index', query = {}) {
@@ -58,13 +58,13 @@ function onScenarioNav(event, item) {
 }
 
 const FALLBACK_STATS = {
-  modelTotal: 107,
-  readyCount: 106,
+  modelTotal: 108,
+  readyCount: 107,
   datasetTotal: 6,
   jobTotal: 5,
   jobsRunning: 0,
-  taskKinds: 14,
-  categoryKinds: 30,
+  taskKinds: 15,
+  categoryKinds: 31,
 }
 
 const summary = ref({ ...FALLBACK_STATS })
@@ -129,28 +129,61 @@ const steps = [
   ['视频抽帧', '提取高质量样本'],
   ['数据标注', '在线框选与保存'],
   ['构建数据', '自动划分训练集'],
-  ['训练任务', '监控曲线与 mAP'],
+  ['训练任务', '增强超参 + 曲线与 mAP'],
   ['部署检测', '注册并在线测试'],
 ]
 
+const recentUpdates = [
+  {
+    date: '2026-09',
+    title: 'RADAR 腹部 CT 诊断',
+    detail: '接入阿里达摩院 RADAR：NIfTI 上传、多 finding 筛查、DeepSeek 报告，独立页与场景工作台双入口。',
+    path: '/ai/radar',
+    tone: 'cyan',
+  },
+  {
+    date: '2026-09',
+    title: '深蹲计数工作台',
+    detail: '姿态估计驱动单人深蹲计数，支持视频与本地/网络摄像头实时会话与叠加显示。',
+    path: '/ai/scenarios/squat-counting',
+    tone: 'orange',
+  },
+  {
+    date: '2026-09',
+    title: '生产场景扩展至 91',
+    detail: '模型场景目录与生产工作台扩容，覆盖检测、分割、姿态、ReID、OCR、医学影像等分组。',
+    path: '/ai/scenarios',
+    tone: 'blue',
+  },
+  {
+    date: '2026-09',
+    title: '训练数据增强超参',
+    detail: '训练页支持标准 / 增强模式：mosaic、mixup、旋转、HSV 等 Ultralytics 安全超参可调。',
+    path: '/ai/training',
+    tone: 'green',
+  },
+]
+
 const scenarios = [
+  { title: '腹部 CT 诊断', description: '达摩院 RADAR：腹部增强 CT 多 finding 辅助筛查，支持报告与案例库。', tag: '医学影像', tagTone: 'cyan', icon: Stethoscope, path: '/ai/radar' },
+  { title: '深蹲计数', description: 'YOLO / RTMPose 姿态驱动计数，视频回放与实时摄像头会话均可。', tag: '运动健身', tagTone: 'orange', icon: Dumbbell, path: '/ai/scenarios/squat-counting' },
+  { title: '生产模型场景', description: '91 个生产场景目录：统一合同、就绪探测、Open API 与专用工作台。', tag: '场景目录', tagTone: 'blue', icon: Boxes, path: '/ai/scenarios' },
   { title: '开放词汇检测', description: 'OmDet-Turbo：输入类别列表做零样本检测，与固定类 YOLO 并存。', tag: '开放词汇', tagTone: 'blue', icon: Sparkles, path: '/ai/image' },
   { title: '多模态定位', description: 'VLM-FO1：自然语言 / REC 细粒度定位，YOLO 候选 + FO1 筛选。', tag: '多模态', tagTone: 'pink', icon: BrainCircuit, path: '/ai/image' },
-  { title: '语音转写 ASR', description: 'MOSS 多人说话人转写与时间戳，支持音视频与字幕导出。', tag: '语音识别', tagTone: 'red', icon: Mic, path: '/ai/asr' },
   { title: '跨镜重识别', description: '三档门控 + 证据落库 + 候选晋升，多路全局 ID 与监控墙叠加。', tag: '跨镜追踪', tagTone: 'blue', icon: Workflow, path: '/ai/mtmc' },
+  { title: '语音转写 ASR', description: 'MOSS 多人说话人转写与时间戳，支持音视频与字幕导出。', tag: '语音识别', tagTone: 'red', icon: Mic, path: '/ai/asr' },
   { title: '跌倒检测', description: '姿态四指标判定，支持图片、视频与实时摄像头。', tag: '安全监测', tagTone: 'red', icon: ShieldCheck, path: '/ai/fall' },
   { title: '手势识别', description: '数字手势与中国手语识别，支持多视角输入。', tag: '姿态识别', tagTone: 'pink', icon: Hand, path: '/ai/handpose' },
   { title: '人员离岗检测', description: '多工位在岗判定，支持移动镜头运动补偿。', tag: '行为分析', tagTone: 'orange', icon: Users, path: '/ai/track', query: { scenario: 'absence' } },
   { title: '车辆追踪', description: '车牌 OCR、测速抓拍、运动轨迹与过车记录。', tag: '智慧交通', tagTone: 'blue', icon: ScanLine, path: '/ai/track', query: { scenario: 'vehicle' } },
-  { title: '通用目标追踪', description: 'ByteTrack 多目标追踪与区域越线进出统计。', tag: '视觉追踪', tagTone: 'green', icon: Target, path: '/ai/track', query: { scenario: 'general' } },
   { title: '人脸识别', description: 'InsightFace / YuNet+SFace 底库与 1:N 实时识别。', tag: '身份识别', tagTone: 'cyan', icon: ScanFace, path: '/ai/face' },
 ]
 
 const heroTags = [
-  ['开放词汇', 'blue'],
-  ['多模态定位', 'pink'],
-  ['语音 ASR', 'red'],
-  ['跨镜 MTMC', 'blue'],
+  ['腹部 CT', 'cyan'],
+  ['深蹲计数', 'orange'],
+  ['91 场景', 'blue'],
+  ['训练增强', 'green'],
 ]
 
 const runItems = computed(() => {
@@ -289,6 +322,7 @@ onUnmounted(() => {
             </div>
           </div>
           <nav class="top-nav" aria-label="门户导航">
+            <a href="#updates" @click.prevent="scrollToId('updates')">更新</a>
             <a href="#scenarios">场景</a>
             <a href="#training" @click.prevent="scrollToId('training')">训练</a>
             <a :href="links.openapi" target="_blank" rel="noopener noreferrer">OpenAPI</a>
@@ -307,8 +341,8 @@ onUnmounted(() => {
             <div>
               <h1>让每一个 AI 模型，都能更快走向可用</h1>
               <p class="hero-description">
-                统一管理视觉、文本与语音模型。从数据构建、训练评估到在线测试，在一个清晰的工作流中完成。
-                近期已接入 OmDet 开放词汇检测、VLM-FO1 自然语言定位、MOSS 多人 ASR，以及跨镜 MTMC 证据落库与候选人工核对。
+                统一管理视觉、文本、语音与医学影像模型。从数据构建、训练评估到在线测试，在一个清晰的工作流中完成。
+                近期上线：达摩院 RADAR 腹部 CT、深蹲计数工作台、91 个生产模型场景，以及训练页可调数据增强超参。
               </p>
             </div>
             <div class="actions">
@@ -368,11 +402,38 @@ onUnmounted(() => {
         </article>
       </section>
 
+      <section id="updates" class="updates">
+        <div class="section-head">
+          <div>
+            <b>What's New</b>
+            <h2>最近更新</h2>
+            <p>按近期交付整理，点卡片可直接进入对应控制台页面。</p>
+          </div>
+          <a :href="links.scenariosAll" @click="onConsoleNav($event, '/ai/scenarios')">生产场景目录 <ChevronRight :size="16" /></a>
+        </div>
+        <div class="updates-grid">
+          <a
+            v-for="item in recentUpdates"
+            :key="item.title"
+            :href="consoleEntryHref(item.path)"
+            class="update-card"
+            @click="onConsoleNav($event, item.path)"
+          >
+            <div class="update-meta">
+              <span class="tag" :class="`tag-${item.tone}`">{{ item.date }}</span>
+              <ArrowRight :size="16" />
+            </div>
+            <h3>{{ item.title }}</h3>
+            <p>{{ item.detail }}</p>
+          </a>
+        </div>
+      </section>
+
       <section id="training" class="card training">
         <div class="card-head">
           <div>
             <h2>AI 训练闭环</h2>
-            <p>从原始视频到可部署模型，六步完成训练</p>
+            <p>从原始视频到可部署模型，六步完成训练；第 5 步可配置数据增强超参</p>
           </div>
           <a :href="links.training" class="button primary" @click="onConsoleNav($event, '/ai/training')">
             进入模型训练 <ArrowRight :size="16" />
@@ -397,7 +458,7 @@ onUnmounted(() => {
             <h2>热门应用场景</h2>
             <p>选择场景，跳转控制台开始模型验证与业务测试。</p>
           </div>
-          <a :href="links.scenariosAll" @click="onConsoleNav($event, '/index')">查看全部场景 <ChevronRight :size="16" /></a>
+          <a :href="links.scenariosAll" @click="onConsoleNav($event, '/ai/scenarios')">查看全部场景 <ChevronRight :size="16" /></a>
         </div>
         <div class="scenario-grid">
           <a

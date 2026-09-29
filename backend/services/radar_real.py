@@ -125,11 +125,202 @@ def ensure_vendor_on_path() -> Path:
             "未找到 damo-radar 官方代码。请执行：python scripts/setup_radar.py "
             "（或设置 RADAR_VENDOR_DIR）"
         )
-    infer = inference_dir()
-    for path in (str(infer), str(vendor_dir())):
-        if path not in sys.path:
-            sys.path.insert(0, path)
+    infer = inference_dir().resolve()
+    # RADAR_inference must be first so ``import inference_demo`` resolves.
+    for path in (str(vendor_dir().resolve()), str(infer)):
+        if path in sys.path:
+            sys.path.remove(path)
+        sys.path.insert(0, path)
     return infer
+
+
+def _patch_transformers_for_damo_radar() -> None:
+    """Bridge damo-radar (transformers~4.25 imports) onto transformers 5.x.
+
+    Vendor ``med.py`` still does::
+
+        from transformers.modeling_utils import (
+            apply_chunking_to_forward,
+            find_pruneable_heads_and_indices,
+            prune_linear_layer,
+        )
+
+    Those helpers live in ``pytorch_utils`` (or were removed) in 5.x. Patch them
+    onto ``modeling_utils`` before importing vendor code so we need not pin an
+    old transformers that would break the rest of this app.
+
+    Also: vendor ``BertModel`` / ``XBertEncoder`` still call ``self.init_weights()``
+    directly (transformers 4 style). In 5.x ``init_weights`` → ``tie_weights(
+    recompute_mapping=False)`` which requires ``all_tied_weights_keys`` that is
+    only populated inside ``post_init()``. Ensure the attribute exists first.
+    """
+    import torch
+    from transformers import modeling_utils
+
+    try:
+        from transformers import pytorch_utils as _pu
+    except ImportError:  # pragma: no cover
+        _pu = None
+
+    if not hasattr(modeling_utils, "apply_chunking_to_forward"):
+        if _pu is not None and hasattr(_pu, "apply_chunking_to_forward"):
+            modeling_utils.apply_chunking_to_forward = _pu.apply_chunking_to_forward
+        else:  # pragma: no cover — extremely old / stripped install
+
+            def apply_chunking_to_forward(forward_fn, chunk_size, chunk_dim, *input_tensors):
+                if chunk_size is None or chunk_size <= 0:
+                    return forward_fn(*input_tensors)
+                tensor_shape = input_tensors[0].shape[chunk_dim]
+                if tensor_shape % chunk_size != 0:
+                    raise ValueError(
+                        f"chunk_size ({chunk_size}) must divide input dim {tensor_shape}"
+                    )
+                num_chunks = tensor_shape // chunk_size
+                chunks = [torch.chunk(t, num_chunks, dim=chunk_dim) for t in input_tensors]
+                output_chunks = [forward_fn(*inputs) for inputs in zip(*chunks)]
+                return torch.cat(output_chunks, dim=chunk_dim)
+
+            modeling_utils.apply_chunking_to_forward = apply_chunking_to_forward
+
+    if not hasattr(modeling_utils, "prune_linear_layer"):
+        if _pu is not None and hasattr(_pu, "prune_linear_layer"):
+            modeling_utils.prune_linear_layer = _pu.prune_linear_layer
+
+    if not hasattr(modeling_utils, "find_pruneable_heads_and_indices"):
+        # Removed from transformers 5 public API; keep the classic BERT prune helper.
+        def find_pruneable_heads_and_indices(heads, n_heads, head_size, already_pruned_heads):
+            mask = torch.ones(n_heads, head_size)
+            heads = set(heads) - already_pruned_heads
+            for head in heads:
+                head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+                mask[head] = 0
+            mask = mask.view(-1).contiguous().eq(1)
+            index = torch.arange(len(mask))[mask].long()
+            return heads, index
+
+        modeling_utils.find_pruneable_heads_and_indices = find_pruneable_heads_and_indices
+
+    def _ensure_all_tied_weights_keys(module: Any) -> None:
+        if hasattr(module, "all_tied_weights_keys"):
+            return
+        getter = getattr(module, "get_expanded_tied_weights_keys", None)
+        if callable(getter):
+            try:
+                module.all_tied_weights_keys = getter(all_submodels=False)
+                return
+            except Exception:  # noqa: BLE001 — fall back to empty mapping
+                pass
+        module.all_tied_weights_keys = {}
+
+    orig_init_weights = modeling_utils.PreTrainedModel.init_weights
+    if not getattr(orig_init_weights, "_radar_compat", False):
+
+        def init_weights_compat(self, *args, **kwargs):  # noqa: ANN001
+            _ensure_all_tied_weights_keys(self)
+            return orig_init_weights(self, *args, **kwargs)
+
+        init_weights_compat._radar_compat = True  # type: ignore[attr-defined]
+        modeling_utils.PreTrainedModel.init_weights = init_weights_compat  # type: ignore[method-assign]
+
+    orig_tie_weights = modeling_utils.PreTrainedModel.tie_weights
+    if not getattr(orig_tie_weights, "_radar_compat", False):
+
+        def tie_weights_compat(self, *args, **kwargs):  # noqa: ANN001
+            _ensure_all_tied_weights_keys(self)
+            return orig_tie_weights(self, *args, **kwargs)
+
+        tie_weights_compat._radar_compat = True  # type: ignore[attr-defined]
+        modeling_utils.PreTrainedModel.tie_weights = tie_weights_compat  # type: ignore[method-assign]
+
+    # transformers 5 EmbeddingAccessMixin.set_output_embeddings does
+    # ``getattr(self, "lm_head")`` (no default) → AttributeError on damo-radar
+    # XBertEncoder which stores the MLM head as ``cls.predictions.decoder``.
+    mixin = getattr(modeling_utils, "EmbeddingAccessMixin", None)
+    if mixin is not None:
+        orig_set_out = mixin.set_output_embeddings
+        if not getattr(orig_set_out, "_radar_compat", False):
+
+            def set_output_embeddings_compat(self, new_embeddings):  # noqa: ANN001
+                if hasattr(self, "lm_head"):
+                    self.lm_head = new_embeddings
+                    return None
+                # Prefer an explicit override if the class already provides one
+                # that is not this mixin method (e.g. BertForMaskedLM in med.py).
+                cls_head = getattr(self, "cls", None)
+                predictions = getattr(cls_head, "predictions", None) if cls_head is not None else None
+                if predictions is not None and hasattr(predictions, "decoder"):
+                    predictions.decoder = new_embeddings
+                    return None
+                # Last resort: create lm_head so later getattr(self, "lm_head") works.
+                self.lm_head = new_embeddings
+                return None
+
+            set_output_embeddings_compat._radar_compat = True  # type: ignore[attr-defined]
+            mixin.set_output_embeddings = set_output_embeddings_compat  # type: ignore[method-assign]
+
+
+def _patch_xbert_encoder_lm_head(xbert_cls: Any) -> None:
+    """Make damo-radar ``XBertEncoder`` look like a transformers 5 LM-head model."""
+    if getattr(xbert_cls, "_radar_lm_head_patched", False):
+        return
+
+    if not hasattr(xbert_cls, "set_output_embeddings"):
+
+        def set_output_embeddings(self, new_embeddings):  # noqa: ANN001
+            self.cls.predictions.decoder = new_embeddings
+
+        xbert_cls.set_output_embeddings = set_output_embeddings
+
+    orig_init = xbert_cls.__init__
+
+    def init_compat(self, *args, **kwargs):  # noqa: ANN001
+        orig_init(self, *args, **kwargs)
+        # Alias for code paths that still read ``self.lm_head`` directly.
+        if hasattr(self, "cls") and not hasattr(self, "lm_head"):
+            self.lm_head = self.cls.predictions.decoder
+
+    xbert_cls.__init__ = init_compat  # type: ignore[method-assign]
+    xbert_cls._radar_lm_head_patched = True
+
+
+def _sync_vendor_ckpt_roots(demo: Any, ckpt: Path) -> None:
+    """``inference_demo`` freezes MODEL_ROOT/CONFIGS_ROOT at import time — refresh them."""
+    root = str(ckpt.resolve())
+    os.environ["MODEL_ROOT"] = root
+    os.environ["CONFIGS_ROOT"] = root
+    if hasattr(demo, "model_root"):
+        demo.model_root = root
+    if hasattr(demo, "configs_root"):
+        demo.configs_root = root
+
+
+def _clear_failed_vendor_modules() -> None:
+    """Drop half-imported vendor modules so a retry can succeed after patching."""
+    prefixes = (
+        "inference_demo",
+        "dynamic_network_architectures",
+    )
+    for name in list(sys.modules):
+        if name == prefixes[0] or name.startswith(prefixes[0] + ".") or name.startswith(
+            prefixes[1]
+        ):
+            sys.modules.pop(name, None)
+
+
+def import_inference_demo():
+    """Import vendor ``inference_demo`` after ensuring its directory is on ``sys.path``."""
+    ensure_vendor_on_path()
+    _patch_transformers_for_damo_radar()
+    try:
+        import inference_demo as demo  # noqa: WPS433 — vendor module name
+    except ImportError as exc:
+        _clear_failed_vendor_modules()
+        raise RadarRealError(
+            "无法导入 damo-radar 的 inference_demo。"
+            f"请确认 vendor 目录完整，并安装依赖：pip install -r {vendor_dir() / 'requirements.txt'}。"
+            f"详情: {exc}"
+        ) from exc
+    return demo
 
 
 def _snake_finding_name(english_label: str) -> str:
@@ -175,21 +366,31 @@ def _load_runtime() -> tuple[Any, Any, str]:
             )
 
         ensure_vendor_on_path()
+        _patch_transformers_for_damo_radar()
         ckpt = ckpt_dir().resolve()
+        # Must set env BEFORE importing inference_demo (it freezes configs_root).
         os.environ["MODEL_ROOT"] = str(ckpt)
         os.environ["CONFIGS_ROOT"] = str(ckpt)
+        _clear_failed_vendor_modules()
 
         try:
             import torch
             from monai import transforms
+            # Patch must run BEFORE med.py (it imports apply_chunking_to_forward).
             from dynamic_network_architectures.med import XBertEncoder
             from dynamic_network_architectures.vision_branch import VisionBranch
-            import inference_demo as demo
+
+            _patch_xbert_encoder_lm_head(XBertEncoder)
+            demo = import_inference_demo()
+            _sync_vendor_ckpt_roots(demo, ckpt)
         except ImportError as exc:
+            _clear_failed_vendor_modules()
             raise RadarRealError(
                 "damo-radar 依赖未安装（需要 torch / monai / transformers 等）。"
                 f"请 pip install -r {vendor_dir() / 'requirements.txt'}。详情: {exc}"
             ) from exc
+        except RadarRealError:
+            raise
 
         device = device_name()
         if device == "cuda" and not torch.cuda.is_available():
@@ -204,6 +405,8 @@ def _load_runtime() -> tuple[Any, Any, str]:
         )
         vision_encoder = VisionBranch()
         text_encoder = XBertEncoder.from_config({}, from_pretrained=True)
+        if hasattr(text_encoder, "cls") and not hasattr(text_encoder, "lm_head"):
+            text_encoder.lm_head = text_encoder.cls.predictions.decoder
         model = demo.RADAR(image_encoder=vision_encoder, text_encoder=text_encoder)
         ckpt_path = ckpt / "checkpoint_radar_pretrain.pth"
         state = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
@@ -220,9 +423,10 @@ def _load_runtime() -> tuple[Any, Any, str]:
 def _run_evaluate_to_csv(nifti_path: Path, work_dir: Path) -> Path:
     """Invoke vendor evaluate() with patched text-embedding path."""
     import torch
-    import inference_demo as demo
 
+    # Load runtime first so vendor path is on sys.path before importing demo helpers.
     pad_func, model, device = _load_runtime()
+    demo = import_inference_demo()
     img_dir = work_dir / "cases"
     save_dir = work_dir / "results"
     img_dir.mkdir(parents=True, exist_ok=True)
