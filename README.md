@@ -1,9 +1,28 @@
 
 # CV Python Tigerpro
 
+<p align="center">
+  <img src="assets/tiger-ai-logo.svg" alt="Tiger AI" width="330" />
+</p>
+
+<p align="center">
+  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-182A40?labelColor=18A6B2" alt="Apache-2.0" /></a>
+  <img src="https://img.shields.io/badge/Python-3.12-182A40?labelColor=18A6B2" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/Vue-3-182A40?labelColor=18A6B2" alt="Vue 3" />
+</p>
+
+
 Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RBAC + 模型管理 + 检测 / 姿态 / 人脸 / 车辆 / OCR 等）。
 
 **许可证：** [Apache-2.0](./LICENSE)（[中文要点译本](./LICENSE.zh-CN.md)，仅供参考，以英文原版为准）· **仓库：** https://github.com/5758703/CV_PythonVue_TigerPro
+
+**导航 / Explore** · [快速开始](#快速开始) · [功能](#功能) · [演示与截图](#演示与截图) · [后端](#后端-backend) · [前端](#前端) · [文档](#文档) · [参与贡献](#参与贡献)
+
+---
 
 ## 快速开始
 
@@ -19,145 +38,6 @@ frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://loc
 4. 浏览器打开 http://localhost:5174 ，点「进入控制台」；使用首次启动日志中的 `admin` 随机密码，或 `.env` 里的 `INITIAL_ADMIN_PASSWORD`
 
 > 本机请统一使用 **localhost**（勿混用 `127.0.0.1`）。前端总览见 [`frontend/README.md`](./frontend/README.md)。
-
-## 参与贡献
-
-GitHub 是任务与决策的最终记录场所。统一流程：
-
-**Discussion → Issue（含验收标准）→ 认领 → PR → 评审 → Squash 合并 → CHANGELOG / 发版**
-
-| 文档 | 说明 |
-|------|------|
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
-| [部署指南](./docs/deploy/README.md) | 本地 / Linux / Docker 详细步骤 |
-| [GOVERNANCE.md](./GOVERNANCE.md) | 角色、权限、晋升与决策 |
-| [ROADMAP.md](./ROADMAP.md) | 版本规划 |
-| [SECURITY.md](./SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
-| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 行为准则 |
-| [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 依赖与模型许可证 |
-| [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
-| [新手任务（8 条）](./docs/community/good-first-issues.md) | good-first-issue 文案 |
-| [社区索引](./docs/community/README.md) | 文档导航 |
-
----
-
-## 演示与截图
-
-```
-backend/                 Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
-frontend/frontend_home/  Vue3 + Vite（项目门户）
-frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
-```
-
-
-
-https://github.com/user-attachments/assets/c591bb3c-9900-4bad-b103-072fa68f995d
-
-
-
-<img width="1920" height="869" alt="image" src="https://github.com/user-attachments/assets/0301e97a-85f5-441d-90cb-8d86d15efec8" />
-
-
-<img width="774" height="480" alt="微信图片_20260719005341_513_226" src="https://github.com/user-attachments/assets/cc54a1ee-6334-4b0f-a520-6fabf47f50b4" />
-
-
-
-<img width="1920" height="869" alt="ScreenShot_2026-07-05_122934_328" src="https://github.com/user-attachments/assets/ee916e47-bf88-4fbd-a75c-6761fd999aba" />
-
-
-
-
-https://github.com/user-attachments/assets/22b18f3f-fb99-4a56-a341-7fa5674215c9
-
-
-
-https://github.com/user-attachments/assets/32f917e8-108a-455a-a8fe-35f864cf1074
-
-
-
-https://github.com/user-attachments/assets/32b4cbfe-a0e2-4908-b570-2d85da2050ff
-
-
-
-https://github.com/user-attachments/assets/69ead2ad-c3d6-4e38-a808-3f53a44be973
-
-
-https://github.com/user-attachments/assets/22651205-df17-46a4-9142-1d5ce315ef80
-
-https://github.com/user-attachments/assets/797b89e0-3330-4c33-9315-e2d34c9c8517
-
-
-
-https://github.com/user-attachments/assets/be7e76bc-f0f3-42fb-b380-4cf3643d62b1
-
-
-
-https://github.com/user-attachments/assets/9e2abc22-ecfe-414d-b3e2-8f72f904d416
-
-
-
-https://github.com/user-attachments/assets/ce3d8ab3-18fe-406f-b1ab-fc147299acb6
-
-
-
-https://github.com/user-attachments/assets/ab4ecbfa-39ea-4480-bb06-1da073eb855e
-
-
-
-https://github.com/user-attachments/assets/9839f84d-97d5-4507-bbaf-f86b3d1b8d28
-
-<img width="1645" height="1616" alt="微信图片_20260719050319_517_226" src="https://github.com/user-attachments/assets/d91426a3-54aa-48d5-be13-c17c5fb42d71" />
-
-
-https://github.com/user-attachments/assets/9cc0e219-2d54-4da3-93b6-ad3befb1f4d9
-
-
-
-https://github.com/user-attachments/assets/91eab844-0848-4b06-aebd-30076f1a2dc4
-
-
-
-https://github.com/user-attachments/assets/0c88fac9-9f05-4054-8092-a0a0a676820c
-
-
-
-https://github.com/user-attachments/assets/4adb3002-c697-4d0e-a795-89166f1c2734
-
-
-
-https://github.com/user-attachments/assets/e50ffe56-197e-476a-a92c-55b5c40db184
-
-
-
-https://github.com/user-attachments/assets/43fb406a-1f5b-4f78-a785-bf266aa4f9a0
-
-
-
-https://github.com/user-attachments/assets/661d3ead-cb44-447a-8670-419b52612612
-
-
-
-https://github.com/user-attachments/assets/0d52f28b-b3e3-4790-9d78-f19ae5618632
-
-<img width="774" height="480" alt="微信图片_20260719005341_513_226" src="https://github.com/user-attachments/assets/ff2e2c00-f651-4c31-9dbd-10dce529554c" />
-<img width="579" height="575" alt="微信图片_20260709055050_436_226" src="https://github.com/user-attachments/assets/c185531d-b2df-4043-bde8-f39abbe41fb4" />
-<img width="1639" height="869" alt="微信图片_20260719013021_514_226" src="https://github.com/user-attachments/assets/df69d5e3-205b-4e5c-b537-2ba5cb3bb030" />
-<img width="570" height="845" alt="微信图片_20260709055035_435_226" src="https://github.com/user-attachments/assets/ff246778-0dc9-4c45-b783-c7a7fff7bb4e" />
-<img width="1500" height="830" alt="微信图片_20260719013047_515_226" src="https://github.com/user-attachments/assets/2e9fe963-6991-47ea-9683-36bfb9ca8928" />
-<img width="1920" height="910" alt="微信图片_20260709055007_434_226" src="https://github.com/user-attachments/assets/f0821d2b-67ab-4da2-89eb-3448d0dfa811" />
-<img width="1920" height="1080" alt="微信图片_20260717110704_504_226" src="https://github.com/user-attachments/assets/b1dbfebc-5c29-4d48-b0b5-eb929ed7ad4a" />
-<img width="1645" height="1502" alt="FireShot Capture 017 - Tiger AI Platform · 多任务AI模型管理与测试平台 -  localhost" src="https://github.com/user-attachments/assets/25a0a9c2-666a-4e12-b48e-0e35c6daf9e1" />
-<img width="463" height="617" alt="demo_result_on_your_image" src="https://github.com/user-attachments/assets/c94e004a-1b56-489c-b816-8885ec1292c2" />
-<img width="1665" height="850" alt="微信图片_20260718031938_508_226" src="https://github.com/user-attachments/assets/4b54483e-5e5a-422a-92c7-148ca115909f" />
-<img width="1920" height="869" alt="微信图片_20260717105559_500_226" src="https://github.com/user-attachments/assets/cdcd0c34-a6cd-4363-b771-c8b3fa380758" />
-<img width="1640" height="785" alt="微信图片_20260704112908_365_226" src="https://github.com/user-attachments/assets/93c3913e-3e10-4c33-8cfa-1658c18f3fe4" />
-<img width="1920" height="869" alt="微信图片_20260704235432_374_226" src="https://github.com/user-attachments/assets/fb1596b1-02be-4e89-b861-a765aa416d16" />
-
-
-
-https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
-
-
 
 ## 功能
 
@@ -194,6 +74,37 @@ https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f
 - **模型权重转换（pt → onnx）**：模型管理支持异步导出（imgsz / dynamic / half），同目录存在 `.onnx` 时检测优先走 ONNX Runtime（`YOLO_PREFER_ONNX=0` 可关闭）；列表支持自定义每页条数（1–200）并本地记忆
 - 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**；Windows 本机可将 **桌面屏幕 RTSP 推流** 接入监控，见 [`docs/camera-screen-rtsp.md`](docs/camera-screen-rtsp.md)
 - **双前端**：项目门户（宣传 / 深链入口）+ 管理控制台（RBAC 侧栏与 AI 工作台）
+
+## 演示与截图
+
+```
+backend/                 Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
+frontend/frontend_home/  Vue3 + Vite（项目门户）
+frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
+```
+
+### 演示视频 / Video demos
+
+|  |  |  |
+| :---: | :---: | :---: |
+| [▶ 演示 01 / Demo 01](https://github.com/user-attachments/assets/c591bb3c-9900-4bad-b103-072fa68f995d) | [▶ 演示 02 / Demo 02](https://github.com/user-attachments/assets/22b18f3f-fb99-4a56-a341-7fa5674215c9) | [▶ 演示 03 / Demo 03](https://github.com/user-attachments/assets/32f917e8-108a-455a-a8fe-35f864cf1074) |
+| [▶ 演示 04 / Demo 04](https://github.com/user-attachments/assets/32b4cbfe-a0e2-4908-b570-2d85da2050ff) | [▶ 演示 05 / Demo 05](https://github.com/user-attachments/assets/69ead2ad-c3d6-4e38-a808-3f53a44be973) | [▶ 演示 06 / Demo 06](https://github.com/user-attachments/assets/22651205-df17-46a4-9142-1d5ce315ef80) |
+| [▶ 演示 07 / Demo 07](https://github.com/user-attachments/assets/797b89e0-3330-4c33-9315-e2d34c9c8517) | [▶ 演示 08 / Demo 08](https://github.com/user-attachments/assets/be7e76bc-f0f3-42fb-b380-4cf3643d62b1) | [▶ 演示 09 / Demo 09](https://github.com/user-attachments/assets/9e2abc22-ecfe-414d-b3e2-8f72f904d416) |
+| [▶ 演示 10 / Demo 10](https://github.com/user-attachments/assets/ce3d8ab3-18fe-406f-b1ab-fc147299acb6) | [▶ 演示 11 / Demo 11](https://github.com/user-attachments/assets/ab4ecbfa-39ea-4480-bb06-1da073eb855e) | [▶ 演示 12 / Demo 12](https://github.com/user-attachments/assets/9839f84d-97d5-4507-bbaf-f86b3d1b8d28) |
+| [▶ 演示 13 / Demo 13](https://github.com/user-attachments/assets/9cc0e219-2d54-4da3-93b6-ad3befb1f4d9) | [▶ 演示 14 / Demo 14](https://github.com/user-attachments/assets/91eab844-0848-4b06-aebd-30076f1a2dc4) | [▶ 演示 15 / Demo 15](https://github.com/user-attachments/assets/0c88fac9-9f05-4054-8092-a0a0a676820c) |
+| [▶ 演示 16 / Demo 16](https://github.com/user-attachments/assets/4adb3002-c697-4d0e-a795-89166f1c2734) | [▶ 演示 17 / Demo 17](https://github.com/user-attachments/assets/e50ffe56-197e-476a-a92c-55b5c40db184) | [▶ 演示 18 / Demo 18](https://github.com/user-attachments/assets/43fb406a-1f5b-4f78-a785-bf266aa4f9a0) |
+| [▶ 演示 19 / Demo 19](https://github.com/user-attachments/assets/661d3ead-cb44-447a-8670-419b52612612) | [▶ 演示 20 / Demo 20](https://github.com/user-attachments/assets/0d52f28b-b3e3-4790-9d78-f19ae5618632) | [▶ 演示 21 / Demo 21](https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f) |
+
+### 界面与结果截图 / Screenshots
+
+|  |  |  |
+| :---: | :---: | :---: |
+| <img src="https://github.com/user-attachments/assets/0301e97a-85f5-441d-90cb-8d86d15efec8" alt="image" width="300" /> | <img src="https://github.com/user-attachments/assets/cc54a1ee-6334-4b0f-a520-6fabf47f50b4" alt="微信图片_20260719005341_513_226" width="300" /> | <img src="https://github.com/user-attachments/assets/ee916e47-bf88-4fbd-a75c-6761fd999aba" alt="ScreenShot_2026-07-05_122934_328" width="300" /> |
+| <img src="https://github.com/user-attachments/assets/d91426a3-54aa-48d5-be13-c17c5fb42d71" alt="微信图片_20260719050319_517_226" width="300" /> | <img src="https://github.com/user-attachments/assets/ff2e2c00-f651-4c31-9dbd-10dce529554c" alt="微信图片_20260719005341_513_226" width="300" /> | <img src="https://github.com/user-attachments/assets/c185531d-b2df-4043-bde8-f39abbe41fb4" alt="微信图片_20260709055050_436_226" width="300" /> |
+| <img src="https://github.com/user-attachments/assets/df69d5e3-205b-4e5c-b537-2ba5cb3bb030" alt="微信图片_20260719013021_514_226" width="300" /> | <img src="https://github.com/user-attachments/assets/ff246778-0dc9-4c45-b783-c7a7fff7bb4e" alt="微信图片_20260709055035_435_226" width="300" /> | <img src="https://github.com/user-attachments/assets/2e9fe963-6991-47ea-9683-36bfb9ca8928" alt="微信图片_20260719013047_515_226" width="300" /> |
+| <img src="https://github.com/user-attachments/assets/f0821d2b-67ab-4da2-89eb-3448d0dfa811" alt="微信图片_20260709055007_434_226" width="300" /> | <img src="https://github.com/user-attachments/assets/b1dbfebc-5c29-4d48-b0b5-eb929ed7ad4a" alt="微信图片_20260717110704_504_226" width="300" /> | <img src="https://github.com/user-attachments/assets/25a0a9c2-666a-4e12-b48e-0e35c6daf9e1" alt="FireShot Capture 017 - Tiger AI Platform · 多任务AI模型管理与测试平台 -  localhost" width="300" /> |
+| <img src="https://github.com/user-attachments/assets/c94e004a-1b56-489c-b816-8885ec1292c2" alt="demo_result_on_your_image" width="300" /> | <img src="https://github.com/user-attachments/assets/4b54483e-5e5a-422a-92c7-148ca115909f" alt="微信图片_20260718031938_508_226" width="300" /> | <img src="https://github.com/user-attachments/assets/cdcd0c34-a6cd-4363-b771-c8b3fa380758" alt="微信图片_20260717105559_500_226" width="300" /> |
+| <img src="https://github.com/user-attachments/assets/93c3913e-3e10-4c33-8cfa-1658c18f3fe4" alt="微信图片_20260704112908_365_226" width="300" /> | <img src="https://github.com/user-attachments/assets/fb1596b1-02be-4e89-b861-a765aa416d16" alt="微信图片_20260704235432_374_226" width="300" /> |  |
 
 ## 默认账号（种子数据自动写入）
 
@@ -292,6 +203,8 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 
 ## 文档
 
+> 仓库目前仅追踪 `docs/community/` 下的文档；下表其余 `docs/` 链接对应本地资料，远程浏览时可能无法打开。为保留原文件内容，链接仍按原样列出。
+
 | 文档 | 说明 |
 |------|------|
 | [投资人讲解文档](docs/investor-pitch.md) | 面向 VC 的全模块定位、市场与路演讲稿 |
@@ -336,14 +249,31 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 3. 控制台 `cd frontend/frontend_admin && npm run dev` → http://localhost:5173
 4. 门户 `cd frontend/frontend_home && npm run dev` → http://localhost:5174  
    打开门户后点「进入控制台」，用 `admin` 和首次初始化密码登录
-<img width="1920" height="869" alt="744ec6c19b3817d1e7c1efe5d66124e7" src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" />
 
+|  |  |  |
+| :---: | :---: | :---: |
+| <img src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" alt="744ec6c19b3817d1e7c1efe5d66124e7" width="300" /> | <img src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" alt="243ec0a85149c5fc2c79168466bfd19d" width="300" /> | <img src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" alt="a894ca39be5586d2f9bcc7a587404d4d" width="300" /> |
 
+## 参与贡献
 
-<img width="1920" height="869" alt="243ec0a85149c5fc2c79168466bfd19d" src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" />
+GitHub 是任务与决策的最终记录场所。统一流程：
 
-<img width="1920" height="869" alt="a894ca39be5586d2f9bcc7a587404d4d" src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" />
+**Discussion → Issue（含验收标准）→ 认领 → PR → 评审 → Squash 合并 → CHANGELOG / 发版**
 
+| 文档 | 说明 |
+|------|------|
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
+| [部署指南](./docs/deploy/README.md) | 本地 / Linux / Docker 详细步骤 |
+| [GOVERNANCE.md](./GOVERNANCE.md) | 角色、权限、晋升与决策 |
+| [ROADMAP.md](./ROADMAP.md) | 版本规划 |
+| [SECURITY.md](./SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 行为准则 |
+| [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 依赖与模型许可证 |
+| [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
+| [新手任务（8 条）](./docs/community/good-first-issues.md) | good-first-issue 文案 |
+| [社区索引](./docs/community/README.md) | 文档导航 |
+
+---
 
 ## Star History
 
@@ -354,16 +284,7 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 
 开源不易，接收赞赏
 
-<img width="127" height="174" alt="f0afa6f30ce5b11d3bc0b17c42ab5c9a" src="https://github.com/user-attachments/assets/797c35ba-a7fd-434f-841e-4de19fac4f1a" />    
-
-<img width="127" height="174" alt="5ea44947061de1d34f2c713fb8ce5ce8" src="https://github.com/user-attachments/assets/077e8228-f416-4d44-8c47-c6976788af07" />
-
-
-
-
-
-
-
-
-
+|  |  |
+| :---: | :---: |
+| <img src="https://github.com/user-attachments/assets/797c35ba-a7fd-434f-841e-4de19fac4f1a" alt="f0afa6f30ce5b11d3bc0b17c42ab5c9a" width="160" /> | <img src="https://github.com/user-attachments/assets/077e8228-f416-4d44-8c47-c6976788af07" alt="5ea44947061de1d34f2c713fb8ce5ce8" width="160" /> |
 
