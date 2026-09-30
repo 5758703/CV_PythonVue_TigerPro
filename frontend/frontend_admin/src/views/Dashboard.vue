@@ -74,21 +74,46 @@
     </el-card>
 
     <!-- 场景快捷入口 -->
-    <el-card shadow="hover" class="scene-card">
+    <el-card shadow="hover" class="scene-card" :class="{ 'is-collapsed': !sceneExpanded }">
       <template #header>
-        <div class="loop-hd">
-          <span class="loop-title">热门场景 · 即点即用</span>
+        <div
+          class="loop-hd scene-hd"
+          role="button"
+          tabindex="0"
+          :aria-expanded="sceneExpanded"
+          :title="sceneExpanded ? '点击收起热门场景' : '点击展开热门场景'"
+          @click="toggleScenePanel"
+          @keydown.enter.prevent="toggleScenePanel"
+          @keydown.space.prevent="toggleScenePanel"
+        >
+          <div class="scene-hd-left">
+            <span class="loop-title">热门场景 · 即点即用</span>
+            <el-tag size="small" effect="plain" type="info">{{ sceneCards.length }} 项</el-tag>
+          </div>
+          <el-button
+            text
+            type="primary"
+            class="scene-toggle-btn"
+            @click.stop="toggleScenePanel"
+          >
+            {{ sceneExpanded ? '收起' : '展开' }}
+            <el-icon class="scene-chevron" :class="{ open: sceneExpanded }">
+              <ArrowDown />
+            </el-icon>
+          </el-button>
         </div>
       </template>
-      <div class="scene-grid">
-        <router-link v-for="s in sceneCards" :key="s.title" :to="s.to" class="scene-item">
-          <div class="scene-head">
-            <span class="scene-title">{{ s.title }}</span>
-            <el-tag v-if="s.badge" size="small" type="danger" effect="dark" class="scene-badge">{{ s.badge }}</el-tag>
-          </div>
-          <div class="scene-desc">{{ s.desc }}</div>
-        </router-link>
-      </div>
+      <el-collapse-transition>
+        <div v-show="sceneExpanded" class="scene-grid">
+          <router-link v-for="s in sceneCards" :key="s.title" :to="s.to" class="scene-item">
+            <div class="scene-head">
+              <span class="scene-title">{{ s.title }}</span>
+              <el-tag v-if="s.badge" size="small" type="danger" effect="dark" class="scene-badge">{{ s.badge }}</el-tag>
+            </div>
+            <div class="scene-desc">{{ s.desc }}</div>
+          </router-link>
+        </div>
+      </el-collapse-transition>
     </el-card>
 
     <!-- 统计卡片 -->
@@ -125,9 +150,33 @@
 <script setup>
 import { ref, reactive, onMounted, onBeforeUnmount, nextTick } from "vue";
 import * as echarts from "echarts";
-import { ArrowRight } from "@element-plus/icons-vue";
+import { ElCollapseTransition } from "element-plus";
+import { ArrowDown, ArrowRight } from "@element-plus/icons-vue";
 
 import { modelApi, trainingApi } from "../api/ai";
+
+const SCENE_EXPAND_KEY = "tiger.home.sceneExpanded";
+
+function readSceneExpanded() {
+  try {
+    const raw = localStorage.getItem(SCENE_EXPAND_KEY);
+    if (raw === null) return true;
+    return raw === "1" || raw === "true";
+  } catch {
+    return true;
+  }
+}
+
+const sceneExpanded = ref(readSceneExpanded());
+
+function toggleScenePanel() {
+  sceneExpanded.value = !sceneExpanded.value;
+  try {
+    localStorage.setItem(SCENE_EXPAND_KEY, sceneExpanded.value ? "1" : "0");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
 
 const heroIntroFull =
   "多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 医学影像 全栈纳管。" +
@@ -607,6 +656,33 @@ onBeforeUnmount(() => {
 }
 .scene-card {
   margin-bottom: 16px;
+}
+.scene-card.is-collapsed :deep(.el-card__body) {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.scene-hd {
+  cursor: pointer;
+  user-select: none;
+  gap: 12px;
+}
+.scene-hd-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.scene-toggle-btn {
+  flex: none;
+  font-weight: 600;
+}
+.scene-chevron {
+  margin-left: 4px;
+  transition: transform 0.2s ease;
+}
+.scene-chevron.open {
+  transform: rotate(180deg);
 }
 .scene-grid {
   display: grid;

@@ -527,10 +527,10 @@ def test_supplement_orphan_vehicle_dets():
     assert len(out2) == 1
 
 
-def test_infer_vehicle_class_large_bbox():
+def test_infer_vehicle_class_preserves_car_at_close_range():
     from services.vehicle_reid_feat import infer_vehicle_class
     bbox = [10, 10, 450, 350]
-    assert infer_vehicle_class("car", bbox, frame_h=360, frame_w=640) == "truck"
+    assert infer_vehicle_class("car", bbox, frame_h=360, frame_w=640) == "car"
 
 
 def test_vehicle_class_mismatch_blocks_cross_cam_merge():

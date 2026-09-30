@@ -8,13 +8,16 @@ import hashlib
 import os
 import re
 import threading
+from collections import OrderedDict
+from functools import lru_cache
 from typing import Any
 
 import cv2
 import numpy as np
 
 _lock = threading.Lock()
-_sess_cache: dict[tuple, Any] = {}
+_sess_cache: OrderedDict[tuple, Any] = OrderedDict()
+_MAX_CACHED_SESSIONS = 4
 
 DEFAULT_IN_W, DEFAULT_IN_H = 256, 256
 MEAN = (0.485, 0.456, 0.406)
@@ -62,15 +65,38 @@ def _l2(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
 def _get_ort(onnx_path: str):
     import onnxruntime as ort
 
-    mtime = os.path.getmtime(onnx_path)
-    key = (onnx_path, mtime)
+    onnx_path = os.path.normcase(os.path.realpath(onnx_path))
+    stat = os.stat(onnx_path)
+    key = (onnx_path, stat.st_mtime_ns, stat.st_size)
     with _lock:
         sess = _sess_cache.get(key)
         if sess is not None:
+            _sess_cache.move_to_end(key)
             return sess
         sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+        # Reloaded weights must not retain every old, potentially large session.
+        for stale in [k for k in _sess_cache if k[0] == onnx_path]:
+            del _sess_cache[stale]
         _sess_cache[key] = sess
+        while len(_sess_cache) > _MAX_CACHED_SESSIONS:
+            _sess_cache.popitem(last=False)
         return sess
+
+
+@lru_cache(maxsize=16)
+def _model_digest(path: str, mtime_ns: int, size: int) -> str:
+    """Hash once per file revision; equal filenames are not equal model spaces."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return "sha256:" + digest.hexdigest()
+
+
+def model_version(path: str) -> str:
+    path = os.path.normcase(os.path.realpath(path))
+    stat = os.stat(path)
+    return _model_digest(path, stat.st_mtime_ns, stat.st_size)
 
 
 def _input_spatial(sess) -> tuple[int, int]:
@@ -96,13 +122,18 @@ def _preprocess(image_bgr: np.ndarray, width: int, height: int) -> np.ndarray:
 def _build_feed(sess, blob: np.ndarray) -> dict[str, np.ndarray]:
     """构造 ONNX 输入；额外 int 输入（cam/view）填零。"""
     feed: dict[str, np.ndarray] = {}
-    for inp in sess.get_inputs():
-        if inp.name == sess.get_inputs()[0].name:
+    inputs = sess.get_inputs()
+    dtypes = {"tensor(int64)": np.int64, "tensor(int32)": np.int32,
+              "tensor(float)": np.float32, "tensor(double)": np.float64,
+              "tensor(bool)": np.bool_}
+    for inp in inputs:
+        if inp.name == inputs[0].name:
             feed[inp.name] = blob
-        elif "int" in inp.type:
-            feed[inp.name] = np.zeros((1,), dtype=np.int64)
         else:
-            feed[inp.name] = np.zeros((1,), dtype=np.float32)
+            if inp.type not in dtypes:
+                raise ValueError(f"Unsupported vehicle ONNX auxiliary input: {inp.name} ({inp.type})")
+            shape = tuple(dim if isinstance(dim, int) and dim >= 0 else 1 for dim in inp.shape)
+            feed[inp.name] = np.zeros(shape, dtype=dtypes[inp.type])
     return feed
 
 
@@ -112,10 +143,10 @@ def _color_hist_embedding(image_bgr: np.ndarray, bins: int = 16) -> np.ndarray:
     feats = []
     for i, ch in enumerate(cv2.split(hsv)):
         hist = cv2.calcHist([ch], [0], None, [bins], [0, 256 if i else 180])
-        feats.append(hist.reshape(-1))
+        feats.append(hist.reshape(-1) / max(1, ch.size))
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 80, 160)
-    feats.append(np.array([float(edges.mean()), float(gray.mean()), float(gray.std())], dtype=np.float32))
+    feats.append(np.array([float(edges.mean()), float(gray.mean()), float(gray.std())], dtype=np.float32) / 255.0)
     return _l2(np.concatenate(feats).astype(np.float32))
 
 
@@ -127,12 +158,21 @@ def extract_vehicle_embedding(model_path: str | None, image_bgr: np.ndarray) -> 
             in_w, in_h = _input_spatial(sess)
             blob = _preprocess(image_bgr, in_w, in_h)
             out = sess.run([sess.get_outputs()[0].name], _build_feed(sess, blob))[0]
-            feat = _l2(np.asarray(out, dtype=np.float32).reshape(-1))
+            output = np.asarray(out, dtype=np.float32)
+            if output.ndim not in (1, 2) or (output.ndim == 2 and output.shape[0] != 1):
+                raise ValueError(f"Expected one vehicle embedding, received shape {output.shape}")
+            vector = output.reshape(-1)
+            norm = float(np.linalg.norm(vector))
+            if vector.size == 0 or not np.isfinite(vector).all() or not np.isfinite(norm) or norm < 1e-12:
+                raise ValueError("Vehicle embedding must be finite, non-empty and non-zero")
+            feat = vector / norm
             return feat, {
                 "backend": "vehicle-onnx",
                 "onnx": os.path.basename(onnx),
                 "dim": int(feat.size),
                 "inputSize": f"{in_w}x{in_h}",
+                "modelVersion": model_version(onnx),
+                "provider": "CPUExecutionProvider",
             }
         except Exception as e:  # noqa: BLE001
             feat = _color_hist_embedding(image_bgr)
@@ -191,9 +231,11 @@ def infer_vehicle_class(
     frame_h: int = 0,
     frame_w: int = 0,
 ) -> str | None:
-    """检测类 + 框面积启发式，缓解 YOLO 将货车误标为 car / 轿车误标摩托。"""
+    """保留明确的四轮车辆类别；像素面积随镜头距离变化，不能推断车型。"""
     n = (class_name or "").strip().lower()
     bucket = vehicle_class_bucket(n)
+    if bucket in {"car", "large"}:
+        return n
     area_ratio = 0.0
     if bbox is not None and len(bbox) >= 4 and frame_h > 0 and frame_w > 0:
         x1, y1, x2, y2 = (float(bbox[i]) for i in range(4))

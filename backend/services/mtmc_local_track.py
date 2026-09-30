@@ -185,6 +185,7 @@ class _SvTrackerAdapter:
         self._class_names: dict[int, str] = {}
         self._seen_ids: set[int] = set()
         self._tentative_bbox: dict[int, list[float]] = {}
+        self._confirmed_ids: dict[int, int] = {}
         self._next_tentative = 0
         self._misses: dict[int, int] = {}
         self._removed_track_ids: set[int] = set()
@@ -195,24 +196,35 @@ class _SvTrackerAdapter:
         self._removed_track_ids.clear()
         return removed
 
-    def _promote_tentative_to_confirmed(self, bbox: list[float], confirmed_tid: int) -> int:
+    def _promote_tentative_to_confirmed(self, bbox: list[float], confirmed_tid: int, excluded_ids=()) -> int:
         """未激活→激活：若 IoU 命中临时轨迹则沿用临时 id，保证 MTMC sticky 连续。"""
+        if confirmed_tid in self._confirmed_ids:
+            return self._confirmed_ids[confirmed_tid]
         best_tid, best_iou = None, 0.0
         match_thresh = max(0.15, self.iou_thresh * 0.5)
         for tid, prev in self._tentative_bbox.items():
+            if tid in excluded_ids or self._misses.get(tid, 0) > 0:
+                continue
             score = _iou(prev, bbox)
             if score > best_iou and score >= match_thresh:
                 best_iou, best_tid = score, tid
-        if best_tid is not None:
-            self._tentative_bbox[best_tid] = bbox
-            return best_tid
-        return confirmed_tid
+        tid = best_tid if best_tid is not None else confirmed_tid
+        self._confirmed_ids[confirmed_tid] = tid
+        # Promotion is a one-time mapping, not a new IoU match every frame.
+        # A different native track must never inherit this promoted placeholder.
+        self._tentative_bbox.pop(tid, None)
+        return tid
 
-    def _assign_tentative_id(self, bbox: list[float]) -> int:
+    def _assign_tentative_id(self, bbox: list[float], excluded_ids=()) -> int:
         """未激活检测：IoU 续接临时 local id，供 MTMC 低采样率下仍能出框。"""
         best_tid, best_iou = None, 0.0
         match_thresh = max(0.15, self.iou_thresh * 0.5)
         for tid, prev in self._tentative_bbox.items():
+            # A -1 detection has no native identity evidence. Only adjacent
+            # observations may share its placeholder; a later car at the same
+            # road position must not inherit a vanished tentative track.
+            if tid in excluded_ids or self._misses.get(tid, 0) > 0:
+                continue
             score = _iou(prev, bbox)
             if score > best_iou and score >= match_thresh:
                 best_iou, best_tid = score, tid
@@ -260,10 +272,10 @@ class _SvTrackerAdapter:
             conf = float(tracked.confidence[i]) if tracked.confidence is not None else 0.0
             tentative = raw_tid < 0
             if tentative:
-                tid = self._assign_tentative_id(bbox)
+                tid = self._assign_tentative_id(bbox, active_ids)
                 active_tentative.add(tid)
             else:
-                tid = self._promote_tentative_to_confirmed(bbox, raw_tid + 1)
+                tid = self._promote_tentative_to_confirmed(bbox, raw_tid + 1, active_ids)
                 if tid >= _TENTATIVE_ID_BASE:
                     active_tentative.add(tid)
             active_ids.add(tid)
@@ -305,6 +317,9 @@ class _SvTrackerAdapter:
             self._hits.pop(tid, None)
             self._class_names.pop(tid, None)
             self._misses.pop(tid, None)
+            self._confirmed_ids = {
+                raw: mapped for raw, mapped in self._confirmed_ids.items() if mapped != tid
+            }
             self._removed_track_ids.add(tid)
         stale_tent = [tid for tid in list(self._tentative_bbox) if tid not in active_tentative]
         for tid in stale_tent:
@@ -336,6 +351,9 @@ class ByteTrackLocalTracker(_SvTrackerAdapter):
             lost_track_buffer=max_age,
             minimum_iou_threshold=iou_thresh,
             track_activation_threshold=track_activation_threshold,
+            # The library only spawns high-stage detections. Its default 0.6
+            # split otherwise overrides our configured activation threshold.
+            high_conf_det_threshold=track_activation_threshold,
             minimum_consecutive_frames=1,
             frame_rate=frame_rate,
         )
@@ -372,6 +390,7 @@ class BotSortLocalTracker(_SvTrackerAdapter):
         tracker = BoTSORTTracker(
             lost_track_buffer=max_age,
             track_activation_threshold=track_activation_threshold,
+            high_conf_det_threshold=track_activation_threshold,
             minimum_consecutive_frames=1,
             minimum_iou_threshold_first_assoc=max(0.1, float(iou_thresh) - 0.1),
             frame_rate=float(frame_rate),

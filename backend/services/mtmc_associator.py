@@ -1224,6 +1224,40 @@ class MtmcAssociator:
                 return None
             return np.asarray(prototype, dtype=np.float32).copy()
 
+    def observe_bound_vehicle(
+        self, *, global_id: str, camera_id: int, local_track_id: int,
+        embedding: np.ndarray | None = None, model_key: str | None = None,
+        model_version: str | None = None, vehicle_class: str | None = None,
+        observation_quality: float | None = None, now: float,
+    ) -> GlobalTrack | None:
+        """Refresh a live vehicle without searching or changing its binding.
+
+        Only a newly sampled embedding updates the camera prototype. Frames
+        skipped by the ReID sampler still refresh occupancy and last-seen time.
+        Candidate vehicles remain unconfirmed and never enter the gallery.
+        """
+        spaces, space = _normalize_embedding_spaces(embedding, None, model_key, model_version)
+        bkey = self._bind_key("vehicle", camera_id, local_track_id)
+        with self._lock:
+            if self._local_bind.get(bkey) != global_id:
+                return None
+            g = self.tracks.get(global_id)
+            if g is None or g.object_type != "vehicle":
+                return None
+            self._update_track(
+                g, camera_id=camera_id, local_track_id=local_track_id, now=now,
+                embedding=embedding, embedding_spaces=spaces, association_model_space=space,
+                identity_key=None, plate=None, reid_person_id=None, face_person_id=None,
+                display_name=None, visual_key=None, vehicle_class=vehicle_class,
+                mode=AssocMode.STICKY, update_embedding=self._quality_qualified(observation_quality),
+            )
+            if spaces:
+                self._gallery_upsert(
+                    g, embedding, observation_spaces=spaces, confirmed=g.confirmed,
+                    observation_quality=observation_quality, finalized=True,
+                )
+            return g
+
     def commit_bound_tracklet(
         self,
         *,

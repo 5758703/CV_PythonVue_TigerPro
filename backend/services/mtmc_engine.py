@@ -2593,10 +2593,10 @@ def _vehicle_embedding_space(meta: dict | None, embedding) -> tuple[str, int, st
     backend = str(detail.get("backend") or "hist-fallback")
     if backend == "vehicle-onnx":
         model_key = "vehicle-onnx"
-        version = str(detail.get("onnx") or "unknown-onnx")
+        version = str(detail.get("modelVersion") or detail.get("onnx") or "unknown-onnx")
     else:
         model_key = "vehicle-hist"
-        version = "hsv-edge-v1"
+        version = "hsv-edge-v2"
     return (model_key, int(np.asarray(embedding).size), version)
 
 
@@ -3412,6 +3412,13 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                     "vehicle_class": vehicle_class,
                 },
             )
+            if g is not None and sticky_gid == g.global_id:
+                g = session.associator.observe_bound_vehicle(
+                    global_id=g.global_id, camera_id=cam_id, local_track_id=int(t.track_id),
+                    embedding=emb, model_key=vehicle_space[0] if vehicle_space else None,
+                    model_version=vehicle_space[2] if vehicle_space else None,
+                    vehicle_class=vehicle_class, observation_quality=quality, now=now,
+                )
             if g is not None:
                 claimed_vehicle.add(g.global_id)
                 plate_show = g.plate or fuse.get("plate") or plate_text or "无牌"
