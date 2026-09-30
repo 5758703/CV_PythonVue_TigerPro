@@ -197,6 +197,8 @@ Vite proxies `/api` to `http://127.0.0.1:5001`.
 
 ## Documentation
 
+> The repository currently tracks only `docs/community/`. Other `docs/` links below refer to local materials and may not open on GitHub. They remain listed to preserve the original README content.
+
 | Guide | Scope |
 |---|---|
 | [Investor pitch](docs/investor-pitch.md) | Full module positioning, market, and pitch script for VCs |
