@@ -154,7 +154,12 @@ python app.py        # http://0.0.0.0:5001
 
 模型转换、视频和数字人处理、训练及验证任务使用数据库队列。Windows 的 `run_backend.ps1` 会同时启动管理任务 worker；手动运行 `python app.py` 时，另开终端运行 `python scripts/admin_job_worker.py`。开放平台异步任务另需 `python scripts/open_job_worker.py`。
 
-健康检查：`GET http://127.0.0.1:5001/api/health` → `{"code":0,"message":"ok"}`。
+健康检查：`GET http://127.0.0.1:5001/api/health` → 返回 `{"status":"ok","code":0,"message":"ok"}`（HTTP 200，不加载任何重模型 / 推理库）。
+
+```bash
+curl http://127.0.0.1:5001/api/health
+# {"status":"ok","code":0,"message":"ok"}
+```
 
 单独初始化种子（可选）：`python seed.py`。
 
