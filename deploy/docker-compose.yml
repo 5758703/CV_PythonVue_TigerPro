@@ -1,0 +1,115 @@
+# Experimental Docker Compose skeleton for CV_PythonVue_TigerPro.
+#
+# This is a starting point, not a production recipe. It wires the pieces the
+# app already knows about (MySQL 8, the Flask backend + Open API gateway, and
+# the two Vite frontends) and leaves all secrets in deploy/.env so nothing
+# sensitive is baked into an image. See docs/deploy-docker.md for the known
+# limits (model size, CPU, first-run weight download) and the follow-up
+# issues that still need doing.
+#
+# Copy deploy/.env.example to deploy/.env, fill in the values, then:
+#   cd deploy
+#   docker compose config   # sanity-check before first run
+#   docker compose up --build
+#
+# First backend start is slow: it installs dependencies and the CV model
+# weights are pulled on first run, so keep the host with enough RAM.
+
+name: tigerpro
+
+services:
+  db:
+    image: mysql:8
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-cv_python_tigerpro}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in deploy/.env}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    # Kept internal on purpose: only the backend reaches it.
+    # Expose a host port only if a local tool genuinely needs it.
+    # ports:
+    #   - "3306:3306"
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in deploy/.env}
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-cv_python_tigerpro}
+      # Model / third-party tokens are optional; leave unset and the app
+      # degrades to the local/rule-based fallbacks described in .env.example.
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODELSCOPE_TOKEN: ${MODELSCOPE_TOKEN:-}
+      ROBOFLOW_API_KEY: ${ROBOFLOW_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      QWEN_VL_API_KEY: ${QWEN_VL_API_KEY:-}
+      YOLO_INFER_BACKEND: ${YOLO_INFER_BACKEND:-auto}
+    ports:
+      - "5001:5001"
+    volumes:
+      # Keep uploads and pulled weights on a named volume so a rebuild does
+      # not re-download them.
+      - backend-data:/app/backend/uploads
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    command: python gateway_app.py
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in deploy/.env}
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-cv_python_tigerpro}
+    ports:
+      - "5002:5002"
+    volumes:
+      - backend-data:/app/backend/uploads
+
+  frontend_admin:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+      args:
+        FRONTEND_APP: frontend_admin
+        VITE_BASE: /
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:5001
+    ports:
+      - "5173:5173"
+
+  frontend_home:
+    build:
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
+      args:
+        FRONTEND_APP: frontend_home
+    environment:
+      VITE_API_PROXY_TARGET: http://backend:5001
+      VITE_DEV_PORT: "5174"
+    ports:
+      - "5174:5174"
+
+volumes:
+  db-data:
+  backend-data:
