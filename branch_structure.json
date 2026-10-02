@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "feat/docker-compose-skeleton",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "feat/docker-compose-skeleton": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "feat/docker-compose-skeleton",
+    "origin"
+  ]
+}
