@@ -1,9 +1,9 @@
 <template>
   <el-container class="layout">
     <el-aside :width="collapse ? '64px' : '220px'" class="aside">
-      <div class="logo">
-        <div class="logo-badge">CV</div>
-        <span v-show="!collapse" class="logo-text">Tiger AI Platform</span>
+      <div class="logo" :class="{ 'logo-collapsed': collapse }">
+        <img v-if="collapse" class="logo-icon" src="/brand-icon.svg" alt="Tiger AI" />
+        <img v-else class="logo-lockup" src="/brand-logo.svg" alt="Tiger AI" />
       </div>
       <el-menu
         :default-active="$route.path"
@@ -143,23 +143,18 @@ const onCommand = async (cmd) => {
   padding: 0 18px;
   border-bottom: 1px solid rgba(120, 170, 255, 0.12);
 }
-.logo-badge {
+.logo-icon {
   width: 34px;
   height: 34px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  color: #fff;
-  background: linear-gradient(135deg, #409eff, #6a5acd);
+  display: block;
 }
-.logo-text {
-  color: #eaf2ff;
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.5px;
-  white-space: nowrap;
+.logo-lockup {
+  width: 175px;
+  height: auto;
+  display: block;
+}
+.logo-collapsed {
+  padding: 0 15px;
 }
 .side-menu {
   border-right: none;

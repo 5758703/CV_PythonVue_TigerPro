@@ -287,11 +287,7 @@ onUnmounted(() => {
       <div class="container sticky-inner">
         <div class="sticky-top">
           <div class="brand sticky-brand">
-            <div class="cv-mark sticky-cv">CV</div>
-            <div>
-              <p class="sticky-title">Tiger AI 平台</p>
-              <small>MODEL LAB</small>
-            </div>
+            <img class="brand-logo" src="/brand-logo.svg" alt="Tiger AI" />
           </div>
           <p class="sticky-headline">让每一个 AI 模型，都能更快走向可用</p>
           <div class="sticky-actions">
@@ -315,11 +311,7 @@ onUnmounted(() => {
       <div class="container hero-container">
         <header class="topbar">
           <div class="brand">
-            <div class="cv-mark">CV</div>
-            <div>
-              <p>Tiger AI</p>
-              <small>MODEL LAB</small>
-            </div>
+            <img class="brand-logo" src="/brand-logo.svg" alt="Tiger AI" />
           </div>
           <nav class="top-nav" aria-label="门户导航">
             <a href="#updates" @click.prevent="scrollToId('updates')">更新</a>

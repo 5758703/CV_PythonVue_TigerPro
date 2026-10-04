@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Tiger AI">
+<rect width="128" height="128" fill="#FFFFFF"/>
+
+  <rect x="8" y="8" width="112" height="112" rx="27" fill="#172A40"/>
+  <path d="M25 38h53v13H58v43H44V51H25V38Z" fill="#FFFFFF"/>
+  <path d="M77 38h15l19 56H96l-4-13H76l-4 13H58l19-56Zm3 31h9l-4.5-16L80 69Z" fill="#34D1CF"/>
+
+</svg>

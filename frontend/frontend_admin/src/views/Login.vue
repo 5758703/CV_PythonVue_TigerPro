@@ -6,7 +6,7 @@
     <!-- 轻量平台装饰（对齐首页 hero 气质，弱化科幻 HUD） -->
     <div class="chrome-layer">
       <div class="chrome-top">
-        <span class="chrome-brand">TIGER AI PLATFORM</span>
+        <span class="chrome-brand">Tiger AI</span>
         <span class="chrome-dot" />
         <span class="chrome-status">READY</span>
       </div>
@@ -20,9 +20,9 @@
     <!-- 登录面板：白卡片风格对齐首页 stat/loop card -->
     <div class="login-shell" :class="{ shake: shaking }">
       <div class="hero-band">
-        <div class="hero-badge">CV</div>
+        <img class="hero-badge" src="/brand-icon.svg" alt="" />
         <div class="hero-copy">
-          <h1 class="brand-name">Tiger AI Platform</h1>
+          <h1 class="brand-name">Tiger AI</h1>
           <p class="brand-sub">多任务 / 多模态 AI 模型管理与测试学习平台</p>
         </div>
       </div>
@@ -519,15 +519,8 @@ onBeforeUnmount(() => {
   flex: none;
   width: 56px;
   height: 56px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  font-weight: 800;
-  color: #fff;
-  background: linear-gradient(135deg, #409eff, #6a5acd);
-  box-shadow: 0 4px 14px rgba(64, 158, 255, 0.35);
+  display: block;
+  object-fit: contain;
 }
 .brand-name {
   margin: 0;
