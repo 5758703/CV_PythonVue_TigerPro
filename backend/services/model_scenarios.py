@@ -2248,6 +2248,38 @@ _SCENARIOS = (
 )
 
 
+_SCENARIOS += (
+    {
+        'phase': 12, 'order': 92, 'modelKey': 'confucius4-r2t2',
+        'name': 'Confucius4-R2T2 流式语音识别', 'category': '语音识别',
+        'ability': 'speech-recognition', 'adapter': 'confucius_r2t2',
+        'published': True, 'apiEnabled': True, 'workbenchType': 'speech_asr',
+        'project': '会议转写与中英同传',
+        'description': '网易有道语音识别，支持官方流式服务与本地 GGUF CPU 整段识别。',
+        'workflow': '上传音频 → 16kHz 单声道 → R2T2 服务 → 汇总转写。',
+        'outputs': '转写文本与稳定增量列表。', 'metrics': 'CER/WER 与服务延迟。',
+        'risks': '就绪表示客户端配置有效；服务连通性与模型加载状态在调用时验证。',
+        'defaults': {'language': 'auto'}, 'input': _AUDIO_INPUT,
+        'route': '/ai/scenarios/confucius4-r2t2',
+        'apiPath': '/openapi/v1/model-scenarios/confucius4-r2t2/infer',
+    },
+    {
+        'phase': 12, 'order': 93, 'modelKey': 'confucius4-t3po',
+        'name': 'Confucius4-T3PO 中英同传翻译', 'category': '文本生成',
+        'ability': 'translation', 'adapter': 'confucius_t3po',
+        'published': True, 'apiEnabled': True, 'workbenchType': 'text_nlp',
+        'project': '会议转写与中英同传',
+        'description': '网易有道 14B 中英双向翻译，支持官方流式服务与本地 GGUF CPU 整段翻译。',
+        'workflow': '文本 → T3PO 服务 → 译文与事件。',
+        'outputs': '译文与 WAIT/translation 事件。', 'metrics': '翻译质量与服务延迟。',
+        'risks': '专业术语需校对；独立服务须先部署并加载模型。',
+        'defaults': {'maxChars': 20000, 'direction': 'zh2en', 'latencyMode': 'native'},
+        'input': _TEXT_INPUT, 'route': '/ai/scenarios/confucius4-t3po',
+        'apiPath': '/openapi/v1/model-scenarios/confucius4-t3po/infer',
+    },
+)
+
+
 def list_scenarios(phase: int | None = None) -> list[dict]:
     """Return scenario records in document order, optionally for one phase."""
     scenarios = _SCENARIOS if phase is None else tuple(item for item in _SCENARIOS if item["phase"] == phase)
@@ -2884,7 +2916,7 @@ _SCENARIO_GROUPS = (
         "outputs": "译文。",
         "metrics": "人工可用率。",
         "risks": "专业术语需人工校对。",
-        "modelKeys": ("opus-mt-en-zh",),
+        "modelKeys": ("opus-mt-en-zh", "confucius4-t3po"),
         "route": "/ai/scenarios/translation",
     },
     {
@@ -2934,6 +2966,7 @@ _SCENARIO_GROUPS = (
         "risks": "语种与说话人能力因模型而异。",
         "modelKeys": (
             "fun-asr-nano",
+            "confucius4-r2t2",
             "moonshine-tiny",
             "moss-transcribe-diarize-0p9b",
             "paraformer-zh",

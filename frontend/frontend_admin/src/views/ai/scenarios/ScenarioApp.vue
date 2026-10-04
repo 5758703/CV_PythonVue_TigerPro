@@ -305,7 +305,7 @@ const apiReady = computed(() => Boolean(scenario.value?.apiReady ?? scenario.val
 
 const readinessStages = computed(() => [
   { key: 'registered', label: '模型登记', detail: scenario.value?.configured ? '登记完成' : '尚未登记', value: Boolean(scenario.value?.configured) },
-  { key: 'weights', label: '权重资产', detail: scenario.value?.weightsPresent ? '文件可用' : '等待准备', value: Boolean(scenario.value?.weightsPresent) },
+  { key: 'weights', label: '权重资产', detail: scenario.value?.localWeightsRequired === false ? '由独立模型服务管理' : (scenario.value?.weightsPresent ? '文件可用' : '等待准备'), value: scenario.value?.localWeightsRequired === false || Boolean(scenario.value?.weightsPresent) },
   { key: 'runtime', label: '运行环境', detail: scenario.value?.runtimeAvailable ? '依赖可用' : '依赖缺失', value: Boolean(scenario.value?.runtimeAvailable) },
   { key: 'api', label: '推理 API', detail: apiReady.value ? '允许执行' : '暂不可执行', value: apiReady.value },
 ])
@@ -314,7 +314,7 @@ const readinessReason = computed(() => {
   if (scenario.value?.reason) return scenario.value.reason
   if (!scenario.value?.configured) return '模型尚未在系统中登记'
   if (!scenario.value?.enabled) return '模型已停用'
-  if (!scenario.value?.weightsPresent) return '模型权重尚未准备'
+  if (scenario.value?.localWeightsRequired !== false && !scenario.value?.weightsPresent) return '模型权重尚未准备'
   if (!scenario.value?.runtimeAvailable) return '模型运行库尚不可用'
   return '推理 API 尚未开放'
 })
@@ -323,7 +323,8 @@ const preparationSteps = computed(() => {
   const steps = []
   if (!scenario.value?.configured) steps.push('在模型管理中登记与当前所选模型一致的模型 key。')
   if (scenario.value?.configured && !scenario.value?.enabled) steps.push('在模型管理中启用该模型。')
-  if (!scenario.value?.weightsPresent) steps.push('由管理员配置已验证的本地权重资产；页面不会自动下载。')
+  if (scenario.value?.localWeightsRequired === false) steps.push('配置独立模型服务地址并启动服务；就绪检查仅验证客户端配置，实际连通性在调用时验证。')
+  else if (!scenario.value?.weightsPresent) steps.push('由管理员配置已验证的本地权重资产；页面不会自动下载。')
   if (!scenario.value?.runtimeAvailable) steps.push('安装并验证该模型适配器所需的运行库。')
   steps.push('重新进入页面核对四级状态，全部通过后再运行推理。')
   return steps

@@ -41,7 +41,7 @@ class AiModel(db.Model):
         return "other"
 
     def to_dict(self):
-        return {
+        result = {
             "id": self.id,
             "modelName": self.model_name,
             "category": self.category,
@@ -58,3 +58,10 @@ class AiModel(db.Model):
             "createTime": self.create_time.isoformat() if self.create_time else None,
             "updateTime": self.update_time.isoformat() if self.update_time else None,
         }
+        if self.library in ('confucius-r2t2', 'confucius-t3po'):
+            from flask import has_app_context
+            from services.confucius import inference_backend
+            backend = inference_backend(self.library) if has_app_context() else 'official'
+            result['inferenceBackend'] = backend
+            result['supportedLatencyModes'] = ['native'] if backend == 'llama-cpu' else ['low', 'native', 'high']
+        return result

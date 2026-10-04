@@ -460,17 +460,17 @@ onUnmounted(() => {
             class="scenario-card"
             @click="onScenarioNav($event, item)"
           >
-            <div class="scenario-top">
+            <div class="scenario-line scenario-line-title">
               <div class="scenario-icon">
-                <component :is="item.icon" :size="20" />
+                <component :is="item.icon" :size="16" />
               </div>
-              <ArrowRight :size="17" />
+              <h3 :title="item.title">{{ item.title }}</h3>
+              <ArrowRight :size="15" class="scenario-arrow" />
             </div>
-            <div class="scenario-body">
+            <div class="scenario-line scenario-line-tag">
               <span class="tag" :class="`tag-${item.tagTone}`">{{ item.tag }}</span>
-              <h3>{{ item.title }}</h3>
-              <p>{{ item.description }}</p>
             </div>
+            <p class="scenario-line scenario-line-desc" :title="item.description">{{ item.description }}</p>
           </a>
         </div>
       </section>

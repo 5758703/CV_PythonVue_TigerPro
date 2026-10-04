@@ -22,6 +22,14 @@ class ScenarioContractResult:
 
 
 _CONTRACTS = {
+    'confucius4-r2t2': {
+        'task': 'automatic-speech-recognition', 'library': 'confucius-r2t2',
+        'adapter': 'confucius_r2t2', 'runtime': ('websockets', 'imageio_ffmpeg'),
+    },
+    'confucius4-t3po': {
+        'task': 'translation', 'library': 'confucius-t3po',
+        'adapter': 'confucius_t3po', 'runtime': ('requests',),
+    },
     "efficient-sam": {
         "task": "interactive-segmentation",
         "library": "opencv-sam",
@@ -861,10 +869,15 @@ def evaluate_scenario_contract(
     library_matches = bool(contract) and (
         str(_model_value(model, "library") or "").strip().lower() == contract["library"]
     )
+    runtime_modules = contract['runtime'] if contract else ()
+    if contract and contract['library'] in ('confucius-r2t2', 'confucius-t3po'):
+        from services.confucius import inference_backend
+        if inference_backend(contract['library']) == 'llama-cpu':
+            runtime_modules = ('requests', 'imageio_ffmpeg') if contract['library'] == 'confucius-r2t2' else ('requests',)
     runtime_available = bool(
         adapter_matches
         and library_matches
-        and all(runtime_probe(module) for module in contract["runtime"])
+        and all(runtime_probe(module) for module in runtime_modules)
     )
     if bool(contract) and contract.get("library") == "yolo-master" and runtime_available:
         try:
@@ -897,6 +910,12 @@ def evaluate_scenario_contract(
         )
     if str(_model_value(model, "status") or "") != "0":
         return ScenarioContractResult(weights_present, runtime_available, False, "model is disabled")
+    if contract['library'] in ('confucius-r2t2', 'confucius-t3po'):
+        from services.confucius import service_configuration
+        _, reason = service_configuration(contract['library'])
+        if not runtime_available:
+            reason = reason or 'runtime library is unavailable'
+        return ScenarioContractResult(False, runtime_available, reason is None, reason, None)
     if contract["library"] == "qwen-vl-api":
         if not runtime_available and contract["runtime"]:
             return ScenarioContractResult(

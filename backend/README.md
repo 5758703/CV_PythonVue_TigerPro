@@ -2,7 +2,9 @@
 
 多任务 / 多模态 AI 模型管理与测试平台的服务端。基于 **Flask + SQLAlchemy + JWT**，
 统一纳管多引擎 AI 模型，提供权重拉取（HuggingFace / ModelScope 双源）、在线推理测试，
-以及 RBAC 权限系统（用户 / 角色 / 部门 / 岗位 / 菜单）。纯 **CPU** 即可运行全部任务。
+以及 RBAC 权限系统（用户 / 角色 / 部门 / 岗位 / 菜单）。主服务支持 **CPU**；独立大模型服务按各模型要求部署。
+
+Confucius4-R2T2 / T3PO 使用独立语音识别与翻译服务，配置和官方部署步骤见 [集成说明](docs/confucius4-integration.md)。
 
 > 配套前端见 [`../frontend/README.md`](../frontend/README.md)（门户 `frontend_home` + 控制台 `frontend_admin`）。
 

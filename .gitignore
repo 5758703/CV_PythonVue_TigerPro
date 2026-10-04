@@ -42,6 +42,8 @@ mobileclip2_b.ts
 runs/
 backend/yolo_dataset/
 backend/weights/water_gauge_yolo1.pt
+backend/weights/confucius/
+backend/runtime/
 
 # ===== 调试输出（临时图片/脚本产物）=====
 backend/debug_yolo_*.jpg

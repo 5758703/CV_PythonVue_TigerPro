@@ -227,7 +227,7 @@ def _resolve_model(scenario: dict, *, precision: str | None = None) -> tuple[AiM
         raise ScenarioInputError(contract.reason or "model scenario is unavailable")
     path = contract.weight_path
     library = str(model.library or "").strip().lower()
-    if path is None and library not in ("qwen-vl-api", "radar"):
+    if path is None and library not in ("qwen-vl-api", "radar", "confucius-r2t2", "confucius-t3po"):
         raise ScenarioInputError(contract.reason or "model scenario is unavailable")
     if path is None:
         path = Path(".")
@@ -992,6 +992,10 @@ def _text_nlp(model: AiModel, path: Path, form, scenario: dict) -> dict:
                 top_k=_top_k(form, int(scenario["defaults"].get("topK", 5))),
             )
         if ability in ("summarization", "translation"):
+            if model.library == 'confucius-t3po':
+                from services.confucius import translate
+                return translate(_form_text(form, maximum=20000), direction=form.get('direction') or 'zh2en',
+                                 latency_mode=form.get('latencyMode') or 'native')
             from inference import generate_text
 
             return generate_text(directory, _form_text(form), task=str(model.task or ability))
@@ -1034,6 +1038,9 @@ def _speech_asr(model: AiModel, path: Path, files, form, scenario: dict) -> dict
     temp = _save_upload_temp(upload, suffix=suffix)
     library = str(model.library or "").strip().lower()
     try:
+        if library == 'confucius-r2t2':
+            from services.confucius import transcribe
+            return transcribe(str(temp), language=form.get('language') or 'auto')
         if library in ("funasr-nano",):
             from inference import transcribe_audio_nano
 
@@ -1222,7 +1229,7 @@ def run_scenario(model_key: str, files, form) -> dict:
         "zero-shot-classification": frozenset(("text", "labels")),
         "fill-mask": frozenset(("text", "topK")),
         "summarization": frozenset(("text",)),
-        "translation": frozenset(("text",)),
+        "translation": frozenset(("text", "direction", "latencyMode")),
         "question-answering": frozenset(("question", "context")),
         "speech-recognition": frozenset(("language",)),
         "text-to-speech": frozenset(("text", "speaker")),

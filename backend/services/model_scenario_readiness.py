@@ -136,6 +136,7 @@ def _weights_present(weight_path: Path | None, library: str | None) -> bool:
 def scenario_with_readiness(scenario: dict) -> dict:
     """Join one scenario with its registered model's non-loading readiness state."""
     result = dict(scenario)
+    result['localWeightsRequired'] = scenario['modelKey'] not in ('confucius4-r2t2', 'confucius4-t3po')
     model = AiModel.query.filter_by(model_key=scenario["modelKey"]).first()
     if model is None:
         result.update(
@@ -171,6 +172,9 @@ def scenario_with_readiness(scenario: dict) -> dict:
         reason=contract.reason,
         supportedPrecisions=list(contract.supported_precisions),
     )
+    if model.library in ('confucius-r2t2', 'confucius-t3po'):
+        result['inferenceBackend'] = result['model']['inferenceBackend']
+        result['supportedLatencyModes'] = result['model']['supportedLatencyModes']
     return result
 
 

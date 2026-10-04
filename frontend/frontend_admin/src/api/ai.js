@@ -121,8 +121,8 @@ export const modelApi = {
     })
   },
   // 文本生成/翻译/摘要
-  generateText: (id, text, maxNewTokens) =>
-    request.post(`/ai/model/${id}/generate-text`, { text, maxNewTokens }, { timeout: 0 }),
+  generateText: (id, text, maxNewTokens, options = {}) =>
+    request.post(`/ai/model/${id}/generate-text`, { text, maxNewTokens, ...options }, { timeout: 0 }),
   // 零样本分类
   zeroShot: (id, text, labels) =>
     request.post(`/ai/model/${id}/zero-shot`, { text, labels }, { timeout: 0 }),

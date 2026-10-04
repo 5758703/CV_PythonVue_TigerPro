@@ -1385,7 +1385,12 @@ def transcribe_route(mid):
     """语音识别：上传音频或视频 →（视频则 ffmpeg 抽音）→ 转写。"""
     m = AiModel.query.get_or_404(mid)
     path = _abs_model_path(m)
-    if path is None:
+    if m.library == 'confucius-r2t2':
+        from services.confucius import service_configuration
+        _, reason = service_configuration(m.library)
+        if m.status != '0' or reason:
+            return jsonify(code=400, message=reason or '模型已停用'), 400
+    elif path is None:
         return jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400
 
     file = request.files.get("file")
@@ -1412,7 +1417,10 @@ def transcribe_route(mid):
             extract_audio_wav(media_path, extracted_wav)
             audio_path = extracted_wav
 
-        if (m.library or "") == "funasr-onnx":
+        if m.library == 'confucius-r2t2':
+            from services.confucius import transcribe
+            result = transcribe(audio_path, language=request.form.get('language') or 'auto')
+        elif (m.library or "") == "funasr-onnx":
             from inference import transcribe_audio_onnx
             result = transcribe_audio_onnx(path, audio_path)
         elif (m.library or "") == "funasr-nano":
@@ -1425,6 +1433,8 @@ def transcribe_route(mid):
         else:
             from inference import transcribe_audio
             result = transcribe_audio(path, audio_path)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"识别失败：{e}"), 500
     finally:
@@ -1530,6 +1540,12 @@ def tts_clone_route(mid):
 def _text_model_path(mid):
     """取文本任务模型本地目录；返回 (model, path, error_response)。"""
     m = AiModel.query.get_or_404(mid)
+    if m.library == 'confucius-t3po':
+        from services.confucius import service_configuration
+        _, reason = service_configuration(m.library)
+        if m.status != '0' or reason:
+            return m, None, (jsonify(code=400, message=reason or '模型已停用'), 400)
+        return m, None, None
     path = _abs_model_path(m)
     if path is None:
         return m, None, (jsonify(code=400, message="该模型暂无本地权重，请先拉取"), 400)
@@ -1552,8 +1568,15 @@ def generate_text_route(mid):
     except (TypeError, ValueError):
         max_new = 256
     try:
-        from inference import generate_text
-        result = generate_text(path, text, task=m.task or "summarization", max_new_tokens=max_new)
+        if m.library == 'confucius-t3po':
+            from services.confucius import translate
+            result = translate(text, direction=data.get('direction', 'zh2en'),
+                               latency_mode=data.get('latencyMode', 'native'))
+        else:
+            from inference import generate_text
+            result = generate_text(path, text, task=m.task or "summarization", max_new_tokens=max_new)
+    except ValueError as e:
+        return jsonify(code=400, message=str(e)), 400
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"生成失败：{e}"), 500
     return jsonify(code=0, message="完成", data=result)

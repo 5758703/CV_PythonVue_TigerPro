@@ -20,7 +20,21 @@
         <el-form-item v-if="currentTask === 'text-generation'" label="最大长度">
           <el-input-number v-model="maxNewTokens" :min="16" :max="512" :step="16" />
         </el-form-item>
+        <el-form-item v-if="isConfucius" label="翻译方向">
+          <el-select v-model="direction" style="width: 150px">
+            <el-option label="中文 → 英文" value="zh2en" />
+            <el-option label="英文 → 中文" value="en2zh" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="isConfucius" label="延迟模式">
+          <el-select v-model="latencyMode" style="width: 150px">
+            <el-option v-if="!isCpuConfucius" label="低延迟" value="low" />
+            <el-option label="默认" value="native" />
+            <el-option v-if="!isCpuConfucius" label="高延迟" value="high" />
+          </el-select>
+        </el-form-item>
       </el-form>
+      <el-alert v-if="isCpuConfucius" type="info" :closable="false" title="CPU 模式按整段文本翻译，仅支持默认延迟模式。" />
       <el-alert
         v-if="!modelOptions.length"
         type="warning"
@@ -76,6 +90,10 @@ const category = ref('')
 const text = ref('')
 const output = ref('')
 const maxNewTokens = ref(256)
+const direction = ref('zh2en')
+const latencyMode = ref('native')
+const isConfucius = computed(() => modelOptions.value.find(m => m.id === modelId.value)?.library === 'confucius-t3po')
+const isCpuConfucius = computed(() => isConfucius.value && modelOptions.value.find(m => m.id === modelId.value)?.inferenceBackend === 'llama-cpu')
 
 const { running, percent, etaText, elapsedText, start, finish } = useInferProgress(modelId)
 
@@ -92,7 +110,7 @@ const onCategoryChange = () => {
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
   modelOptions.value = (res.data.rows || []).filter(
-    (m) => m.library === 'transformers' && GEN_TASKS.includes(m.task) && m.filePath && m.status === '0'
+    (m) => ['transformers', 'confucius-t3po'].includes(m.library) && GEN_TASKS.includes(m.task) && (m.filePath || m.library === 'confucius-t3po') && m.status === '0'
   )
   if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id
 }
@@ -100,7 +118,8 @@ const loadModels = async () => {
 const run = async () => {
   start()
   try {
-    const res = await modelApi.generateText(modelId.value, text.value, maxNewTokens.value)
+    const res = await modelApi.generateText(modelId.value, text.value, maxNewTokens.value,
+      isConfucius.value ? { direction: direction.value, latencyMode: isCpuConfucius.value ? 'native' : latencyMode.value } : {})
     output.value = res.data.text
   } finally {
     finish()

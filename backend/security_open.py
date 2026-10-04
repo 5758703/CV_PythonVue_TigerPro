@@ -173,9 +173,16 @@ _SIGNED_FORM_FIELDS = frozenset((
     "points", "labels", "pointLabels", "box", "mode", "precision", "threshold", "conf", "imgsz",
 ))
 _SIGNED_FILE_FIELDS = frozenset(("file", "query", "gallery"))
+_SIGNED_MODEL_FORM_FIELDS = {
+    'confucius4-t3po': frozenset(('text', 'direction', 'latencyMode')),
+    'confucius4-r2t2': frozenset(('language',)),
+}
 
 
 def _multipart_manifest(raw: bytes) -> list[str]:
+    allowed_form_fields = _SIGNED_FORM_FIELDS | _SIGNED_MODEL_FORM_FIELDS.get(
+        (request.view_args or {}).get('model_key'), frozenset(),
+    )
     message = BytesParser(policy=email_policy).parsebytes(
         b"Content-Type: " + request.content_type.encode("ascii", "strict") + b"\r\n\r\n" + raw
     )
@@ -216,7 +223,7 @@ def _multipart_manifest(raw: bytes) -> list[str]:
                 f"{part_type}:{digest}"
             )
         else:
-            if field not in _SIGNED_FORM_FIELDS:
+            if field not in allowed_form_fields:
                 raise SignedPayloadInvalid(f"unknown multipart form field: {field}")
             try:
                 value = content.decode(part.get_content_charset() or "utf-8", "strict")

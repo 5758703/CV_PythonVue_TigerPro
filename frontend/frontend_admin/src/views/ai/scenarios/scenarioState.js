@@ -148,6 +148,8 @@ export const MODEL_TO_GROUP = {
   'bert-fill-mask': 'fill-mask',
   'distilbart-cnn': 'summarization',
   'opus-mt-en-zh': 'translation',
+  'confucius4-t3po': 'translation',
+  'confucius4-r2t2': 'speech-recognition',
   'distilbert-squad': 'question-answering',
   'melotts-zh-en': 'text-to-speech',
   'mms-tts-eng': 'text-to-speech',
@@ -432,6 +434,10 @@ function apiFields(scenario) {
       ]
     }
     const fields = [{ name: 'text', required: true, description: '待处理文本。' }]
+    if (scenario.modelKey === 'confucius4-t3po') {
+      fields.push({ name: 'direction', required: false, description: 'zh2en（默认）或 en2zh。' })
+      fields.push({ name: 'latencyMode', required: false, description: 'low / native（默认）/ high。' })
+    }
     if (ability === 'zero-shot-classification') {
       fields.push({ name: 'labels', required: true, description: '逗号分隔候选标签，至少两个。' })
     }
@@ -493,6 +499,7 @@ function curlFields(scenario) {
       return ['-F "question=Who founded the company?"', '-F "context=..."']
     }
     const fields = ['-F "text=example input"']
+    if (scenario.modelKey === 'confucius4-t3po') fields.push('-F "direction=zh2en"', '-F "latencyMode=native"')
     if (ability === 'zero-shot-classification') fields.push('-F "labels=positive,negative,neutral"')
     if (ability === 'fill-mask') fields.push(`-F "topK=${scenario.defaults?.topK ?? 5}"`)
     return fields
@@ -723,6 +730,8 @@ export function serializeScenarioForm(type, state) {
 
   if (type === 'text_nlp') {
     appendValue(form, 'text', state.text)
+    appendValue(form, 'direction', state.direction)
+    appendValue(form, 'latencyMode', state.latencyMode)
     appendValue(form, 'labels', state.labels)
     appendValue(form, 'question', state.question)
     appendValue(form, 'context', state.context)

@@ -57,6 +57,13 @@
                 <el-option label="日文" value="日文" />
               </el-select>
             </el-form-item>
+            <el-form-item v-if="isConfuciusModel" label="识别语言">
+              <el-select v-model="confuciusLanguage" style="width: 100%">
+                <el-option label="中英混合" value="auto" />
+                <el-option label="中文" value="zh" />
+                <el-option label="英文" value="en" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="区分说话人">
               <div class="switch-row">
                 <el-switch v-model="diarize" :disabled="!isMossModel" />
@@ -292,6 +299,8 @@ const fmtAssTime = (s) => {
 
 const selectedModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
 const isNanoModel = computed(() => selectedModel.value?.library === 'funasr-nano')
+const isConfuciusModel = computed(() => selectedModel.value?.library === 'confucius-r2t2')
+const confuciusLanguage = ref('auto')
 const isMossModel = computed(() => (selectedModel.value?.modelKey || '').includes('moss-transcribe-diarize'))
 
 watch(isMossModel, (v) => {
@@ -444,11 +453,11 @@ const onTimelineClick = (e) => {
   seekTo(t)
 }
 
-const ASR_LIBS = new Set(['funasr', 'funasr-onnx', 'funasr-nano', 'transformers'])
+const ASR_LIBS = new Set(['funasr', 'funasr-onnx', 'funasr-nano', 'transformers', 'confucius-r2t2'])
 const loadModels = async () => {
   const res = await modelApi.options({ task: 'automatic-speech-recognition' })
   const rows = (res.data || []).filter(
-    (m) => ASR_LIBS.has(m.library) && m.filePath && m.status === '0'
+    (m) => ASR_LIBS.has(m.library) && (m.filePath || m.library === 'confucius-r2t2') && m.status === '0'
   )
   rows.sort((a, b) => asrRank(a.modelKey) - asrRank(b.modelKey))
   modelOptions.value = rows
@@ -492,6 +501,7 @@ const run = async () => {
     const fd = new FormData()
     fd.append('file', file.value)
     if (isNanoModel.value) fd.append('language', asrLanguage.value)
+    if (isConfuciusModel.value) fd.append('language', confuciusLanguage.value)
     const res = await modelApi.transcribe(modelId.value, fd)
     result.value = res.data
     await nextTick()

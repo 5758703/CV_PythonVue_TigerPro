@@ -209,9 +209,9 @@ test('exposes exactly the forty-one scenario group route keys', () => {
   assert.equal(SCENARIO_GROUP_ROUTE_KEYS.at(-1), 'talking-head')
 })
 
-test('maps all ninety-one legacy model keys onto the forty-one groups', () => {
-  assert.equal(SCENARIO_MODEL_COUNT, 91)
-  assert.equal(LEGACY_MODEL_ROUTE_KEYS.length, 91)
+test('maps all ninety-three legacy model keys onto the forty-one groups', () => {
+  assert.equal(SCENARIO_MODEL_COUNT, 93)
+  assert.equal(LEGACY_MODEL_ROUTE_KEYS.length, 93)
   assert.equal(resolveGroupKey('interactive-segmentation'), 'interactive-segmentation')
   assert.equal(resolveGroupKey('efficient-sam'), 'interactive-segmentation')
   assert.equal(resolveGroupKey('mobile-sam'), 'interactive-segmentation')
@@ -233,7 +233,7 @@ test('maps all ninety-one legacy model keys onto the forty-one groups', () => {
   assert.equal(resolveGroupKey('linly-talker'), 'talking-head')
 })
 
-test('builds forty-one group router records and ninety-one legacy redirects', () => {
+test('builds forty-one group router records and ninety-three legacy redirects', () => {
   const component = () => Promise.resolve('ScenarioApp')
   assert.equal(typeof scenarioState.createScenarioRouteRecords, 'function')
   assert.equal(typeof scenarioState.createLegacyScenarioRedirectRecords, 'function')
@@ -252,7 +252,7 @@ test('builds forty-one group router records and ninety-one legacy redirects', ()
     assert.equal(record.path, `ai/scenarios/${record.meta.groupKey}`)
   }
 
-  assert.equal(redirects.length, 91)
+  assert.equal(redirects.length, 93)
   const efficientRedirect = redirects.find((item) => item.path === 'ai/scenarios/efficient-sam')
   assert.equal(typeof efficientRedirect.redirect, 'function')
   assert.deepEqual(efficientRedirect.redirect({ query: {} }), {

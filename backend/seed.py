@@ -1484,6 +1484,20 @@ def seed_ai_models():
         source_url="https://huggingface.co/Helsinki-NLP/opus-mt-en-zh",
         description="英文→中文机器翻译。文本生成页使用。", status="0",
     ))
+    created |= _ensure_ai_model('confucius4-t3po', dict(
+        model_name='Confucius4-T3PO 中英同传翻译', category='文本生成',
+        task='translation', library='confucius-t3po', version='v1',
+        source_url='https://huggingface.co/netease-youdao/Confucius4-T3PO',
+        description='网易有道 14B 中英双向流式翻译。独立官方服务，配置 CONFUCIUS_T3PO_URL 后使用，无需在本机拉取权重。',
+        status='0',
+    ))
+    created |= _ensure_ai_model('confucius4-r2t2', dict(
+        model_name='Confucius4-R2T2 流式语音识别', category='语音识别',
+        task='automatic-speech-recognition', library='confucius-r2t2', version='v1',
+        source_url='https://huggingface.co/netease-youdao/Confucius4-R2T2',
+        description='网易有道稳定增量 ASR。配置 CONFUCIUS_R2T2_WS_URL 与 CONFUCIUS_R2T2_SECRET_KEY，使用独立模型服务。',
+        status='0',
+    ))
     created |= _ensure_ai_model("bert-ner", dict(
         model_name="BERT 命名实体识别", category="实体识别",
         task="token-classification", library="transformers", version="v1",

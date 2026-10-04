@@ -204,9 +204,9 @@ def test_phase_four_through_ten_scenarios_are_unique_and_in_document_order():
 
 def test_full_catalog_covers_ninety_one_models():
     scenarios = list_scenarios()
-    assert len(scenarios) == 91
-    assert len({item["modelKey"] for item in scenarios}) == 91
-    assert [item["order"] for item in scenarios] == list(range(1, 92))
+    assert len(scenarios) == 93
+    assert len({item["modelKey"] for item in scenarios}) == 93
+    assert [item["order"] for item in scenarios] == list(range(1, 94))
 
 
 def test_phase_eleven_radar_scenario():

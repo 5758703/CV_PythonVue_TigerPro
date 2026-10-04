@@ -26,12 +26,20 @@
             <span>Top-K <output>{{ topK }}</output></span>
             <input v-model.number="topK" type="range" min="1" max="20" step="1" :disabled="busy">
           </label>
+          <template v-if="isConfucius">
+            <label class="wb-field"><span>翻译方向</span>
+              <select v-model="direction" :disabled="busy"><option value="zh2en">中文 → 英文</option><option value="en2zh">英文 → 中文</option></select>
+            </label>
+            <label class="wb-field"><span>延迟模式</span>
+              <select v-model="latencyMode" :disabled="busy || isCpuConfucius"><option v-if="!isCpuConfucius" value="low">低延迟</option><option value="native">默认</option><option v-if="!isCpuConfucius" value="high">高延迟</option></select>
+            </label>
+          </template>
         </template>
       </div>
 
       <aside class="wb-capability-note">
         <strong>文本推理</strong>
-        <p>结果依赖权重与分词器本地可用性；生产接入前请用业务语料标定阈值。</p>
+        <p>{{ isCpuConfucius ? 'CPU 模式按整段文本翻译，仅支持默认延迟模式；请先启动本地模型服务。' : isConfucius ? '使用已配置的独立 T3PO 服务；服务需要先启动并加载模型。' : '结果依赖权重与分词器本地可用性；生产接入前请用业务语料标定阈值。' }}</p>
       </aside>
 
       <div v-if="validationMessage" class="wb-form-error" role="alert">{{ validationMessage }}</div>
@@ -90,6 +98,10 @@ const ability = computed(() => String(props.scenario.ability || ''))
 const isQa = computed(() => ability.value === 'question-answering')
 const isZeroShot = computed(() => ability.value === 'zero-shot-classification')
 const isFillMask = computed(() => ability.value === 'fill-mask')
+const isConfucius = computed(() => props.scenario.modelKey === 'confucius4-t3po')
+const isCpuConfucius = computed(() => isConfucius.value && props.scenario.inferenceBackend === 'llama-cpu')
+const direction = ref('zh2en')
+const latencyMode = ref('native')
 
 const ABILITY_TITLES = {
   'token-classification': '命名实体识别',
@@ -123,6 +135,8 @@ const formState = computed(() => ({
   question: question.value,
   context: context.value,
   topK: topK.value,
+  direction: isConfucius.value ? direction.value : undefined,
+  latencyMode: isConfucius.value ? (isCpuConfucius.value ? 'native' : latencyMode.value) : undefined,
 }))
 const validationErrors = computed(() => validateWorkbenchState('text_nlp', formState.value))
 const validationMessage = computed(() => {
@@ -141,6 +155,8 @@ function resetParameters() {
   if (busy.value) return
   labels.value = String(props.scenario.defaults?.labels ?? 'positive,negative')
   topK.value = Number(props.scenario.defaults?.topK ?? 5)
+  direction.value = 'zh2en'
+  latencyMode.value = 'native'
 }
 
 async function runInference() {

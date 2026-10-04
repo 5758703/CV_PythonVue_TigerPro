@@ -64,6 +64,8 @@ sherpa-onnx==1.13.3
 roboflow==1.3.13
 # DeepSeek AI 报告：HTTP 调用 + 纯逻辑单测
 requests==2.32.3
+# Confucius4-R2T2 独立服务 WebSocket 客户端；不在主环境安装 vLLM。
+websockets>=12,<17
 # EMQX / MQTT 旁路推送（流水线 sink.mqtt；默认 MQTT_ENABLED=0）
 # 钉 1.6.x：与部分已装包（如 inference 要求 paho-mqtt~=1.6.1）兼容；mqtt_bus 同时兼容 2.x API
 paho-mqtt>=1.6.1,<2.0.0

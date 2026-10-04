@@ -54,7 +54,8 @@
         <el-table-column prop="version" label="版本" width="80" sortable="custom" />
         <el-table-column prop="fileSize" label="权重文件" width="130" sortable="custom">
           <template #default="{ row }">
-            <el-tag v-if="row.filePath" type="success" effect="plain">{{ fmtSize(row.fileSize) }}</el-tag>
+            <el-tag v-if="isRemoteModel(row)" type="info" effect="plain">{{ row.inferenceBackend === 'llama-cpu' ? 'CPU 服务' : '独立服务' }}</el-tag>
+            <el-tag v-else-if="row.filePath" type="success" effect="plain">{{ fmtSize(row.fileSize) }}</el-tag>
             <el-tag v-else type="info" effect="plain">未上传</el-tag>
           </template>
         </el-table-column>
@@ -73,7 +74,7 @@
         </el-table-column>
         <el-table-column label="操作" width="380" fixed="right">
           <template #default="{ row }">
-            <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath" @click="openTest(row)">测试</el-button>
+            <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath && !isRemoteModel(row)" @click="openTest(row)">测试</el-button>
             <el-button v-if="canDownloadWeight(row)" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
             <el-button
               v-if="canFetchWeight(row)"
@@ -244,6 +245,8 @@
         </el-form-item>
         <el-form-item label="推理库" prop="library">
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
+            <el-option label="Confucius4-R2T2（独立语音服务）" value="confucius-r2t2" />
+            <el-option label="Confucius4-T3PO（独立翻译服务）" value="confucius-t3po" />
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="yolo-master（Tencent YOLO-Master）" value="yolo-master" />
             <el-option label="transformers（HF 模型目录）" value="transformers" />
@@ -423,8 +426,9 @@ const DIR_WEIGHT_LIBS = new Set([
   "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm",
 ]);
 const isDirWeightLib = (lib) => DIR_WEIGHT_LIBS.has((lib || "").toLowerCase());
-const canDownloadWeight = (row) => row.filePath && !isDirWeightLib(row.library);
-const canFetchWeight = (row) => row.sourceUrl && (!row.filePath || isDirWeightLib(row.library));
+const isRemoteModel = (row) => ['confucius-r2t2', 'confucius-t3po'].includes(row.library);
+const canDownloadWeight = (row) => !isRemoteModel(row) && row.filePath && !isDirWeightLib(row.library);
+const canFetchWeight = (row) => !isRemoteModel(row) && row.sourceUrl && (!row.filePath || isDirWeightLib(row.library));
 
 const dialog = ref(false);
 const formRef = ref();
@@ -474,6 +478,8 @@ const taskLabel = (t) => TASK_LABELS[t] || t || "目标检测";
 const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "image-classification" ? "success" : "");
 
 const LIB_DEFAULT_TASK = {
+  'confucius-r2t2': 'automatic-speech-recognition',
+  'confucius-t3po': 'translation',
   ultralytics: "object-detection",
   "yolo-master": "object-detection",
   rfdetr: "object-detection",
