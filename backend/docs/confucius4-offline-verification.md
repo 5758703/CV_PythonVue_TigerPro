@@ -23,7 +23,7 @@
 
 ## 本机使用
 
-`backend/.env` 已将两个模型后端设置为 `llama-cpu`，CPU 请求超时为 900 秒。重启项目后端使设置生效，在项目根目录按需运行：
+`backend/.env` 已将两个模型后端设置为 `llama-cpu`；后续页面调用修复已启用按需自动启动，本机 CPU 请求超时提高为 1800 秒。首次请求会等待模型加载。也可以在项目根目录手动启动：
 
 ```powershell
 python backend/scripts/confucius_cpu_server.py r2t2
@@ -40,3 +40,11 @@ python backend/scripts/verify_confucius_cpu_offline.py t3po
 ```
 
 CPU 适配最新回归：19 项通过；另有官方协议与场景相关回归 48 项通过。语法检查和改动空白检查通过。部署、权重来源和 API 使用见 [集成说明](confucius4-integration.md)。
+
+## 页面调用修复后的实测
+
+此前页面报错的直接原因是日常端口 8010 没有运行 T3PO 服务，临时验收服务已经退出。后端现支持首次请求按需启动已准备的本地 CPU 服务，复用加载中或已就绪的实例，并区分连接、超时和协议错误。
+
+通过正在运行的前端代理实际调用 `POST /api/ai/model/168/generate-text`，输入截图中的 `你好`（中译英、native），得到 HTTP 200、`code=0`、`backend=llama-cpu` 和译文 `Hello.`。首次自动加载与推理合计 1033.90 秒（约 17 分 14 秒），其中翻译处理约 739.12 秒。原始结果在 `backend/runtime/t3po-frontend-live.json`，模型日志在 `backend/runtime/t3po-cpu-service.log`。
+
+本次回归 27 项通过，语法检查通过。后端已重启，模型服务在测试后继续运行供页面复用。本工作区推理超时已提高为 1800 秒；首次加载等待上限为 600 秒。

@@ -13,6 +13,8 @@ import requests
 
 
 def _complete(url, prefix, messages, **extra):
+    from services.confucius_cpu_runtime import ensure_cpu_service
+    ensure_cpu_service(url, prefix)
     # Accept both the server root and its /v1 base URL.
     endpoint = url if url.endswith('/v1') else url + '/v1'
     headers = {}
@@ -39,7 +41,16 @@ def _complete(url, prefix, messages, **extra):
         if not isinstance(text, str):
             raise ValueError('invalid completion content')
         return text.strip()
+    except requests.Timeout as exc:
+        raise RuntimeError('Confucius CPU 推理等待超时，请检查可用内存或增加 CONFUCIUS_CPU_TIMEOUT_SECONDS') from exc
+    except requests.ConnectionError as exc:
+        model = 'r2t2' if prefix.endswith('R2T2') else 't3po'
+        raise RuntimeError(f'Confucius CPU 服务未启动或连接中断（{url}），请运行 python backend/scripts/confucius_cpu_server.py {model}') from exc
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else '未知'
+        raise RuntimeError(f'Confucius CPU 服务返回 HTTP {status}，请检查模型日志、地址和认证配置') from exc
     except (requests.RequestException, ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+        current_app.logger.warning('Invalid Confucius CPU completion from %s', url, exc_info=True)
         raise RuntimeError('Confucius CPU 推理失败，请检查 llama-server 状态、上下文长度和输出限制') from exc
 
 

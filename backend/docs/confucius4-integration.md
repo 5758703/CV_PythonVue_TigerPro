@@ -53,6 +53,8 @@ CONFUCIUS_T3PO_BACKEND=llama-cpu
 CONFUCIUS_R2T2_CPU_URL=http://127.0.0.1:8273
 CONFUCIUS_T3PO_CPU_URL=http://127.0.0.1:8010
 CONFUCIUS_CPU_TIMEOUT_SECONDS=900
+CONFUCIUS_CPU_AUTO_START=1
+CONFUCIUS_CPU_STARTUP_TIMEOUT_SECONDS=600
 CONFUCIUS_R2T2_CPU_MAX_TOKENS=4096
 CONFUCIUS_T3PO_CPU_MAX_TOKENS=4096
 ```
@@ -60,6 +62,12 @@ CONFUCIUS_T3PO_CPU_MAX_TOKENS=4096
 CPU_URL 接受本机回环地址的服务根地址或 `/v1` 地址，拒绝外部主机；客户端禁用系统 HTTP 代理，禁止 HTTP 重定向。若自己部署的 llama-server 启用了认证，配置对应 `CONFUCIUS_R2T2_CPU_API_KEY` / `CONFUCIUS_T3PO_CPU_API_KEY`。CPU 适配不使用官方 WebSocket 密钥或官方 T3PO FastAPI URL；可以分别选择不同后端。将 `BACKEND` 改回 `official` 即可切回已有官方服务。
 
 运行时同时设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`HF_HUB_DISABLE_TELEMETRY=1`。联网下载只发生在明确调用准备命令时，普通 CPU 推理不下载文件、不调用云端推理接口。
+
+项目默认在首次 CPU 推理请求时自动启动已准备的本地 `llama-server`，等待 `/health` 就绪后再提交推理。启动时只读取本地文件，不下载权重；已启动或正在加载的服务会复用。进程在请求结束后继续运行，日志位于 `backend/runtime/t3po-cpu-service.log` / `r2t2-cpu-service.log`。首次请求的模型加载等待上限由 `CONFUCIUS_CPU_STARTUP_TIMEOUT_SECONDS` 控制，推理等待上限独立计算。加载超时后保留服务，稍后重试可继续复用。
+
+本工作区的 `.env` 已启用自动启动，并将 CPU 推理等待上限提高为 1800 秒，以适应 16 GB 内存下的换页开销；配置默认值仍为 900 秒，可按机器情况调整。
+
+使用自建服务或多进程 Flask 部署时，可设置 `CONFUCIUS_CPU_AUTO_START=0`，由上述启动命令或进程管理器启动模型。自动启动只支持本机 HTTP 根地址及 `/v1`。16 GB 内存下仍建议按需使用一个模型服务，避免两模型同时常驻导致严重换页。
 
 可重复执行真实离线验证（会临时启动模型服务并在测试后退出，默认使用已准备的本地音频）：
 

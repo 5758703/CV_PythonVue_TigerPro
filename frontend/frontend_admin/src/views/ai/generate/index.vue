@@ -108,8 +108,8 @@ const onCategoryChange = () => {
 }
 
 const loadModels = async () => {
-  const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
-  modelOptions.value = (res.data.rows || []).filter(
+  const res = await modelApi.options()
+  modelOptions.value = (res.data || []).filter(
     (m) => ['transformers', 'confucius-t3po'].includes(m.library) && GEN_TASKS.includes(m.task) && (m.filePath || m.library === 'confucius-t3po') && m.status === '0'
   )
   if (modelOptions.value.length && !modelId.value) modelId.value = modelOptions.value[0].id

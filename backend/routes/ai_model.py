@@ -106,12 +106,14 @@ def list_tasks():
 @ai_model_bp.get("/options")
 @permission_required("ai:model:list")
 def list_model_options():
-    """下拉选项：返回全部启用且已有权重的模型（不分页，供检测页等选择）。"""
+    """全部启用且已登记权重或由独立服务持有权重的模型，不分页。"""
     task = request.args.get("task", "").strip()
     query = AiModel.query.filter(
         AiModel.status == "0",
-        AiModel.file_path.isnot(None),
-        AiModel.file_path != "",
+        db.or_(
+            db.and_(AiModel.file_path.isnot(None), AiModel.file_path != ""),
+            AiModel.library.in_(("confucius-r2t2", "confucius-t3po")),
+        ),
     )
     if task:
         query = query.filter(AiModel.task == task)

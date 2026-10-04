@@ -123,6 +123,60 @@ def test_cpu_http_errors_are_wrapped(app, monkeypatch):
         translate('你好。')
 
 
+def test_cpu_timeout_reports_specific_recovery(app, monkeypatch):
+    import requests
+    from services.confucius import translate
+    def timeout(*args, **kwargs):
+        raise requests.ReadTimeout('slow CPU')
+    monkeypatch.setattr(requests.Session, 'post', timeout)
+    with app.app_context(), pytest.raises(RuntimeError, match='CONFUCIUS_CPU_TIMEOUT_SECONDS'):
+        translate('你好。')
+
+
+@pytest.mark.parametrize('initial', ['missing', 'loading', 'ready'])
+def test_cpu_runtime_starts_once_and_reuses_ready_server(app, monkeypatch, initial):
+    import requests
+    from services import confucius_cpu_runtime as runtime
+    app.config['CONFUCIUS_CPU_AUTO_START'] = True
+    statuses = {'missing': [None, 503, 200, 200], 'loading': [503, 200, 200],
+                'ready': [200, 200]}[initial]
+    def health(session, *args, **kwargs):
+        assert not session.trust_env and not kwargs['allow_redirects']
+        status = statuses.pop(0)
+        if status is None:
+            raise requests.ConnectionError('connection refused')
+        return SimpleNamespace(status_code=status)
+    starts = []
+    def start(prefix, port):
+        starts.append((prefix, port))
+        return SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(requests.Session, 'get', health)
+    monkeypatch.setattr(runtime, '_start_cpu_service', start)
+    monkeypatch.setattr(runtime, '_processes', {})
+    monkeypatch.setattr(runtime.time, 'sleep', lambda _: None)
+    with app.app_context():
+        runtime.ensure_cpu_service('http://127.0.0.1:8010/v1', 'CONFUCIUS_T3PO')
+        runtime.ensure_cpu_service('http://127.0.0.1:8010/v1', 'CONFUCIUS_T3PO')
+    assert starts == ([('CONFUCIUS_T3PO', 8010)] if initial == 'missing' else [])
+
+
+def test_cpu_runtime_startup_timeout_keeps_loading_server(app, monkeypatch):
+    import requests
+    from services import confucius_cpu_runtime as runtime
+    app.config.update(CONFUCIUS_CPU_AUTO_START=True, CONFUCIUS_CPU_STARTUP_TIMEOUT_SECONDS=0)
+    monkeypatch.setattr(requests.Session, 'get', lambda *a, **kw: SimpleNamespace(status_code=503))
+    monkeypatch.setattr(runtime, '_start_cpu_service', lambda *a: pytest.fail('duplicate server'))
+    with app.app_context(), pytest.raises(RuntimeError, match='仍未加载完成'):
+        runtime.ensure_cpu_service('http://127.0.0.1:8010', 'CONFUCIUS_T3PO')
+
+
+def test_cpu_runtime_never_downloads_missing_assets(app, tmp_path):
+    from services.confucius_cpu_runtime import _start_cpu_service
+    app.config['BASE_DIR'] = str(tmp_path)
+    with app.app_context(), pytest.raises(RuntimeError, match='运行时缺失'):
+        _start_cpu_service('CONFUCIUS_T3PO', 8010)
+
+
 def test_cpu_routes_and_readiness(scenario_api_client, monkeypatch):
     from extensions import db
     from models import AiModel
@@ -151,6 +205,50 @@ def test_cpu_routes_and_readiness(scenario_api_client, monkeypatch):
     assert response.status_code == 200
     assert response.get_json()['data']['result']['text'] == 'Hello.'
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('backend', ['official', 'llama-cpu'])
+def test_model_options_include_service_models_after_first_page(scenario_api_client, backend):
+    from extensions import db
+    from models import AiModel
+    client, headers, _ = scenario_api_client
+    client.application.config.update(CONFUCIUS_R2T2_BACKEND=backend,
+                                     CONFUCIUS_T3PO_BACKEND=backend)
+    with client.application.app_context():
+        db.session.add_all([
+            AiModel(model_key=f'local-{index}', model_name=f'Local {index}',
+                    library='ultralytics', task='object-detection',
+                    file_path=f'models/{index}.pt', status='0')
+            for index in range(105)
+        ])
+        db.session.flush()
+        db.session.add_all([
+            AiModel(model_key='confucius4-r2t2', model_name='R2T2', library='confucius-r2t2',
+                    task='automatic-speech-recognition', status='0'),
+            AiModel(model_key='confucius4-t3po', model_name='T3PO', library='confucius-t3po',
+                    task='translation', file_path='', status='0'),
+            AiModel(model_key='missing-asr', model_name='Missing ASR', library='transformers',
+                    task='automatic-speech-recognition', status='0'),
+            AiModel(model_key='disabled-service', model_name='Disabled ASR', library='confucius-r2t2',
+                    task='automatic-speech-recognition', status='1'),
+        ])
+        db.session.commit()
+    assert client.get('/api/ai/model/options').status_code == 401
+    first_page = client.get('/api/ai/model?pageSize=100', headers=headers).get_json()['data']['rows']
+    assert not any(row['modelKey'].startswith('confucius4-') for row in first_page)
+    response = client.get('/api/ai/model/options', headers=headers)
+    assert response.status_code == 200
+    rows = response.get_json()['data']
+    assert len(rows) == 107
+    keys = {row['modelKey'] for row in rows}
+    assert {'confucius4-r2t2', 'confucius4-t3po'} <= keys
+    assert not {'missing-asr', 'disabled-service'} & keys
+    for task, key in [('automatic-speech-recognition', 'confucius4-r2t2'),
+                      ('translation', 'confucius4-t3po')]:
+        options = client.get('/api/ai/model/options', query_string={'task': task},
+                             headers=headers).get_json()['data']
+        assert [row['modelKey'] for row in options] == [key]
+        assert options[0]['inferenceBackend'] == backend
 
 
 def test_launcher_forces_both_decoders_and_projector_to_cpu(tmp_path):
