@@ -128,7 +128,7 @@ def guess_category(key: str, name: str = "") -> str:
         (("pose", "rtmo", "rtmpose", "dwpose", "handpose", "sign"), "姿态/手势"),
         (("ocr", "paddle", "slanet", "table", "got-ocr"), "文档解析"),
         (("asr", "sensevoice", "paraformer", "whisper", "moonshine", "fun-asr"), "语音识别"),
-        (("tts", "melo", "vibevoice", "mms-tts", "voxcpm"), "语音合成"),
+        (("tts", "melo", "vibevoice", "mms-tts", "voxcpm", "neutts"), "语音合成"),
         (("talker", "linly"), "数字人"),
         (("sam", "seg", "inpaint", "lama"), "分割/修复"),
         (("bert", "bart", "finbert", "opus", "squad", "ner", "emotion", "mnli"), "NLP 文本"),
@@ -154,7 +154,7 @@ def guess_task(key: str, cat: str) -> str:
         return "image-inpainting"
     if any(x in s for x in ("asr", "sensevoice", "paraformer", "whisper", "moonshine")):
         return "automatic-speech-recognition"
-    if any(x in s for x in ("tts", "melo", "vibe", "mms-tts", "voxcpm")):
+    if any(x in s for x in ("tts", "melo", "vibe", "mms-tts", "voxcpm", "neutts")):
         return "text-to-speech"
     if "talker" in s:
         return "digital-human"

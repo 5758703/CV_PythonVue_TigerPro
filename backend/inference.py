@@ -4811,6 +4811,65 @@ def synthesize_speech_voxcpm_clone(model_dir, text, prompt_text, prompt_path,
     return _voxcpm_to_result(model, wav)
 
 
+# ------------------------------------------------------------ NeuTTS Air 零样本音色克隆
+_neutts_cache = _model_cache()  # model_dir -> NeuTTS 实例
+
+
+def _get_neutts(model_dir, language="en-us"):
+    """加载/缓存 NeuTTS（neuphonic/neutts-air 等；本地目录或 HF repo）。"""
+    with _lock:
+        if model_dir in _neutts_cache:
+            return _neutts_cache[model_dir]
+        try:
+            from neutts import NeuTTS
+        except ImportError as e:
+            raise RuntimeError(
+                "NeuTTS 本地推理需安装 neutts：pip install neutts"
+            ) from e
+        import torch
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # 本地拉取目录作 backbone；phonemizer 需显式 language（本地路径不在官方 map）
+        backbone = model_dir if os.path.isdir(model_dir) else "neuphonic/neutts-air"
+        model = NeuTTS(
+            backbone_repo=backbone,
+            backbone_device=device,
+            codec_repo="neuphonic/neucodec",
+            codec_device=device,
+            language=language,
+        )
+        _neutts_cache[model_dir] = model
+        return model
+
+
+def synthesize_speech_neutts_clone(model_dir, text, prompt_text, prompt_path,
+                                   language="en-us"):
+    """NeuTTS Air 零样本音色克隆：参考音频(+转录) → 用该音色读目标文本，24kHz WAV。"""
+    if not text or not str(text).strip():
+        raise ValueError("待合成文本为空")
+    if not prompt_text or not str(prompt_text).strip():
+        raise ValueError("参考音频文本为空")
+    if not prompt_path or not os.path.isfile(prompt_path):
+        raise ValueError("参考音频不存在")
+
+    model = _get_neutts(model_dir, language=language)
+    ref_codes = model.encode_reference(prompt_path)
+    wav = model.infer(str(text).strip(), ref_codes, str(prompt_text).strip())
+
+    import io
+    import base64 as _b64
+    import numpy as np
+    import soundfile as _sf
+
+    arr = np.asarray(wav, dtype=np.float32).squeeze()
+    if arr.size == 0:
+        raise ValueError("合成结果为空")
+    sr = int(getattr(model, "sample_rate", 24000) or 24000)
+    buf = io.BytesIO()
+    _sf.write(buf, arr, sr, format="WAV")
+    return {"audio": _b64.b64encode(buf.getvalue()).decode(), "sampleRate": sr, "speaker": "clone"}
+
+
 # ------------------------------------------------------------ 越线计数（纯几何，可单测）
 def _orient(ax, ay, bx, by, cx, cy):
     """点 C 相对有向线段 A->B 的叉积；>0 / <0 表示两侧，=0 共线。"""

@@ -770,7 +770,7 @@ def _looks_like_diffusers_lora_dir(path):
 
 _DIR_WEIGHT_LIBS = frozenset({
     "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano",
-    "vibevoice", "voxcpm", "vlm-fo1",
+    "vibevoice", "voxcpm", "neutts", "vlm-fo1",
 })
 
 
@@ -1488,6 +1488,11 @@ def tts_route(mid):
         elif (m.library or "") == "voxcpm":
             from inference import synthesize_speech_voxcpm
             result = synthesize_speech_voxcpm(path, text)
+        elif (m.library or "") == "neutts":
+            return jsonify(
+                code=400,
+                message="NeuTTS Air 需参考音频做音色克隆，请使用「音色克隆」合成",
+            ), 400
         else:
             from inference import synthesize_speech_hf
             result = synthesize_speech_hf(path, text, task=m.task or "text-to-speech")
@@ -1499,9 +1504,10 @@ def tts_route(mid):
 @ai_model_bp.post("/<int:mid>/tts-clone")
 @permission_required("ai:model:query")
 def tts_clone_route(mid):
-    """零样本音色克隆（VoxCPM）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。"""
+    """零样本音色克隆（VoxCPM / NeuTTS）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。"""
     m = AiModel.query.get_or_404(mid)
-    if (m.library or "") != "voxcpm":
+    lib = (m.library or "").lower()
+    if lib not in ("voxcpm", "neutts"):
         return jsonify(code=400, message="该模型不支持音色克隆"), 400
     path = _abs_model_path(m)
     if path is None:
@@ -1526,8 +1532,12 @@ def tts_clone_route(mid):
     file.save(prompt_path)
 
     try:
-        from inference import synthesize_speech_voxcpm_clone
-        result = synthesize_speech_voxcpm_clone(path, text, prompt_text, prompt_path)
+        if lib == "neutts":
+            from inference import synthesize_speech_neutts_clone
+            result = synthesize_speech_neutts_clone(path, text, prompt_text, prompt_path)
+        else:
+            from inference import synthesize_speech_voxcpm_clone
+            result = synthesize_speech_voxcpm_clone(path, text, prompt_text, prompt_path)
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"合成失败：{e}"), 500
     finally:

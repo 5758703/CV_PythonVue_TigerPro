@@ -17,7 +17,7 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="isVoxcpm" label="音色克隆">
+        <el-form-item v-if="supportsClone && !cloneRequired" label="音色克隆">
           <el-switch v-model="useClone" />
         </el-form-item>
         <el-form-item v-if="!isClone && speakers.length" label="音色">
@@ -37,7 +37,9 @@
         type="info"
         :closable="false"
         show-icon
-        title="零样本音色克隆：上传一段 3~10 秒参考音频并填写其文本，模型将用该音色朗读你的目标文本。"
+        :title="cloneRequired
+          ? 'NeuTTS Air 需音色克隆：上传约 3~15 秒干净参考音频并填写其转录文本（英文效果最佳），再合成目标文本。'
+          : '零样本音色克隆：上传一段 3~10 秒参考音频并填写其文本，模型将用该音色朗读你的目标文本。'"
       />
     </el-card>
 
@@ -52,7 +54,7 @@
         </div>
         <el-input v-model="promptText" class="prompt-text" placeholder="参考音频对应的文本（必填，需与音频内容一致）" />
       </div>
-      <el-input v-model="text" type="textarea" :rows="5" maxlength="500" show-word-limit :placeholder="isVoxcpm ? '输入文本；可在开头用括号描述音色，如「(年轻女声，温柔)你好…」' : '输入要合成的文本…'" />
+      <el-input v-model="text" type="textarea" :rows="5" maxlength="500" show-word-limit :placeholder="textPlaceholder" />
       <div class="bar">
         <el-button type="primary" :icon="Microphone" :loading="running" :disabled="!modelId || !text.trim() || (isClone && (!promptAudioFile || !promptText.trim()))" @click="run">开始合成</el-button>
         <el-button :icon="Refresh" @click="clearAll">清空</el-button>
@@ -97,8 +99,11 @@ const resSpeaker = ref('')
 const promptAudioFile = ref(null)
 const promptAudioSrc = ref('')
 const promptText = ref('')
-const useClone = ref(false)  // 仅 voxcpm：是否启用音色克隆
+const useClone = ref(false)  // voxcpm 可选；neutts 强制克隆
 const isVoxcpm = computed(() => currentModel.value?.library === 'voxcpm')
+const isNeutts = computed(() => currentModel.value?.library === 'neutts')
+const supportsClone = computed(() => isVoxcpm.value || isNeutts.value)
+const cloneRequired = computed(() => isNeutts.value)
 
 const { running, percent, etaText, elapsedText, start, finish } = useInferProgress(modelId)
 
@@ -107,7 +112,12 @@ const filteredModels = computed(() =>
   category.value ? modelOptions.value.filter((m) => m.category === category.value) : modelOptions.value
 )
 const currentModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
-const isClone = computed(() => isVoxcpm.value && useClone.value)
+const isClone = computed(() => cloneRequired.value || (supportsClone.value && useClone.value))
+const textPlaceholder = computed(() => {
+  if (isNeutts.value) return '输入要合成的英文文本（NeuTTS Air 以英文为主）…'
+  if (isVoxcpm.value) return '输入文本；可在开头用括号描述音色，如「(年轻女声，温柔)你好…」'
+  return '输入要合成的文本…'
+})
 const onCategoryChange = () => {
   modelId.value = filteredModels.value[0]?.id || null
   loadSpeakers()
@@ -119,7 +129,7 @@ const PREFERRED_TTS_KEY = 'melotts-zh-en'
 const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
   const rows = (res.data.rows || []).filter(
-    (m) => (m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx' || m.library === 'voxcpm') &&
+    (m) => (m.library === 'transformers' || m.library === 'vibevoice' || m.library === 'sherpa-onnx' || m.library === 'voxcpm' || m.library === 'neutts') &&
       m.task === 'text-to-speech' && m.filePath && m.status === '0'
   )
   rows.sort((a, b) => (b.modelKey === PREFERRED_TTS_KEY) - (a.modelKey === PREFERRED_TTS_KEY))
@@ -130,7 +140,7 @@ const loadModels = async () => {
 
 const loadSpeakers = async () => {
   if (!modelId.value) return
-  useClone.value = false
+  useClone.value = cloneRequired.value
   try {
     const res = await modelApi.ttsSpeakers(modelId.value)
     speakers.value = Array.isArray(res.data) ? res.data : []

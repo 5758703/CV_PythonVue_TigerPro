@@ -73,6 +73,9 @@ pytest==8.3.3
 # VoxCPM2 文本转语音 / 音色克隆 / 音色设计（openbmb/VoxCPM2，HF voxcpm 库，48kHz 输出）
 # 注意：安装 voxcpm 会把 modelscope 升到 ~1.37、datasets 升到 ~3.6（torch 2.11.0 不受影响，已验证 import app/funasr/modelscope 正常）。
 voxcpm==2.0.3
+# NeuTTS Air 零样本音色克隆 TTS（neuphonic/neutts-air，24kHz；需系统 espeak-ng）
+# 首次推理还会经 HF 拉取 neuphonic/neucodec；可选 neutts[all] 以启用 GGUF/ONNX 解码器。
+neutts==1.4.1
 # PaddleOCR onnx 文字识别（RapidOCR 封装 PP-OCR det+rec，CPU）
 rapidocr_onnxruntime==1.4.4
 # 表格结构识别（SLANet_plus 等，ONNXRuntime；与 RapidOCR 结果拼 HTML）

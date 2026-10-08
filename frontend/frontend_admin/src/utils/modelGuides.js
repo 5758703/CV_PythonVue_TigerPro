@@ -91,6 +91,17 @@ const EXACT = {
     effects: ['输出纯文本或格式化文本', '可复制/下载 .txt'],
     tips: ['CPU 推理较慢，请耐心等待', '复杂表格可再试「表格识别」页', '小字/模糊图先提高清晰度'],
   },
+  'neutts-air': {
+    summary: 'NeuTTS Air：Neuphonic 端侧语音语言模型，约 0.5B 骨干 + NeuCodec，支持约 3 秒参考音频的即时音色克隆（英文为主）。',
+    scenarios: ['英文语音助手原型', '自定义音色播报', '本地合规场景的克隆合成演示'],
+    effects: ['输出 24kHz WAV', '用参考音色朗读目标文本', '输出带感知水印'],
+    tips: [
+      '必须上传参考音频并填写与其一致的转录文本',
+      '系统需安装 espeak-ng；Python 需 pip install neutts',
+      'HF 仓库可能需登录并同意条款；首次推理会另拉 neucodec',
+      '参考音频建议 mono、16–44kHz、3–15 秒、干净无噪',
+    ],
+  },
 }
 
 const FAMILY = [
@@ -158,6 +169,10 @@ const FAMILY = [
     guide: EXACT['mobilenet-v2'],
   },
   {
+    test: (k) => /neutts/i.test(k),
+    guide: EXACT['neutts-air'],
+  },
+  {
     test: (k) => /got[-_]?ocr|ocr/i.test(k),
     guide: EXACT['stepfun-ai-GOT-OCR2_0'],
   },
@@ -189,6 +204,7 @@ const CATEGORY = {
     tips: ['需要定位请改用检测页', 'DNN INT8 更适合摄像头'],
   },
   '文字识别': EXACT['stepfun-ai-GOT-OCR2_0'],
+  '语音合成': EXACT['neutts-air'],
   '文档表格': {
     summary: '文档/表格相关检测：定位表格区域，便于后续结构识别。',
     scenarios: ['扫描件表格定位', '版面分析前置'],

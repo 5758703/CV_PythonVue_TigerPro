@@ -480,7 +480,7 @@ spec("POST", "/api/ai/model/<int:mid>/tts",
 
 spec("POST", "/api/ai/model/<int:mid>/tts-clone",
      title="零样本音色克隆", auth="JWT + ai:model:query",
-     desc="VoxCPM：参考音频 + 参考文本 + 目标文本。",
+     desc="VoxCPM / NeuTTS：参考音频 + 参考文本 + 目标文本。",
      params=[
          ("Path", "mid", "int", "是", ""),
          ("Form", "text", "string", "是", "目标文本"),

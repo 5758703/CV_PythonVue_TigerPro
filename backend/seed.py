@@ -1623,6 +1623,16 @@ def seed_ai_models():
         source_url="https://huggingface.co/wolfofbackstreet/melotts_chinese_mix_english_onnx",
         description="MeloTTS 中英混合 onnx(sherpa-onnx 引擎)，纯 onnx、小而快、CPU 秒级，中英混读。文本转语音页使用。", status="0",
     ))
+    # 文本转语音（NeuTTS Air：即时音色克隆，需参考音频+转录；系统需 espeak-ng）
+    created |= _ensure_ai_model("neutts-air", dict(
+        model_name="NeuTTS Air 音色克隆合成", category="语音合成",
+        task="text-to-speech", library="neutts", version="v1",
+        source_url="https://huggingface.co/neuphonic/neutts-air",
+        description="Neuphonic NeuTTS Air（0.5B + NeuCodec），英文即时音色克隆（约 3 秒参考音频）。"
+                    "文本转语音页走「音色克隆」。需 pip install neutts，系统安装 espeak-ng；"
+                    "首次推理会另拉 neuphonic/neucodec。HF 仓库可能需登录同意条款。",
+        status="0",
+    ))
     # 姿态估计（YOLO11n Pose，羽毛球分析等页使用）
     created |= _ensure_ai_model("yolo11n-pose", dict(
         model_name="YOLO11n 姿态估计", category="姿态估计",
@@ -1780,7 +1790,7 @@ def seed_ai_models():
 
 def _patch_dir_weight_model_paths():
     """目录型权重：file_path 应指向模型目录，修正误记为目录内单文件的路径。"""
-    dir_libs = ("modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm")
+    dir_libs = ("modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts")
     base = os.path.dirname(os.path.abspath(__file__))
     uploads = os.path.join(base, "uploads")
     changed = False

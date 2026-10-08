@@ -1086,6 +1086,10 @@ def _speech_tts(model: AiModel, path: Path, form, scenario: dict) -> dict:
 
             speaker = form.get("speaker") or scenario["defaults"].get("speaker") or "en-Carter_man"
             return synthesize_speech_vibevoice(str(path), text, speaker=str(speaker))
+        if library == "neutts":
+            raise ScenarioInputError(
+                "NeuTTS Air 需参考音频音色克隆，请到「文本转语音」页使用克隆合成"
+            )
         from inference import synthesize_speech_hf
 
         return synthesize_speech_hf(str(path), text, task=str(model.task or "text-to-speech"))
