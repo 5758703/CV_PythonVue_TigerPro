@@ -4815,17 +4815,114 @@ def synthesize_speech_voxcpm_clone(model_dir, text, prompt_text, prompt_path,
 _neutts_cache = _model_cache()  # model_dir -> NeuTTS 实例
 
 
+def _shim_flex_attention_for_torchao():
+    """torchao 0.12 仍 import torch._inductor.kernel.flex_attention；
+    Torch ≥2.11 已迁到 torch._inductor.kernel.flex.*，缺 shim 会导致 neutts/neucodec 导入失败。"""
+    import sys
+    import types
+
+    name = "torch._inductor.kernel.flex_attention"
+    if name in sys.modules:
+        return
+    try:
+        __import__(name)
+        return
+    except ModuleNotFoundError:
+        pass
+    from torch._inductor.kernel.flex import flex_attention as _fa
+    from torch._inductor.kernel.flex.common import construct_strides, maybe_realize
+
+    mod = types.ModuleType(name)
+    for key in dir(_fa):
+        if not key.startswith("_"):
+            setattr(mod, key, getattr(_fa, key))
+    mod.construct_strides = construct_strides
+    mod.maybe_realize = maybe_realize
+    sys.modules[name] = mod
+
+
+def _ensure_hf_token_env():
+    """把 HF_TOKEN 写入进程环境，供 huggingface_hub / NeuCodec.from_pretrained 使用。
+
+    NeuCodec 只认 repo id「neuphonic/neucodec」且内部 hf_hub_download(token=None)，
+    依赖环境变量或缓存登录；若从仓库根目录启动且未加载 backend/.env，会未认证 → 403。
+    """
+    token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        or os.environ.get("HUGGINGFACE_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    )
+    if not token:
+        try:
+            from flask import current_app, has_app_context
+            if has_app_context():
+                token = current_app.config.get("HF_TOKEN")
+        except Exception:
+            token = None
+    if not token:
+        try:
+            from pathlib import Path
+            from dotenv import dotenv_values
+            env_path = Path(__file__).resolve().parent / ".env"
+            vals = dotenv_values(env_path) if env_path.is_file() else {}
+            token = vals.get("HF_TOKEN") or vals.get("HUGGINGFACE_TOKEN")
+        except Exception:
+            token = None
+    if token:
+        os.environ["HF_TOKEN"] = token
+        os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
+    return token
+
+
+def _ensure_neucodec_cached(token):
+    """预拉取 NeuCodec 门禁权重到 HF 缓存（pytorch_model.bin + meta.yaml）。"""
+    from huggingface_hub import hf_hub_download
+
+    repo = "neuphonic/neucodec"
+    try:
+        for name in ("pytorch_model.bin", "meta.yaml"):
+            hf_hub_download(repo_id=repo, filename=name, token=token)
+    except Exception as e:
+        err = str(e)
+        if "403" in err or "gated" in err.lower() or "authorized" in err.lower():
+            raise RuntimeError(
+                "无法访问门禁仓库 neuphonic/neucodec（403）。"
+                "注意：同意 neutts-air 不等于同意 neucodec，需单独授权。"
+                "请用 HF_TOKEN 对应账号（浏览器登录）打开 "
+                "https://huggingface.co/neuphonic/neucodec ，填写 Affiliation/Role 后 Agree；"
+                "然后运行: python scripts/fetch_neutts_air.py --codec-only ，并重启后端。"
+                f" 原始错误: {e}"
+            ) from e
+        raise RuntimeError(
+            f"预下载 neuphonic/neucodec 失败: {e}"
+        ) from e
+
+
 def _get_neutts(model_dir, language="en-us"):
     """加载/缓存 NeuTTS（neuphonic/neutts-air 等；本地目录或 HF repo）。"""
     with _lock:
         if model_dir in _neutts_cache:
             return _neutts_cache[model_dir]
         try:
+            _shim_flex_attention_for_torchao()
             from neutts import NeuTTS
-        except ImportError as e:
+        except (ImportError, AttributeError, ModuleNotFoundError) as e:
             raise RuntimeError(
-                "NeuTTS 本地推理需安装 neutts：pip install neutts"
+                "NeuTTS 本地推理依赖不可用（需 neutts + torchao==0.12.x，"
+                "与 torchtune/neucodec 配套；Torch≥2.11 下本服务会注入 flex_attention shim）。"
+                f" 原始错误: {e}；可试: pip install neutts torchao==0.12.0"
             ) from e
+
+        token = _ensure_hf_token_env()
+        if not token:
+            raise RuntimeError(
+                "NeuTTS 需拉取门禁 codec neuphonic/neucodec，请在 backend/.env 配置 HF_TOKEN "
+                "（https://huggingface.co/settings/tokens），并先在 "
+                "https://huggingface.co/neuphonic/neucodec 同意访问条款后重启后端。"
+            )
+        _ensure_neucodec_cached(token)
+
         import torch
 
         device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -75,7 +75,10 @@ pytest==8.3.3
 voxcpm==2.0.3
 # NeuTTS Air 零样本音色克隆 TTS（neuphonic/neutts-air，24kHz；需系统 espeak-ng）
 # 首次推理还会经 HF 拉取 neuphonic/neucodec；可选 neutts[all] 以启用 GGUF/ONNX 解码器。
+# torchao 钉 0.12：neucodec→torchtune 仍依赖 torchao.dtypes.nf4tensor；0.13+ 已移除该路径。
+# Torch≥2.11 下 torchao 0.12 的 flex_attention 旧 import 由 inference._shim_flex_attention_for_torchao 兼容。
 neutts==1.4.1
+torchao==0.12.0
 # PaddleOCR onnx 文字识别（RapidOCR 封装 PP-OCR det+rec，CPU）
 rapidocr_onnxruntime==1.4.4
 # 表格结构识别（SLANet_plus 等，ONNXRuntime；与 RapidOCR 结果拼 HTML）

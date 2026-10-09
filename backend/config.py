@@ -1,8 +1,11 @@
 import os
 import secrets
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+# 始终加载 backend/.env（不依赖进程 cwd；从仓库根目录启动时也能读到 HF_TOKEN）
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 class Config:

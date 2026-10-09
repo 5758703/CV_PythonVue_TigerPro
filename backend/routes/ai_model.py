@@ -1488,12 +1488,13 @@ def tts_route(mid):
         elif (m.library or "") == "voxcpm":
             from inference import synthesize_speech_voxcpm
             result = synthesize_speech_voxcpm(path, text)
-        elif (m.library or "") == "neutts":
-            return jsonify(
-                code=400,
-                message="NeuTTS Air 需参考音频做音色克隆，请使用「音色克隆」合成",
-            ), 400
         else:
+            from models.ai_model import TTS_CLONE_REQUIRED_LIBS
+            if (m.library or "").lower() in TTS_CLONE_REQUIRED_LIBS:
+                return jsonify(
+                    code=400,
+                    message="该模型需参考音频做音色克隆，请使用「音色克隆」合成",
+                ), 400
             from inference import synthesize_speech_hf
             result = synthesize_speech_hf(path, text, task=m.task or "text-to-speech")
     except Exception as e:  # noqa: BLE001
@@ -1505,9 +1506,11 @@ def tts_route(mid):
 @permission_required("ai:model:query")
 def tts_clone_route(mid):
     """零样本音色克隆（VoxCPM / NeuTTS）：参考音频 + 参考文本 + 目标文本 -> wav(base64)。"""
+    from models.ai_model import TTS_CLONE_LIBS
+
     m = AiModel.query.get_or_404(mid)
     lib = (m.library or "").lower()
-    if lib not in ("voxcpm", "neutts"):
+    if lib not in TTS_CLONE_LIBS:
         return jsonify(code=400, message="该模型不支持音色克隆"), 400
     path = _abs_model_path(m)
     if path is None:

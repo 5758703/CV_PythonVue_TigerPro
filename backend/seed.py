@@ -1629,8 +1629,9 @@ def seed_ai_models():
         task="text-to-speech", library="neutts", version="v1",
         source_url="https://huggingface.co/neuphonic/neutts-air",
         description="Neuphonic NeuTTS Air（0.5B + NeuCodec），英文即时音色克隆（约 3 秒参考音频）。"
-                    "文本转语音页走「音色克隆」。需 pip install neutts，系统安装 espeak-ng；"
-                    "首次推理会另拉 neuphonic/neucodec。HF 仓库可能需登录同意条款。",
+                    "文本转语音页走「音色克隆」。需 pip install neutts torchao==0.12.0，系统安装 espeak-ng；"
+                    "首次推理另需门禁 codec neuphonic/neucodec：同一 HF 账号在页面同意条款，"
+                    "backend/.env 配置 HF_TOKEN，并可运行 python scripts/fetch_neutts_air.py --codec-only。",
         status="0",
     ))
     # 姿态估计（YOLO11n Pose，羽毛球分析等页使用）

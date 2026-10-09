@@ -7,6 +7,10 @@ from datetime import datetime
 
 from extensions import db
 
+# 文本转语音能力声明（前端下拉 / 路由共用，避免每接一个新库就改页面白名单）
+TTS_CLONE_LIBS = frozenset({"voxcpm", "neutts"})
+TTS_CLONE_REQUIRED_LIBS = frozenset({"neutts"})  # 仅克隆、不支持纯文本合成
+
 
 class AiModel(db.Model):
     __tablename__ = "ai_model"
@@ -41,6 +45,7 @@ class AiModel(db.Model):
         return "other"
 
     def to_dict(self):
+        lib = (self.library or "").lower()
         result = {
             "id": self.id,
             "modelName": self.model_name,
@@ -58,10 +63,15 @@ class AiModel(db.Model):
             "createTime": self.create_time.isoformat() if self.create_time else None,
             "updateTime": self.update_time.isoformat() if self.update_time else None,
         }
-        if self.library in ('confucius-r2t2', 'confucius-t3po'):
+        if (self.task or "") == "text-to-speech":
+            result["ttsClone"] = lib in TTS_CLONE_LIBS
+            result["ttsCloneRequired"] = lib in TTS_CLONE_REQUIRED_LIBS
+        if lib in ("confucius-r2t2", "confucius-t3po"):
             from flask import has_app_context
             from services.confucius import inference_backend
-            backend = inference_backend(self.library) if has_app_context() else 'official'
-            result['inferenceBackend'] = backend
-            result['supportedLatencyModes'] = ['native'] if backend == 'llama-cpu' else ['low', 'native', 'high']
+            backend = inference_backend(self.library) if has_app_context() else "official"
+            result["inferenceBackend"] = backend
+            result["supportedLatencyModes"] = (
+                ["native"] if backend == "llama-cpu" else ["low", "native", "high"]
+            )
         return result

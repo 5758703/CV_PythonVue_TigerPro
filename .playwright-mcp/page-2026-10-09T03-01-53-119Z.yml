@@ -1,0 +1,617 @@
+- generic [ref=e2]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - link "Hugging Face's logo Hugging Face" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img "Hugging Face's logo" [ref=e8]
+          - generic [ref=e9]: Hugging Face
+        - generic [ref=e10]:
+          - textbox "Search models, datasets, users..." [ref=e11]
+          - img [ref=e12]
+      - navigation "Main" [ref=e14]:
+        - list [ref=e15]:
+          - listitem [ref=e16]:
+            - link "Models" [ref=e17] [cursor=pointer]:
+              - /url: /models
+              - img [ref=e18]
+              - text: Models
+          - listitem [ref=e22]:
+            - link "Datasets" [ref=e23] [cursor=pointer]:
+              - /url: /datasets
+              - img [ref=e24]
+              - text: Datasets
+          - listitem [ref=e29]:
+            - link "Spaces" [ref=e30] [cursor=pointer]:
+              - /url: /spaces
+              - img [ref=e31]
+              - text: Spaces
+          - listitem [ref=e35]:
+            - link "Docs" [ref=e36] [cursor=pointer]:
+              - /url: /docs
+              - img [ref=e37]
+              - text: Docs
+          - listitem [ref=e41]:
+            - link "Pricing" [ref=e42] [cursor=pointer]:
+              - /url: /pricing
+          - listitem [ref=e43]:
+            - generic [ref=e44]:
+              - button [ref=e45] [cursor=pointer]:
+                - img [ref=e46]
+              - navigation [ref=e51]:
+                - list [ref=e52]:
+                  - listitem [ref=e53]:
+                    - generic [ref=e54]: Website
+                    - list [ref=e55]:
+                      - listitem [ref=e56]:
+                        - link "Tasks" [ref=e57] [cursor=pointer]:
+                          - /url: /tasks
+                          - img [ref=e58]
+                          - generic: Tasks
+                      - listitem [ref=e61]:
+                        - link "HuggingChat" [ref=e62] [cursor=pointer]:
+                          - /url: /chat
+                          - img [ref=e63]
+                          - generic: HuggingChat
+                      - listitem [ref=e66]:
+                        - link "Collections" [ref=e67] [cursor=pointer]:
+                          - /url: /collections
+                          - img [ref=e68]
+                          - generic: Collections
+                      - listitem [ref=e72]:
+                        - link "Languages" [ref=e73] [cursor=pointer]:
+                          - /url: /languages
+                          - img [ref=e74]
+                          - generic: Languages
+                      - listitem [ref=e76]:
+                        - link "Organizations" [ref=e77] [cursor=pointer]:
+                          - /url: /organizations
+                          - img [ref=e78]
+                          - generic: Organizations
+                  - listitem [ref=e83]:
+                    - generic [ref=e84]: Community
+                    - list [ref=e85]:
+                      - listitem [ref=e86]:
+                        - link "Blog" [ref=e87] [cursor=pointer]:
+                          - /url: /blog/zh
+                          - img [ref=e88]
+                          - generic: Blog
+                      - listitem [ref=e90]:
+                        - link "Posts" [ref=e91] [cursor=pointer]:
+                          - /url: /posts
+                          - img [ref=e92]
+                          - generic: Posts
+                      - listitem [ref=e94]:
+                        - link "Daily Papers" [ref=e95] [cursor=pointer]:
+                          - /url: /papers
+                          - img [ref=e96]
+                          - generic: Daily Papers
+                      - listitem [ref=e99]:
+                        - link "Hardware" [ref=e100] [cursor=pointer]:
+                          - /url: /hardware
+                          - img [ref=e101]
+                          - generic: Hardware
+                      - listitem [ref=e104]:
+                        - link "Learn" [ref=e105] [cursor=pointer]:
+                          - /url: /learn
+                          - img [ref=e106]
+                          - generic: Learn
+                      - listitem [ref=e112]:
+                        - link "Discord" [ref=e113] [cursor=pointer]:
+                          - /url: /join/discord
+                          - img [ref=e114]
+                          - generic: Discord
+                      - listitem [ref=e116]:
+                        - link "Forum" [ref=e117] [cursor=pointer]:
+                          - /url: https://discuss.huggingface.co/
+                          - img [ref=e118]
+                          - generic: Forum
+                      - listitem [ref=e120]:
+                        - link "GitHub" [ref=e121] [cursor=pointer]:
+                          - /url: https://github.com/huggingface
+                          - img [ref=e122]
+                          - generic: GitHub
+                  - listitem [ref=e124]:
+                    - generic [ref=e125]: Solutions
+                    - list [ref=e126]:
+                      - listitem [ref=e127]:
+                        - link "Team & Enterprise" [ref=e128] [cursor=pointer]:
+                          - /url: /enterprise
+                          - img [ref=e129]
+                          - generic: Team & Enterprise
+                      - listitem [ref=e131]:
+                        - link "Hugging Face PRO" [ref=e132] [cursor=pointer]:
+                          - /url: /pro
+                          - img [ref=e133]
+                          - generic: Hugging Face PRO
+                      - listitem [ref=e135]:
+                        - link "Enterprise Support" [ref=e136] [cursor=pointer]:
+                          - /url: /support
+                          - img [ref=e137]
+                          - generic: Enterprise Support
+                      - listitem [ref=e140]:
+                        - link "Inference Providers" [ref=e141] [cursor=pointer]:
+                          - /url: /inference/models
+                          - img [ref=e142]
+                          - generic: Inference Providers
+                      - listitem [ref=e145]:
+                        - link "Inference Endpoints" [ref=e146] [cursor=pointer]:
+                          - /url: /inference-endpoints
+                          - img [ref=e147]
+                          - generic: Inference Endpoints
+                      - listitem [ref=e150]:
+                        - link "Storage Buckets" [ref=e151] [cursor=pointer]:
+                          - /url: /storage
+                          - img [ref=e152]
+                          - generic: Storage Buckets
+          - listitem [ref=e156]:
+            - separator [ref=e157]
+          - listitem [ref=e158]:
+            - link "Log In" [ref=e159] [cursor=pointer]:
+              - /url: /login
+          - listitem [ref=e160]:
+            - link "Sign Up" [ref=e161] [cursor=pointer]:
+              - /url: /join
+  - main [ref=e162]:
+    - generic [ref=e165]:
+      - heading "neuphonic / neucodec Like 155 Follow Neuphonic 551" [level=1] [ref=e166]:
+        - generic [ref=e167]:
+          - link [ref=e171] [cursor=pointer]:
+            - /url: /neuphonic
+          - link "neuphonic" [ref=e175] [cursor=pointer]:
+            - /url: /neuphonic
+          - generic [ref=e176]: /
+        - generic [ref=e177]:
+          - link "neucodec" [ref=e178] [cursor=pointer]:
+            - /url: /neuphonic/neucodec
+          - button "Copy model name to clipboard" [ref=e179] [cursor=pointer]:
+            - img [ref=e180]
+        - generic [ref=e184]:
+          - button "Like" [ref=e187] [cursor=pointer]:
+            - img [ref=e188]
+            - generic [ref=e190]: Like
+          - button "155" [ref=e191] [cursor=pointer]
+        - generic [ref=e193]:
+          - button "Follow Neuphonic" [ref=e194] [cursor=pointer]:
+            - generic [ref=e195]: Follow
+            - generic [ref=e196]: Neuphonic
+          - button "551" [ref=e197] [cursor=pointer]
+      - generic [ref=e198]:
+        - link "Audio-to-Audio" [ref=e199] [cursor=pointer]:
+          - /url: /models?pipeline_tag=audio-to-audio
+          - generic [ref=e200]:
+            - img [ref=e202]
+            - generic [ref=e204]: Audio-to-Audio
+        - link "PyTorch" [ref=e205] [cursor=pointer]:
+          - /url: /models?library=pytorch
+          - generic [ref=e206]:
+            - img [ref=e207]
+            - generic [ref=e210]: PyTorch
+        - link "Safetensors" [ref=e211] [cursor=pointer]:
+          - /url: /models?library=safetensors
+          - generic [ref=e212]:
+            - img [ref=e213]
+            - generic [ref=e215]: Safetensors
+        - button "6 datasets" [ref=e216] [cursor=pointer]:
+          - generic [ref=e217]:
+            - img [ref=e218]
+            - generic [ref=e223]: 6 datasets
+        - link "neucodec" [ref=e224] [cursor=pointer]:
+          - /url: /models?other=neucodec
+          - generic [ref=e226]: neucodec
+        - link "audio" [ref=e227] [cursor=pointer]:
+          - /url: /models?other=audio
+          - generic [ref=e229]: audio
+        - link "speech" [ref=e230] [cursor=pointer]:
+          - /url: /models?other=speech
+          - generic [ref=e232]: speech
+        - link "speech-language-models" [ref=e233] [cursor=pointer]:
+          - /url: /models?other=speech-language-models
+          - generic [ref=e235]: speech-language-models
+        - 'button "arxiv: 2509.09550" [ref=e237] [cursor=pointer]':
+          - generic [ref=e239]:
+            - img [ref=e240]
+            - generic [ref=e243]: "arxiv:"
+            - generic [ref=e244]: "2509.09550"
+        - 'button "License: apache-2.0" [ref=e247] [cursor=pointer]':
+          - generic [ref=e249]:
+            - img [ref=e250]
+            - generic [ref=e252]: "License:"
+            - generic [ref=e253]: apache-2.0
+      - generic [ref=e255]:
+        - generic [ref=e256]:
+          - link "Model card" [ref=e257] [cursor=pointer]:
+            - /url: /neuphonic/neucodec
+            - img [ref=e258]
+            - text: Model card
+          - link "Files xet" [ref=e262] [cursor=pointer]:
+            - /url: /neuphonic/neucodec/tree/main
+            - img [ref=e263]
+            - generic [ref=e266]: Files
+            - generic [ref=e269]:
+              - img [ref=e270]
+              - generic [ref=e273]: xet
+          - link "Community 5" [ref=e274] [cursor=pointer]:
+            - /url: /neuphonic/neucodec/discussions
+            - img [ref=e275]
+            - text: Community
+            - generic [ref=e278]: "5"
+        - generic [ref=e279]:
+          - button [ref=e282] [cursor=pointer]:
+            - img [ref=e283]
+          - button "Copy to bucket new" [ref=e287] [cursor=pointer]:
+            - img [ref=e288]
+            - text: Copy to bucket
+            - generic [ref=e290]: new
+    - generic [ref=e291]:
+      - generic [ref=e292]:
+        - generic [ref=e294]:
+          - heading "You need to agree to share your contact information to access this model" [level=2] [ref=e295]:
+            - img [ref=e296]
+            - text: You need to agree to share your contact information to access this model
+          - paragraph [ref=e299]: This repository is publicly accessible, but you have to accept the conditions to access its files and content.
+          - paragraph [ref=e300]:
+            - link "Log in" [ref=e301] [cursor=pointer]:
+              - /url: /login?next=/neuphonic/neucodec
+            - text: or
+            - link "Sign Up" [ref=e302] [cursor=pointer]:
+              - /url: /join?next=/neuphonic/neucodec
+            - text: to review the conditions and access this model content.
+        - generic [ref=e303]:
+          - button [ref=e309] [cursor=pointer]:
+            - img [ref=e310]
+          - generic [ref=e312]:
+            - heading "NeuCodec 🎧" [level=1] [ref=e313]:
+              - link [ref=e314] [cursor=pointer]:
+                - /url: "#neucodec-🎧"
+                - img [ref=e316]
+              - generic [ref=e318]: NeuCodec 🎧
+            - paragraph [ref=e319]:
+              - link "NeuCodec Intro" [ref=e320] [cursor=pointer]:
+                - /url: https://www.youtube.com/watch?v=O7XH1lGZyYY
+                - img "NeuCodec Intro" [ref=e321]
+            - paragraph [ref=e322]:
+              - emphasis [ref=e323]: Click the image above to see NeuCodec in action on Youtube!
+            - paragraph [ref=e324]:
+              - emphasis [ref=e325]: Created by Neuphonic - building faster, smaller, on-device voice AI
+            - paragraph [ref=e326]:
+              - text: A lightweight neural codec that encodes audio at just 0.8 kbps - perfect for researchers and builders who need something that
+              - emphasis [ref=e327]: just works
+              - text: for training high quality text-to-speech models.
+            - heading "Key Features" [level=1] [ref=e328]:
+              - link [ref=e329] [cursor=pointer]:
+                - /url: "#key-features"
+                - img [ref=e331]
+              - generic [ref=e333]: Key Features
+            - list [ref=e334]:
+              - listitem [ref=e335]: 🔊 Low bit-rate compression - a speech codec that compresses and reconstructs audio with near-inaudible reconstruction loss
+              - listitem [ref=e336]: 🎼 Upsamples from 16kHz → 24kHz
+              - listitem [ref=e337]: 🌍 Ready for real-world use - train your own SpeechLMs without needing to build your own codec
+              - listitem [ref=e338]: 🏢 Commercial use permitted - use it in your own tools or products
+              - listitem [ref=e339]: 📊 Released with large pre-encoded datasets - we’ve compressed Emilia-YODAS from 1.7TB to 41GB using NeuCodec, significantly reducing the compute requirements needed for training
+            - heading "Model Details" [level=1] [ref=e340]:
+              - link [ref=e341] [cursor=pointer]:
+                - /url: "#model-details"
+                - img [ref=e343]
+              - generic [ref=e345]: Model Details
+            - paragraph [ref=e346]: "NeuCodec is a Finite Scalar Quantisation (FSQ) based 0.8kbps audio codec for speech tokenization. It takes advantage of the following features:"
+            - list [ref=e347]:
+              - listitem [ref=e348]: FSQ quantisation resulting in a single codebook, making it ideal for downstream modeling with Speech Language Models.
+              - listitem [ref=e349]: Trained with CC data such that there are no Non-Commercial data restrictions.
+              - listitem [ref=e350]: At 50 tokens/sec and 16 bits per token, the overall bit-rate is 0.8kbps.
+              - listitem [ref=e351]: The codec takes in 16kHz input and outputs 24kHz using an upsampling decoder.
+              - listitem [ref=e352]: The FSQ encoding scheme allows for bit-level error resistance suitable for unreliable and noisy channels.
+            - paragraph [ref=e353]:
+              - text: NeuCodec is largely based on extending the work of
+              - link "X-Codec2.0" [ref=e354] [cursor=pointer]:
+                - /url: https://huggingface.co/HKUSTAudio/xcodec2
+              - text: .
+            - list [ref=e355]:
+              - listitem [ref=e356]:
+                - strong [ref=e357]: "Developed by:"
+                - text: Neuphonic
+              - listitem [ref=e358]:
+                - strong [ref=e359]: "Model type:"
+                - text: Neural Audio Codec
+              - listitem [ref=e360]:
+                - strong [ref=e361]: "License:"
+                - text: apache-2.0
+              - listitem [ref=e362]:
+                - strong [ref=e363]: "Repository:"
+                - link "https://github.com/neuphonic/neucodec" [ref=e364] [cursor=pointer]:
+                  - /url: https://github.com/neuphonic/neucodec
+              - listitem [ref=e365]:
+                - strong [ref=e366]: "Paper:"
+                - link "arXiv" [ref=e367] [cursor=pointer]:
+                  - /url: https://arxiv.org/abs/2509.09550
+              - listitem [ref=e368]:
+                - strong [ref=e369]: "Pre-encoded Datasets:"
+                - list [ref=e370]:
+                  - listitem [ref=e371]:
+                    - link "Emilia-YODAS-EN" [ref=e372] [cursor=pointer]:
+                      - /url: https://huggingface.co/datasets/neuphonic/emilia-yodas-english-neucodec
+                  - listitem [ref=e373]:
+                    - emphasis [ref=e374]: More coming soon!
+            - heading "Setup" [level=1] [ref=e375]:
+              - link [ref=e376] [cursor=pointer]:
+                - /url: "#setup"
+                - img [ref=e378]
+              - generic [ref=e380]: Setup
+            - paragraph [ref=e381]: "NeuCodec is now supported natively in 🤗 Transformers. Until it is part of an official Transformers release, install from source:"
+            - code [ref=e383]: pip install git+https://github.com/huggingface/transformers
+            - heading "Usage example" [level=2] [ref=e384]:
+              - link [ref=e385] [cursor=pointer]:
+                - /url: "#usage-example"
+                - img [ref=e387]
+              - generic [ref=e389]: Usage example
+            - paragraph [ref=e390]: "Here is a quick example of how to encode and decode an audio using this model:"
+            - code [ref=e392]: "from datasets import Audio, load_dataset from transformers import AutoFeatureExtractor, AutoModel model_id = \"neuphonic/neucodec\" model = AutoModel.from_pretrained(model_id, device_map=\"auto\") feature_extractor = AutoFeatureExtractor.from_pretrained(model_id) dataset = load_dataset(\"hf-internal-testing/librispeech_asr_dummy\", \"clean\", split=\"validation\") dataset = dataset.cast_column(\"audio\", Audio(sampling_rate=feature_extractor.sampling_rate)) audio = dataset[0][\"audio\"][\"array\"] inputs = feature_extractor(audio=audio, sampling_rate=feature_extractor.sampling_rate, return_tensors=\"pt\").to( model.device, model.dtype ) print(\"Input waveform shape:\", inputs[\"input_values\"].shape) # Input waveform shape: torch.Size([1, 1, 93760]) # encoder and decoder audio_codes = model.encode(**inputs).audio_codes print(\"Audio codes shape:\", audio_codes.shape) # Audio codes shape: torch.Size([1, 1, 293]) audio_values = model.decode(audio_codes).audio_values print(\"Audio values shape:\", audio_values.shape) # Audio values shape: torch.Size([1, 1, 93760]) # Equivalently, you can do encoding and decoding in one step model_output = model(**inputs) audio_codes = model_output.audio_codes audio_values = model_output.audio_values"
+            - heading "Get Started (Legacy)" [level=1] [ref=e393]:
+              - link [ref=e394] [cursor=pointer]:
+                - /url: "#get-started-legacy"
+                - img [ref=e396]
+              - generic [ref=e398]: Get Started (Legacy)
+            - paragraph [ref=e399]: Use the code below to get started with the model.
+            - paragraph [ref=e400]: "To install from pypi in a dedicated environment, using Python 3.10 or above:"
+            - code [ref=e402]: conda create -n neucodec python=3.10 conda activate neucodec pip install neucodec
+            - paragraph [ref=e403]: "Then, to use in python:"
+            - code [ref=e405]:
+              - text: "import librosa import torch import torchaudio from torchaudio import transforms as T from neucodec import NeuCodec model = NeuCodec.from_pretrained(\"neuphonic/neucodec\") model.eval().cuda() y, sr = torchaudio.load(librosa.ex(\"libri1\")) if sr != 16_000: y = T.Resample(sr, 16_000)(y)[None, ...] # (B, 1, T_16) with torch.no_grad(): fsq_codes = model.encode_code(y) # fsq_codes = model.encode_code(librosa.ex(\"libri1\")) # or directly pass your filepath! print("
+              - generic [ref=e406]: "f\"Codes shape: {fsq_codes.shape}\""
+              - text: ") recon = model.decode_code(fsq_codes).cpu() # (B, 1, T_24) torchaudio.save(\"reconstructed.wav\", recon[0, :, :], 24_000)"
+            - heading "Training Details" [level=1] [ref=e407]:
+              - link [ref=e408] [cursor=pointer]:
+                - /url: "#training-details"
+                - img [ref=e410]
+              - generic [ref=e412]: Training Details
+            - paragraph [ref=e413]: "The model was trained using the following data:"
+            - list [ref=e414]:
+              - listitem [ref=e415]: Emilia-YODAS
+              - listitem [ref=e416]: MLS
+              - listitem [ref=e417]: LibriTTS
+              - listitem [ref=e418]: Fleurs
+              - listitem [ref=e419]: CommonVoice
+              - listitem [ref=e420]: HUI
+              - listitem [ref=e421]: Additional proprietary set
+            - paragraph [ref=e422]: All publically available data was covered by either the CC-BY-4.0 or CC0 license.
+      - generic [ref=e423]:
+        - generic [ref=e424]:
+          - generic [ref=e425]:
+            - term [ref=e426]: Downloads last month
+            - definition [ref=e427]: 49,095
+          - img [ref=e429]
+        - generic [ref=e434]:
+          - generic [ref=e435]:
+            - img [ref=e436]
+            - text: Safetensors
+            - link [ref=e438] [cursor=pointer]:
+              - /url: https://huggingface.co/docs/safetensors
+              - img [ref=e439]
+          - generic [ref=e443]:
+            - generic [ref=e444]:
+              - generic [ref=e445]: Model size
+              - generic [ref=e446]: 0.6B params
+            - generic [ref=e447]:
+              - generic [ref=e448]: Tensor type
+              - generic [ref=e449]: F32
+            - button "Files info" [disabled] [ref=e451]:
+              - img [ref=e452]
+              - paragraph [ref=e454]: Files info
+        - generic [ref=e458]:
+          - generic [ref=e460]:
+            - img [ref=e461]
+            - generic [ref=e463]: Inference Providers
+            - link "NEW" [ref=e464] [cursor=pointer]:
+              - /url: https://huggingface.co/docs/inference-providers
+          - link "Audio-to-Audio" [ref=e467] [cursor=pointer]:
+            - /url: /tasks/audio-to-audio
+            - generic [ref=e468]:
+              - img [ref=e469]
+              - generic [ref=e471]: Audio-to-Audio
+          - generic [ref=e472]:
+            - generic [ref=e473]: This model isn't deployed by any Inference Provider.
+            - link "🙋 1 Ask for provider support" [ref=e474] [cursor=pointer]:
+              - /url: /spaces/huggingface/InferenceSupport/discussions/4472
+              - generic [ref=e475]:
+                - generic [ref=e476]: 🙋
+                - generic [ref=e477]: "1"
+              - generic [ref=e478]: Ask for provider support
+        - heading "Model tree for neuphonic/neucodec" [level=2] [ref=e480]:
+          - img [ref=e481]
+          - text: Model tree for
+          - generic [ref=e484]: neuphonic/neucodec
+        - generic [ref=e486]:
+          - generic [ref=e487]:
+            - img [ref=e490]
+            - generic [ref=e492]: Finetunes
+            - link "3 models" [ref=e494] [cursor=pointer]:
+              - /url: /models?other=base_model:finetune:neuphonic/neucodec
+          - generic [ref=e495]:
+            - img [ref=e498]
+            - generic [ref=e500]: Quantizations
+            - link "7 models" [ref=e502] [cursor=pointer]:
+              - /url: /models?other=base_model:quantized:neuphonic/neucodec
+        - heading "Datasets used to train neuphonic/neucodec" [level=2] [ref=e504]:
+          - img [ref=e505]
+          - text: Datasets used to train
+          - generic [ref=e510]: neuphonic/neucodec
+        - navigation [ref=e511]:
+          - article [ref=e512]:
+            - link "google/fleurs Viewer • Updated May 15 • 768k • 118k • 475" [ref=e513] [cursor=pointer]:
+              - /url: /datasets/google/fleurs
+              - generic [ref=e514]:
+                - generic "google/fleurs" [ref=e515]:
+                  - img [ref=e516]
+                  - heading "google/fleurs" [level=4] [ref=e521]
+                - generic [ref=e522]:
+                  - img [ref=e523]
+                  - text: Viewer
+                  - generic [ref=e525]: •
+                  - generic [ref=e526]:
+                    - text: Updated
+                    - time [ref=e527]: May 15
+                  - generic [ref=e528]: •
+                  - img [ref=e529]
+                  - generic [ref=e531]: 768k
+                  - generic [ref=e532]: •
+                  - img [ref=e533]
+                  - text: 118k
+                  - generic [ref=e535]: •
+                  - img [ref=e536]
+                  - text: "475"
+          - article [ref=e538]:
+            - link "facebook/multilingual_librispeech Viewer • Updated Aug 12, 2024 • 1.49M • 43.8k • 191" [ref=e539] [cursor=pointer]:
+              - /url: /datasets/facebook/multilingual_librispeech
+              - generic [ref=e540]:
+                - generic "facebook/multilingual_librispeech" [ref=e541]:
+                  - img [ref=e542]
+                  - heading "facebook/multilingual_librispeech" [level=4] [ref=e547]
+                - generic [ref=e548]:
+                  - img [ref=e549]
+                  - text: Viewer
+                  - generic [ref=e551]: •
+                  - generic [ref=e552]:
+                    - text: Updated
+                    - time [ref=e553]: Aug 12, 2024
+                  - generic [ref=e554]: •
+                  - img [ref=e555]
+                  - generic [ref=e557]: 1.49M
+                  - generic [ref=e558]: •
+                  - img [ref=e559]
+                  - text: 43.8k
+                  - generic [ref=e561]: •
+                  - img [ref=e562]
+                  - text: "191"
+          - article [ref=e564]:
+            - link "amphion/Emilia-Dataset Viewer • Updated Feb 28, 2025 • 54.8M • 27.2k • 492" [ref=e565] [cursor=pointer]:
+              - /url: /datasets/amphion/Emilia-Dataset
+              - generic [ref=e566]:
+                - generic "amphion/Emilia-Dataset" [ref=e567]:
+                  - img [ref=e568]
+                  - heading "amphion/Emilia-Dataset" [level=4] [ref=e573]
+                - generic [ref=e574]:
+                  - img [ref=e575]
+                  - text: Viewer
+                  - generic [ref=e577]: •
+                  - generic [ref=e578]:
+                    - text: Updated
+                    - time [ref=e579]: Feb 28, 2025
+                  - generic [ref=e580]: •
+                  - img [ref=e581]
+                  - generic [ref=e583]: 54.8M
+                  - generic [ref=e584]: •
+                  - img [ref=e585]
+                  - text: 27.2k
+                  - generic [ref=e587]: •
+                  - img [ref=e588]
+                  - text: "492"
+        - heading "Spaces using neuphonic/neucodec 100" [level=2] [ref=e591]:
+          - img [ref=e592]
+          - text: Spaces using
+          - generic [ref=e598]: neuphonic/neucodec
+          - generic [ref=e599]: "100"
+        - navigation [ref=e601]:
+          - link "neuphonic/neutts-nano-multilingual-collection" [ref=e602] [cursor=pointer]:
+            - /url: /spaces/neuphonic/neutts-nano-multilingual-collection
+            - generic [ref=e604]: neuphonic/neutts-nano-multilingual-collection
+            - img [ref=e605]
+          - link "neuphonic/neutts-2e" [ref=e608] [cursor=pointer]:
+            - /url: /spaces/neuphonic/neutts-2e
+            - generic [ref=e610]: neuphonic/neutts-2e
+            - img [ref=e611]
+          - link "neuphonic/neutts-air" [ref=e614] [cursor=pointer]:
+            - /url: /spaces/neuphonic/neutts-air
+            - generic [ref=e616]: neuphonic/neutts-air
+            - img [ref=e617]
+          - link "📈 tardellirs/model-pulse" [ref=e620] [cursor=pointer]:
+            - /url: /spaces/tardellirs/model-pulse
+            - generic [ref=e621]: 📈
+            - generic [ref=e622]: tardellirs/model-pulse
+            - img [ref=e623]
+          - link "🎛️ eustlb/audio-to-audio-models-on-the-hub" [ref=e627] [cursor=pointer]:
+            - /url: /spaces/eustlb/audio-to-audio-models-on-the-hub
+            - generic [ref=e628]: 🎛️
+            - generic [ref=e629]: eustlb/audio-to-audio-models-on-the-hub
+          - link "🔊 Steveeeeeeen/SpeechLLM-Playbook" [ref=e630] [cursor=pointer]:
+            - /url: /spaces/Steveeeeeeen/SpeechLLM-Playbook
+            - generic [ref=e631]: 🔊
+            - generic [ref=e632]: Steveeeeeeen/SpeechLLM-Playbook
+          - link "🦙 Zyan11/LocalAI-Amlan-Edition" [ref=e633] [cursor=pointer]:
+            - /url: /spaces/Zyan11/LocalAI-Amlan-Edition
+            - generic [ref=e634]: 🦙
+            - generic [ref=e635]: Zyan11/LocalAI-Amlan-Edition
+          - link "🐨 preu920/voice-cloner-2" [ref=e636] [cursor=pointer]:
+            - /url: /spaces/preu920/voice-cloner-2
+            - generic [ref=e637]: 🐨
+            - generic [ref=e638]: preu920/voice-cloner-2
+          - button "+ 92 Spaces" [ref=e639] [cursor=pointer]
+        - heading "Collection including neuphonic/neucodec" [level=2] [ref=e641]:
+          - img [ref=e642]
+          - text: Collection including
+          - generic [ref=e646]: neuphonic/neucodec
+        - article [ref=e649]:
+          - link "NeuCodec Collection We introduce NeuCodec, a 0.8kbps audio codec that outputs audio at 24kHz. • 5 items • Updated Jun 2 • 8" [ref=e650] [cursor=pointer]:
+            - /url: /collections/neuphonic/neucodec
+            - generic "NeuCodec" [ref=e651]:
+              - heading "NeuCodec" [level=4] [ref=e652]
+              - generic [ref=e653]:
+                - img [ref=e654]
+                - text: Collection
+            - generic [ref=e658]:
+              - generic [ref=e659]: We introduce NeuCodec, a 0.8kbps audio codec that outputs audio at 24kHz.
+              - generic [ref=e660]: •
+              - generic [ref=e661]: 5 items
+              - generic [ref=e662]: •
+              - generic [ref=e663]:
+                - text: Updated
+                - time [ref=e664]: Jun 2
+              - generic [ref=e665]: •
+              - img [ref=e666]
+              - text: "8"
+        - heading "Paper for neuphonic/neucodec" [level=2] [ref=e670]:
+          - img [ref=e671]
+          - text: Paper for
+          - generic [ref=e674]: neuphonic/neucodec
+        - article [ref=e676]:
+          - link "Finite Scalar Quantization Enables Redundant and Transmission-Robust Neural Audio Compression at Low Bit-rates Paper • 2509.09550 • Published Sep 11, 2025 • 3" [ref=e677] [cursor=pointer]:
+            - /url: /papers/2509.09550
+            - generic "arxiv:2509.09550" [ref=e678]:
+              - heading "Finite Scalar Quantization Enables Redundant and Transmission-Robust Neural Audio Compression at Low Bit-rates" [level=4] [ref=e679]
+            - generic [ref=e680]:
+              - img [ref=e681]
+              - text: Paper
+              - generic [ref=e684]: •
+              - text: "2509.09550"
+              - generic [ref=e685]: •
+              - generic [ref=e686]:
+                - text: Published
+                - time [ref=e687]: Sep 11, 2025
+              - generic [ref=e688]: •
+              - img [ref=e689]
+              - text: "3"
+  - contentinfo [ref=e691]:
+    - navigation [ref=e692]:
+      - button "System theme" [ref=e695] [cursor=pointer]:
+        - img [ref=e696]
+        - text: System theme
+      - link "TOS" [ref=e701] [cursor=pointer]:
+        - /url: /terms-of-service
+      - link "Privacy" [ref=e702] [cursor=pointer]:
+        - /url: /privacy
+      - link "About" [ref=e703] [cursor=pointer]:
+        - /url: /huggingface
+      - link "Careers" [ref=e704] [cursor=pointer]:
+        - /url: https://apply.workable.com/huggingface/
+      - link "Hugging Face" [ref=e705] [cursor=pointer]:
+        - /url: /
+        - img [ref=e706]
+      - link "Models" [ref=e720] [cursor=pointer]:
+        - /url: /models
+      - link "Datasets" [ref=e721] [cursor=pointer]:
+        - /url: /datasets
+      - link "Spaces" [ref=e722] [cursor=pointer]:
+        - /url: /spaces
+      - link "Pricing" [ref=e723] [cursor=pointer]:
+        - /url: /pricing
+      - link "Docs" [ref=e724] [cursor=pointer]:
+        - /url: /docs
