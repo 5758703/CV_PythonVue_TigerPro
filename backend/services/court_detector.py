@@ -209,9 +209,12 @@ def _detect_court_line_segments(image):
     )
     if raw_lines is None:
         return [], [], mask
+    # OpenCV 4.x 常为 (N,1,4)；OpenCV 5+ 可能为 (N,4)。统一展平避免
+    # 「array is 2-dimensional, but 3 were indexed」。
+    segments = np.asarray(raw_lines, dtype=np.float64).reshape(-1, 4)
     edge_margin = max(10, int(min(width, height) * 0.02))
     horizontal, side = [], []
-    for raw_line in raw_lines[:, 0, :]:
+    for raw_line in segments:
         x1, y1, x2, y2 = [int(v) for v in raw_line]
         length = float(np.hypot(x2 - x1, y2 - y1))
         if length < min_line_length:
