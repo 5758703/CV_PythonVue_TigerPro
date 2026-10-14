@@ -12,6 +12,9 @@
 REID_API int reid_abi_version();
 REID_API void* reid_create(const char* ort_library, const char* model, int threads,
                            char* error, size_t error_size);
+// ABI 2: vehicle policy also supports zero camera/view inputs and [D] output.
+REID_API void* reid_create_vehicle(const char* ort_library, const char* model, int threads,
+                                  char* error, size_t error_size);
 REID_API int reid_shape(void* handle, int* width, int* height, int* dim, int* dynamic_batch,
                         char* error, size_t error_size);
 // BGR uint8 contiguous [count,height,width,3], pre-resized with INTER_LINEAR.

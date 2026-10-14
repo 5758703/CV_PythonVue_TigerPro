@@ -224,6 +224,12 @@
                 <el-form-item label="外观阈值">
                   <el-input-number v-model="form.appearThresh" :min="0.2" :max="0.9" :step="0.01" />
                 </el-form-item>
+                <el-form-item label="车辆外观阈值（0继承）">
+                  <el-input-number v-model="form.vehicleAppearThresh" :min="0" :max="1" :step="0.01" :disabled="session?.running" />
+                </el-form-item>
+                <el-form-item label="跨镜匹配分差">
+                  <el-input-number v-model="form.minMatchMargin" :min="0" :max="1" :step="0.01" :disabled="session?.running" />
+                </el-form-item>
                 <el-form-item label="候选阈值">
                   <el-input-number v-model="form.candidateThresh" :min="0" :max="0.9" :step="0.01" />
                 </el-form-item>
@@ -245,6 +251,21 @@
                     <el-option label="原有推理" value="python" />
                     <el-option label="C++ 运行时" value="cpp" />
                     <el-option label="C++ 优先（允许回退）" value="auto" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="车辆外观推理">
+                  <el-select v-model="form.vehicleReidRuntime" style="width: 220px" :disabled="session?.running">
+                    <el-option label="原有推理" value="python" />
+                    <el-option label="C++ 运行时" value="cpp" />
+                    <el-option label="C++ 优先（允许回退）" value="auto" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="车辆外观模型">
+                  <el-select v-model="form.vehicleReidModelKey" style="width: 220px" :disabled="session?.running">
+                    <el-option label="自动（原有选择）" value="" />
+                    <el-option label="CLIP 车辆模型" value="clip-reid-vehicle" />
+                    <el-option label="TransReID 车辆模型" value="transreid-vehicle" />
+                    <el-option label="ViT 车辆模型" value="vehicle-vit-reid" />
                   </el-select>
                 </el-form-item>
                 <el-form-item label="CMC">
@@ -936,6 +957,10 @@ const effectiveTopologyText = computed(() => topologyPolicyText(
 
 const form = reactive({
   reidRuntime: 'python',
+  vehicleReidRuntime: 'python',
+  vehicleReidModelKey: '',
+  vehicleAppearThresh: 0,
+  minMatchMargin: 0,
   sourceMode: 'camera',
   cameraIds: [],
   enablePerson: true,
@@ -962,6 +987,10 @@ const detectForm = reactive({
 const resetSessionDefaults = () => {
   Object.assign(form, {
     reidRuntime: 'python',
+    vehicleReidRuntime: 'python',
+    vehicleReidModelKey: '',
+    vehicleAppearThresh: 0,
+    minMatchMargin: 0,
     enablePerson: true,
     enableVehicle: true,
     sampleFps: 4,
@@ -997,6 +1026,10 @@ const devices = ref([])
 
 const sessionPayload = () => ({
   reidRuntime: form.reidRuntime,
+  vehicleReidRuntime: form.vehicleReidRuntime,
+  vehicleReidModelKey: form.vehicleReidModelKey || undefined,
+  vehicleAppearThresh: form.vehicleAppearThresh,
+  minMatchMargin: form.minMatchMargin,
   enablePerson: form.enablePerson,
   enableVehicle: form.enableVehicle,
   sampleFps: form.sampleFps,
@@ -1122,6 +1155,10 @@ const paramGuide = [
   { name: 'FAISS Gallery', desc: '按 (Global,相机) 存原型；跨镜用对侧原型。关则回退矩阵检索', suggest: '开' },
   { name: '时间窗(s)', desc: '全局身份在线缓存秒数，影响跨镜关联范围', suggest: '60～120' },
   { name: '局部跟踪', desc: 'ByteTrack 推荐；大目标漏跟时车辆侧会补 orphan 框', suggest: 'bytetrack' },
+  { name: '行人外观推理', desc: '只控制 Strong/Youtu 行人特征；C++ 优先模式会显式显示回退原因', suggest: '按负载选择' },
+  { name: '车辆外观推理', desc: '独立控制车辆 ONNX 特征；C++ 版本保留模型哈希与车牌融合，自动降级到直方图时不用于跨镜身份确认', suggest: '模型就绪后选 C++' },
+  { name: '车辆外观模型', desc: '只选已拉取并启用的车辆模型，显式选择后不以其它模型替代；CLIP 通常较重，应同时校准外观阈值与分差', suggest: '用本地同车/异车样本比较' },
+  { name: '车辆外观阈值 / 匹配分差', desc: '车辆阈值独立于通用外观阈值；分差要求最佳候选与次佳候选拉开距离，分差设置同时影响人员和车辆', suggest: '项目6对样本：CLIP 0.80 / 分差0.04，现场重测' },
   { name: 'CMC', desc: '镜头运动补偿，移动/云台摄像头可开', suggest: '静止机关' },
   { name: '证据落库', desc: 'Tracklet 片段、候选关联、关联证据边写入数据库；人工核对候选时建议开启', suggest: '核对时开' },
   { name: '拓扑最短秒', desc: '重叠视野必须为 0；非重叠按通行时间', suggest: '重叠=0' },
@@ -1273,6 +1310,13 @@ const applyLiveRow = (row) => {
   } else {
     sessionId.value = row.sessionId
     session.value = row
+    if (row.running) {
+      form.reidRuntime = row.reidRuntime || 'python'
+      form.vehicleReidRuntime = row.vehicleReidRuntime || 'python'
+      form.vehicleReidModelKey = row.vehicleReidModelKey || ''
+      form.vehicleAppearThresh = row.vehicleAppearThresh ?? 0
+      form.minMatchMargin = row.minMatchMargin ?? 0
+    }
     localStorage.setItem('mtmc-session-id', sessionId.value)
   }
 }

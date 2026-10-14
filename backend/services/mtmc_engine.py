@@ -173,6 +173,8 @@ class MtmcConfig:
     selected_models: dict[str, dict] = field(default_factory=dict)
     # Person appearance inference only; tracking/association keep existing semantics.
     reid_runtime: str | None = None
+    vehicle_reid_runtime: str | None = None
+    vehicle_reid_model_key: str | None = None
 
 
 @dataclass
@@ -507,6 +509,11 @@ class MtmcSession:
             "videoSources": [v.to_dict() for v in self.video_sources.values()],
             "enablePerson": self.cfg.enable_person,
             "enableVehicle": self.cfg.enable_vehicle,
+            "reidRuntime": self.cfg.reid_runtime,
+            "vehicleReidRuntime": self.cfg.vehicle_reid_runtime,
+            "vehicleReidModelKey": self.cfg.vehicle_reid_model_key,
+            "vehicleAppearThresh": self.cfg.vehicle_appear_thresh,
+            "minMatchMargin": self.cfg.min_match_margin,
             "localTrackBackend": self.cfg.local_track_backend,
             "enableCmc": self.cfg.enable_cmc,
             "persistEvents": self.cfg.persist_events,
@@ -1657,9 +1664,9 @@ def _vehicle_reid_runtime_observation(cfg: MtmcConfig, meta: dict, embedding) ->
     selected_key = "histogram-fallback" if fallback else (
         configured.get("configuredModelKey") or configured.get("selectedModelKey") or "vehicle-onnx"
     )
-    reason = None
+    reason = meta.get("fallbackReason")
     if fallback:
-        reason = str(meta.get("onnxError") or "configured vehicle ReID unavailable; using histogram fallback")
+        reason = "; ".join(filter(None, [reason, str(meta.get("onnxError") or "configured vehicle ReID unavailable; using histogram fallback")]))
     elif embedding is None:
         reason = str(meta.get("error") or meta.get("onnxError") or "vehicle ReID produced no embedding")
     return {
@@ -1669,13 +1676,18 @@ def _vehicle_reid_runtime_observation(cfg: MtmcConfig, meta: dict, embedding) ->
             or configured.get("configuredModelVersion") or configured.get("modelVersion")
         ),
         "ready": embedding is not None,
-        "runtimeState": "degraded" if fallback else ("ready" if embedding is not None else "failed"),
+        "runtimeState": "failed" if embedding is None and not fallback else (
+            "degraded" if fallback or meta.get("degraded") else "ready"),
         "backend": backend,
         "provider": "opencv" if fallback else (meta.get("provider") or "onnxruntime-cpu"),
         "inputSize": meta.get("inputSize"),
         "embeddingDim": int(getattr(embedding, "size", 0)) or meta.get("dim"),
-        "degraded": bool(fallback or embedding is None),
+        "degraded": bool(fallback or embedding is None or meta.get("degraded")),
         "degradedReason": reason,
+        "requestedRuntime": meta.get("requestedRuntime"),
+        "effectiveRuntime": meta.get("effectiveRuntime"),
+        "runtimeBackend": meta.get("runtimeBackend"),
+        "associationUsable": meta.get("associationUsable", embedding is not None),
     }
 
 
@@ -2605,6 +2617,52 @@ def _vehicle_embedding_space(meta: dict | None, embedding) -> tuple[str, int, st
     return (model_key, int(np.asarray(embedding).size), version)
 
 
+def _prepare_vehicle_cpp_batch(session, cam_state, tracks, frame, now, remaining, budget):
+    from services.mtmc_tracklet import frame_quality
+    from services.vehicle_reid_feat import extract_vehicle_embeddings, vehicle_runtime_name
+    rows, selected = {}, []
+    fh, fw = frame.shape[:2]
+    for index, track in enumerate(tracks):
+        crop = _crop(frame, track.bbox)
+        builder = _get_tracklet_builder(cam_state, session_id=session.session_id,
+            object_type="vehicle", local_track_id=int(track.track_id), now=now)
+        row = rows[index] = {"crop": crop, "builder": builder, "needed": False}
+        if crop is None:
+            continue
+        quality = frame_quality(track.bbox, track.conf, fh, fw)
+        view_token = _track_view_token(track)
+        budget["considered"] += 1
+        eligible = builder.embedding_sample_eligible(now, quality, view_token=view_token)
+        budget["eligible"] += int(eligible)
+        if eligible and remaining > 0:
+            row["needed"] = builder.reserve_embedding_sample(now, quality, view_token=view_token)
+            budget["queued"] += int(row["needed"])
+            budget["consumed"] += int(row["needed"])
+            if row["needed"]:
+                remaining -= 1
+                selected.append(index)
+        elif eligible:
+            budget["budgetSkipped"] += 1
+        else:
+            budget["samplerSkipped"] += 1
+    if selected:
+        mode = vehicle_runtime_name(session.cfg.vehicle_reid_runtime)
+        try:
+            pairs = extract_vehicle_embeddings(session.cfg.vehicle_reid_root,
+                [rows[index]["crop"] for index in selected], runtime=mode)
+            if len(pairs) != len(selected):
+                raise RuntimeError("vehicle batch output count mismatch")
+            for index, pair in zip(selected, pairs):
+                rows[index]["result"] = pair
+        except Exception as error:
+            _record_vehicle_reid_runtime(session, cam_state.camera_id, {
+                "backend": "vehicle-onnx", "error": str(error), "provider": "unavailable",
+                "requestedRuntime": mode, "associationUsable": False}, None)
+            _record_runtime_budget_frame(session, "vehicleReid", cam_state.camera_id, **budget)
+            raise
+    return rows, remaining
+
+
 def _builder_finalize_grace_sec(cfg: MtmcConfig) -> float:
     """Do not retire a builder before its local tracker can expire it."""
     tracker_grace = float(cfg.local_track_max_age or 0) / max(0.2, float(cfg.sample_fps))
@@ -3214,11 +3272,15 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
         vsession = get_vsession(cam_state.vehicle_session_id)
 
         tracks_v = _sort_vehicle_tracks_for_assoc(tracks_v, session.associator, cam_id, now)
-        for t in _sort_tracks_for_reid(
-            session, cam_state, "vehicle", tracks_v, frame_h=fh, frame_w=fw,
-        ):
-            crop = _crop(frame, t.bbox)
-            builder = _get_tracklet_builder(
+        tracks_v = _sort_tracks_for_reid(session, cam_state, "vehicle", tracks_v, frame_h=fh, frame_w=fw)
+        from services.vehicle_reid_feat import vehicle_runtime_name
+        cpp_rows = None
+        if vehicle_runtime_name(cfg.vehicle_reid_runtime) != "python":
+            cpp_rows, vehicle_reid_left = _prepare_vehicle_cpp_batch(
+                session, cam_state, tracks_v, frame, now, vehicle_reid_left, vehicle_budget)
+        for track_index, t in enumerate(tracks_v):
+            crop = cpp_rows[track_index]["crop"] if cpp_rows is not None else _crop(frame, t.bbox)
+            builder = cpp_rows[track_index]["builder"] if cpp_rows is not None else _get_tracklet_builder(
                 cam_state,
                 session_id=session.session_id,
                 object_type="vehicle",
@@ -3247,19 +3309,22 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             )
             quality = frame_quality(t.bbox, t.conf, fh, fw)
             view_token = _track_view_token(t)
-            vehicle_budget["considered"] += 1
-            sample_eligible = builder.embedding_sample_eligible(now, quality, view_token=view_token)
-            if sample_eligible:
-                vehicle_budget["eligible"] += 1
-            need_reid = False
-            if sample_eligible and vehicle_reid_left > 0:
-                need_reid = builder.reserve_embedding_sample(now, quality, view_token=view_token)
-                vehicle_budget["queued"] += int(need_reid)
-                vehicle_budget["consumed"] += int(need_reid)
-            elif sample_eligible:
-                vehicle_budget["budgetSkipped"] += 1
+            if cpp_rows is not None:
+                need_reid = cpp_rows[track_index]["needed"]
             else:
-                vehicle_budget["samplerSkipped"] += 1
+                vehicle_budget["considered"] += 1
+                sample_eligible = builder.embedding_sample_eligible(now, quality, view_token=view_token)
+                if sample_eligible:
+                    vehicle_budget["eligible"] += 1
+                need_reid = False
+                if sample_eligible and vehicle_reid_left > 0:
+                    need_reid = builder.reserve_embedding_sample(now, quality, view_token=view_token)
+                    vehicle_budget["queued"] += int(need_reid)
+                    vehicle_budget["consumed"] += int(need_reid)
+                elif sample_eligible:
+                    vehicle_budget["budgetSkipped"] += 1
+                else:
+                    vehicle_budget["samplerSkipped"] += 1
             emb, vmeta = None, {}
             vehicle_space = None
             plate_text, plate_score = None, 0.0
@@ -3272,13 +3337,21 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                 plate_text = cached_plate.get("text")
                 plate_score = float(cached_plate.get("score") or 0)
             if need_reid:
-                vehicle_reid_left -= 1
+                if cpp_rows is None:
+                    vehicle_reid_left -= 1
                 vehicle_reid_failed = False
                 try:
-                    emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop)
+                    if cpp_rows is not None:
+                        emb, vmeta = cpp_rows[track_index]["result"]
+                    else:
+                        emb, vmeta = extract_vehicle_embedding(cfg.vehicle_reid_root, crop,
+                            **({"runtime": cfg.vehicle_reid_runtime} if cfg.vehicle_reid_runtime is not None else {}))
                 except Exception as error:  # noqa: BLE001
                     vehicle_reid_failed = True
-                    vmeta = {"backend": "vehicle-onnx", "error": str(error)}
+                    from services.vehicle_reid_feat import vehicle_runtime_name
+                    vmeta = {"backend": "vehicle-onnx", "error": str(error), "provider": "unavailable",
+                             "requestedRuntime": vehicle_runtime_name(cfg.vehicle_reid_runtime),
+                             "associationUsable": False}
                     _record_vehicle_reid_runtime(session, cam_id, vmeta, None)
                     raise
                 finally:
@@ -3290,6 +3363,10 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                             session, "vehicleReid", cam_id, **vehicle_budget,
                         )
                 _record_vehicle_reid_runtime(session, cam_id, vmeta, emb)
+                # A native->Python model fallback is comparable (same hash),
+                # but a colour histogram is insufficient identity evidence.
+                if vmeta.get("associationUsable") is False:
+                    emb = None
                 vehicle_space = _vehicle_embedding_space(vmeta, emb)
 
             # Plate OCR has its own sampler and budget. A cached display value

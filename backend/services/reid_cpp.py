@@ -19,7 +19,11 @@ _MAX_SESSIONS = 8
 
 def library_path() -> Path:
     name = "reid_runtime.dll" if os.name == "nt" else ("libreid_runtime.dylib" if sys.platform == "darwin" else "libreid_runtime.so")
-    return Path(os.environ.get("REID_CPP_LIBRARY") or Path(__file__).resolve().parents[1] / "runtime" / "reid_cpp" / name).resolve()
+    if os.environ.get("REID_CPP_LIBRARY"):
+        return Path(os.environ["REID_CPP_LIBRARY"]).resolve()
+    directory = Path(__file__).resolve().parents[1] / "runtime" / "reid_cpp"
+    v2 = directory / name.replace("reid_runtime", "reid_runtime_v2")
+    return (v2 if v2.is_file() else directory / name).resolve()
 
 
 def ort_library_path() -> Path:
@@ -39,13 +43,16 @@ def ort_library_path() -> Path:
 
 
 class NativeReidSession:
-    def __init__(self, model_path, *, threads=2):
+    def __init__(self, model_path, *, threads=2, kind="person"):
         self._handle = None
         self._condition = threading.Condition()
         self._active = 0
         self._closing = False
         self.model_path = str(Path(model_path).resolve())
         self.threads = int(threads)
+        if kind not in ("person", "vehicle"):
+            raise ValueError("ReID kind must be person or vehicle")
+        self.kind = kind
         path = library_path()
         if not path.is_file():
             raise RuntimeError(f"ReID C++ library unavailable: {path}; run scripts/build_reid_cpp.py")
@@ -54,10 +61,14 @@ class NativeReidSession:
         # Load by absolute path; the core independently loads the configured ORT.
         self._lib = ct.CDLL(str(path))
         self._lib.reid_abi_version.restype = ct.c_int
-        if self._lib.reid_abi_version() != 1:
+        abi = self._lib.reid_abi_version()
+        if abi not in (1, 2):
             raise RuntimeError("unsupported ReID C++ ABI version")
-        self._lib.reid_create.argtypes = [ct.c_char_p, ct.c_char_p, ct.c_int, ct.c_char_p, ct.c_size_t]
-        self._lib.reid_create.restype = ct.c_void_p
+        if kind == "vehicle" and abi < 2:
+            raise RuntimeError("vehicle C++ inference requires ABI 2; rebuild scripts/build_reid_cpp.py")
+        create = self._lib.reid_create_vehicle if kind == "vehicle" else self._lib.reid_create
+        create.argtypes = [ct.c_char_p, ct.c_char_p, ct.c_int, ct.c_char_p, ct.c_size_t]
+        create.restype = ct.c_void_p
         self._lib.reid_destroy.argtypes = [ct.c_void_p]
         self._lib.reid_destroy.restype = None
         self._lib.reid_shape.argtypes = [ct.c_void_p] + [ct.POINTER(ct.c_int)] * 4 + [ct.c_char_p, ct.c_size_t]
@@ -66,7 +77,7 @@ class NativeReidSession:
                                        ct.c_void_p, ct.c_size_t, ct.c_char_p, ct.c_size_t]
         self._lib.reid_infer.restype = ct.c_int
         error = ct.create_string_buffer(4096)
-        self._handle = self._lib.reid_create(str(ort_library_path()).encode("utf-8"),
+        self._handle = create(str(ort_library_path()).encode("utf-8"),
                                             self.model_path.encode("utf-8"), self.threads, error, len(error))
         if not self._handle:
             raise RuntimeError(error.value.decode("utf-8", errors="replace"))
@@ -76,8 +87,12 @@ class NativeReidSession:
             raise RuntimeError(error.value.decode("utf-8", errors="replace"))
         self.width, self.height, self.dim, self.dynamic_batch = w.value, h.value, dim.value, bool(dynamic.value)
 
-    def extract(self, crops) -> np.ndarray:
+    def extract(self, crops, *, batch_limit=None) -> np.ndarray:
         crops = list(crops)
+        if batch_limit is None:
+            batch_limit = int(os.environ.get("VEHICLE_REID_CPP_BATCH_SIZE", "1")) if self.kind == "vehicle" else 64
+        if not 1 <= batch_limit <= 64:
+            raise ValueError("native batch limit must be between 1 and 64")
         if not crops:
             return np.empty((0, self.dim), dtype=np.float32)
         with self._condition:
@@ -86,8 +101,8 @@ class NativeReidSession:
             self._active += 1
         try:
             results = []
-            for start in range(0, len(crops), 64):
-                batch = crops[start:start + 64]
+            for start in range(0, len(crops), batch_limit):
+                batch = crops[start:start + batch_limit]
                 resized = []
                 for crop in batch:
                     if not isinstance(crop, np.ndarray) or crop.dtype != np.uint8 or crop.ndim != 3 or crop.shape[2] != 3 or not crop.size:
@@ -128,18 +143,19 @@ class NativeReidSession:
             self.close()
 
 
-def get_session(model_path) -> NativeReidSession:
+def get_session(model_path, *, kind="person") -> NativeReidSession:
     path = Path(model_path).resolve()
     stat = path.stat()
-    threads = int(os.environ.get("REID_CPP_THREADS", "2"))
-    key = (str(path), stat.st_mtime_ns, stat.st_size, threads, str(library_path()), str(ort_library_path()))
+    threads = int(os.environ.get("VEHICLE_REID_CPP_THREADS", str(min(4, os.cpu_count() or 1)))
+                  if kind == "vehicle" else os.environ.get("REID_CPP_THREADS", "2"))
+    key = (str(path), stat.st_mtime_ns, stat.st_size, threads, str(library_path()), str(ort_library_path()), kind)
     with _cache_lock:
         session = _sessions.get(key)
         if session is not None:
             _sessions.move_to_end(key)
             return session
-        session = NativeReidSession(path, threads=threads)
-        for stale in [k for k in _sessions if k[0] == str(path)]:
+        session = NativeReidSession(path, threads=threads, kind=kind)
+        for stale in [k for k in _sessions if k[0] == str(path) and k[-1] == kind]:
             del _sessions[stale]
         _sessions[key] = session
         while len(_sessions) > _MAX_SESSIONS:
@@ -147,14 +163,15 @@ def get_session(model_path) -> NativeReidSession:
         return session
 
 
-def extract_batch(model_path, crops):
+def extract_batch(model_path, crops, *, kind="person"):
     started = time.perf_counter()
-    session = get_session(model_path)
+    session = get_session(model_path, kind=kind)
     features = session.extract(crops)
     return features, {
         "backend": "reid-cpp-ort", "provider": "onnxruntime-cpp-cpu",
         "onnx": Path(model_path).name, "modelVersion": Path(model_path).name,
         "inputSize": [session.width, session.height], "dim": session.dim,
         "batchSize": len(features), "dynamicBatch": session.dynamic_batch,
+        "modelBatchLimit": int(os.environ.get("VEHICLE_REID_CPP_BATCH_SIZE", "1")) if kind == "vehicle" else 64,
         "threads": session.threads, "latencyMs": round((time.perf_counter() - started) * 1000, 2),
     }

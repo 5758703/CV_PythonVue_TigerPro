@@ -150,7 +150,63 @@ def _color_hist_embedding(image_bgr: np.ndarray, bins: int = 16) -> np.ndarray:
     return _l2(np.concatenate(feats).astype(np.float32))
 
 
-def extract_vehicle_embedding(model_path: str | None, image_bgr: np.ndarray) -> tuple[np.ndarray, dict]:
+def vehicle_runtime_name(value=None) -> str:
+    from services.reid_runtime import runtime_name
+    try:
+        return runtime_name(value or os.environ.get("VEHICLE_REID_RUNTIME", "python"))
+    except ValueError as error:
+        raise ValueError("vehicleReidRuntime must be python, cpp or auto") from error
+
+
+def extract_vehicle_embedding(model_path: str | None, image_bgr: np.ndarray, *, runtime=None) -> tuple[np.ndarray, dict]:
+    """Keep the semantic model space/version stable across Python and C++."""
+    mode = vehicle_runtime_name(runtime)
+    if mode == "python":
+        return _extract_vehicle_python(model_path, image_bgr)
+    return extract_vehicle_embeddings(model_path, [image_bgr], runtime=mode)[0]
+
+
+def extract_vehicle_embeddings(model_path: str | None, images, *, runtime=None) -> list[tuple[np.ndarray, dict]]:
+    """One bridge call for the same-frame crops selected by the existing budget."""
+    images = list(images)
+    if not images:
+        return []
+    mode = vehicle_runtime_name(runtime)
+    if mode == "python":
+        return [_extract_vehicle_python(model_path, image) for image in images]
+    try:
+        onnx = resolve_vehicle_onnx(model_path)
+        if not onnx:
+            raise RuntimeError("configured vehicle ReID ONNX unavailable")
+        from services.reid_cpp import extract_batch
+        output, metadata = extract_batch(onnx, images, kind="vehicle")
+        vectors = np.asarray(output, dtype=np.float32)
+        if vectors.ndim != 2 or vectors.shape[0] != len(images):
+            raise ValueError(f"Expected {len(images)} vehicle embeddings, received shape {vectors.shape}")
+        norms = np.linalg.norm(vectors, axis=1)
+        if not vectors.size or not np.isfinite(vectors).all() or not np.isfinite(norms).all() or np.any(norms < 1e-12):
+            raise ValueError("Vehicle embedding must be finite, non-empty and non-zero")
+        width, height = metadata["inputSize"]
+        meta = {
+            **metadata, "backend": "vehicle-onnx", "runtimeBackend": "vehicle-cpp-ort",
+            "onnx": os.path.basename(onnx), "dim": int(vectors.shape[1]),
+            "inputSize": f"{width}x{height}", "modelVersion": model_version(onnx),
+            "requestedRuntime": mode, "effectiveRuntime": "cpp", "associationUsable": True,
+        }
+        return [(vector, dict(meta)) for vector in vectors / norms[:, None]]
+    except Exception as error:
+        if mode == "cpp":
+            raise RuntimeError(f"Vehicle C++ inference failed: {error}") from error
+        pairs = []
+        for image in images:
+            vector, metadata = _extract_vehicle_python(model_path, image)
+            pairs.append((vector, {**metadata, "requestedRuntime": mode, "effectiveRuntime": "python",
+                                   "degraded": True, "fallbackReason": str(error),
+                                   "associationUsable": metadata.get("backend") == "vehicle-onnx"}))
+        return pairs
+
+
+def _extract_vehicle_python(model_path: str | None, image_bgr: np.ndarray) -> tuple[np.ndarray, dict]:
     onnx = resolve_vehicle_onnx(model_path)
     if onnx:
         try:

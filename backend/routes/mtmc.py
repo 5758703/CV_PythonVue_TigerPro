@@ -31,15 +31,26 @@ from services.mtmc_engine import MtmcConfig, VirtualVideoSource, next_virtual_ca
 mtmc_bp = Blueprint("mtmc", __name__, url_prefix="/api/ai/mtmc")
 
 
+def _vehicle_model_key(value):
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or value not in {"transreid-vehicle", "clip-reid-vehicle", "vehicle-vit-reid"}:
+        raise ValueError("vehicleReidModelKey is not a supported vehicle model")
+    return value
+
+
 @mtmc_bp.before_request
 def _validate_reid_runtime():
     if request.method == "POST" and request.endpoint in {
         "mtmc.start_session", "mtmc.start_session_videos", "mtmc.start_session_video_paths", "mtmc.start_session_sources", "mtmc.submit_search_job",
     }:
         from services.reid_runtime import runtime_name
+        from services.vehicle_reid_feat import vehicle_runtime_name
         data = request.get_json(silent=True) or request.form
         try:
             runtime_name(data.get("reidRuntime"))
+            vehicle_runtime_name(data.get("vehicleReidRuntime"))
+            _vehicle_model_key(data.get("vehicleReidModelKey"))
         except ValueError as error:
             return jsonify(code=400, message=str(error)), 400
 
@@ -54,7 +65,10 @@ def _form_bool(val, default=False) -> bool:
 
 def _parse_session_params(data: dict) -> MtmcConfig:
     from services.reid_runtime import runtime_name
+    from services.vehicle_reid_feat import vehicle_runtime_name
     selected_reid_runtime = runtime_name(data.get("reidRuntime"))
+    selected_vehicle_runtime = vehicle_runtime_name(data.get("vehicleReidRuntime"))
+    selected_vehicle_key = _vehicle_model_key(data.get("vehicleReidModelKey"))
     person_m = _pick_model(
         data.get("personDetModelId"),
         task="object-detection",
@@ -77,9 +91,11 @@ def _parse_session_params(data: dict) -> MtmcConfig:
     )
     vreid_m = _pick_model(
         data.get("vehicleReidModelId"),
-        task="vehicle-reid",
-        keys=["transreid-vehicle", "clip-reid-vehicle", "vehicle-vit-reid"],
+        task=None if selected_vehicle_key else "vehicle-reid",
+        keys=[selected_vehicle_key] if selected_vehicle_key else ["transreid-vehicle", "clip-reid-vehicle", "vehicle-vit-reid"],
     )
+    if selected_vehicle_key and vreid_m and vreid_m.model_key != selected_vehicle_key:
+        raise ValueError("vehicleReidModelId conflicts with vehicleReidModelKey")
     plate_m = _pick_model(data.get("plateModelId"), keys=["yolo26s-plate-pose", "yolo26n-plate"])
     ocr_fn = _build_ocr_fn(data.get("ocrDetModelId"), data.get("ocrRecModelId"))
     person_path = _abs_weight(person_m)
@@ -102,6 +118,8 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         youtu_root=youtu_path,
         strong_reid_root=strong_path,
         reid_runtime=selected_reid_runtime,
+        vehicle_reid_runtime=selected_vehicle_runtime,
+        vehicle_reid_model_key=selected_vehicle_key,
         vehicle_reid_root=vehicle_reid_path,
         plate_model_path=plate_path,
         ocr_fn=ocr_fn,
@@ -153,6 +171,10 @@ def _validate_mtmc_config(cfg: MtmcConfig):
         return "车辆检测模型未就绪"
     if cfg.enable_vehicle and not os.path.isfile(cfg.det_vehicle_path):
         return f"车辆检测模型路径无效（非文件）: {cfg.det_vehicle_path}"
+    if cfg.enable_vehicle and not cfg.detect_only and cfg.vehicle_reid_runtime == "cpp":
+        from services.vehicle_reid_feat import assets_ready
+        if not assets_ready(cfg.vehicle_reid_root):
+            return "车辆 C++ 外观模型未就绪，请先拉取并启用所选车辆 ReID 模型"
     return None
 
 
@@ -212,7 +234,10 @@ def _start_mtmc_video_session(
         )
     if detect_only:
         params = {**params, "persistEvents": False, "reidBudget": 0, "plateBudget": 0}
-    cfg = _parse_session_params({**params, "cameraIds": cam_ids})
+    try:
+        cfg = _parse_session_params({**params, "cameraIds": cam_ids})
+    except (TypeError, ValueError) as error:
+        return None, str(error)
     err = _validate_mtmc_config(cfg)
     if err:
         return None, err
@@ -465,7 +490,10 @@ def start_session():
     if not cams:
         return jsonify(code=400, message="无可用摄像头"), 400
 
-    cfg = _parse_session_params({**data, "cameraIds": camera_ids})
+    try:
+        cfg = _parse_session_params({**data, "cameraIds": camera_ids})
+    except (TypeError, ValueError) as error:
+        return jsonify(code=400, message=str(error)), 400
     err = _validate_mtmc_config(cfg)
     if err:
         return jsonify(code=400, message=err), 400
@@ -648,7 +676,10 @@ def start_session_sources():
             return jsonify(code=400, message=f"不支持的源类型：{st}"), 400
         cam_ids.append(cid)
 
-    cfg = _parse_session_params({**data, "cameraIds": cam_ids})
+    try:
+        cfg = _parse_session_params({**data, "cameraIds": cam_ids})
+    except (TypeError, ValueError) as error:
+        return jsonify(code=400, message=str(error)), 400
     err = _validate_mtmc_config(cfg)
     if err:
         return jsonify(code=400, message=err), 400

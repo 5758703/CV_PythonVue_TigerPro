@@ -1,5 +1,7 @@
 # 行人重识别 / 跨镜重识别 C++ 核心版本
 
+2026-10-14 扩展：车辆外观已接入 ABI 2，提供独立 `vehicleReidRuntime`、模型/阈值/分差控制与同帧预算调度。完整接入、精度和效率结果见 [车辆 C++ 说明](VEHICLE_CPP_RUNTIME.md)。
+
 ## 交付范围
 
 保留原有 Flask API、权限、底库、YOLO 检测、局部跟踪和跨镜关联。新增的 C++17 共享库执行行人外观模型的 RGB/ImageNet 归一化/NCHW、ONNX Runtime CPU 推理及输出校验。图片解码与 resize 仍调用 OpenCV；底库匹配、Tracklet 聚合和身份关联仍由既有业务代码处理。此版本不要求部署独立推理服务，也不要求安装新的 Python 扩展包。
@@ -32,11 +34,11 @@ Windows x64 缺少编译器时可显式下载便携 Zig 0.13.0 与固定版本 O
 python backend/scripts/build_reid_cpp.py --fetch-tools
 ```
 
-产物默认在 `backend/runtime/reid_cpp/reid_runtime.dll`；Linux 为 `libreid_runtime.so`，macOS 为 `libreid_runtime.dylib`。辅助脚本下载的工具、头文件、许可证、缓存和构建信息均留在被忽略的 runtime 目录。SDK 头文件和运行库按 ONNX Runtime 原始许可证使用。
+产物默认在 `backend/runtime/reid_cpp/reid_runtime_v2.dll`；Linux 为 `libreid_runtime_v2.so`，macOS 为 `libreid_runtime_v2.dylib`。新桥优先 v2，仍可加载旧 v1 做行人推理，车辆须 v2。辅助脚本下载的工具、头文件、许可证、缓存和构建信息均留在被忽略的 runtime 目录。SDK 头文件和运行库按 ONNX Runtime 原始许可证使用。
 
 ## 启用与回退
 
-前端「行人重识别」顶部选择外观推理版本，登记、识别、图库检索和录像检索均使用这一选项；「跨镜重识别 → 会话控制 → 高级关联策略」选择行人外观推理。车辆 ReID、检测器和关联策略不受此选项影响。
+前端「行人重识别」顶部选择外观推理版本，登记、识别、图库检索和录像检索均使用这一选项；「跨镜重识别 → 会话控制 → 高级关联策略」分别选择行人外观和车辆外观推理。行人选项不影响车辆；车辆选项独立控制车辆 ONNX。检测器、跟踪和身份关联继续使用原有业务链路。
 
 | 选项 | 行为 |
 |---|---|
@@ -56,7 +58,7 @@ python backend/scripts/build_reid_cpp.py --fetch-tools
 REID_RUNTIME=python
 REID_CPP_THREADS=2
 # 默认产物路径以外才需指定：
-# REID_CPP_LIBRARY=F:/deployment/reid_runtime.dll
+# REID_CPP_LIBRARY=F:/deployment/reid_runtime_v2.dll
 # REID_CPP_ORT_LIBRARY=F:/sdk/onnxruntime/lib/onnxruntime.dll
 ```
 
@@ -85,7 +87,7 @@ python backend/scripts/benchmark_reid_cpp.py --model backend/uploads/models/open
 
 ## 常见问题
 
-- 缺少 `reid_runtime.dll`：先构建，或检查 `REID_CPP_LIBRARY` 的绝对路径。
+- 缺少 `reid_runtime_v2.dll`：先构建，或检查 `REID_CPP_LIBRARY` 的绝对路径。
 - ORT 库未找到或 DLL 依赖缺失：确认架构匹配（64 位服务使用 64 位 DLL），指定与 SDK 头兼容的运行库；Windows SDK 运行库可能需要相应 VC Runtime。
 - 图输入/输出不符合约定：使用单图像输入的 ReID ONNX 导出，检查 NCHW、空间维度及输出维度。不要将多输入 CLIP 文本图送入本核心。
 - CPU 并发越高越慢：从 `REID_CPP_THREADS=1/2/4` 和并发 `1/2/4` 网格测量，限制同时运行的检测与 ReID 会话数量，避免线程过度争抢。

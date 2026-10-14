@@ -66,9 +66,10 @@ def main():
         # Keep the compiler cache inside the project workspace.
         os.environ["ZIG_GLOBAL_CACHE_DIR"] = str(BUILD / "zig-cache")
         os.environ["ZIG_LOCAL_CACHE_DIR"] = str(BUILD / "zig-local-cache")
-    name = "reid_runtime.dll" if os.name == "nt" else "libreid_runtime.so"
+    # Versioned artifacts avoid overwriting a DLL loaded by a live server.
+    name = "reid_runtime_v2.dll" if os.name == "nt" else "libreid_runtime_v2.so"
     if os.sys.platform == "darwin":
-        name = "libreid_runtime.dylib"
+        name = "libreid_runtime_v2.dylib"
     command += ["-std=c++17", "-O3", "-shared", "-DNDEBUG", "-I", str(include),
                 "-I", str(ROOT / "native/reid/include"), str(ROOT / "native/reid/src/reid_runtime.cpp"),
                 "-o", str(BUILD / name)]

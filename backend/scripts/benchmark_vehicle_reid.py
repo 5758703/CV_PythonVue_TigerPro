@@ -157,14 +157,14 @@ def run_screenshots(args):
                 label_box = relative_box(case["boxes"][side], rect)
                 target = max(detections, key=lambda d: iou(d["bbox"], label_box), default=None)
                 overlap = iou(target["bbox"], label_box) if target else 0
-                reference_emb, meta = extract_vehicle_embedding(str(args.reid), crop(view, label_box))
+                reference_emb, meta = extract_vehicle_embedding(str(args.reid), crop(view, label_box), runtime=args.vehicle_runtime)
                 if meta.get("backend") != "vehicle-onnx":
                     raise RuntimeError(f"ReID unavailable: {meta}")
                 reference[side].append(reference_emb)
                 det_emb = None
                 if overlap >= args.iou:
                     start = time.perf_counter()
-                    det_emb, meta = extract_vehicle_embedding(str(args.reid), _crop(view, target["bbox"]))
+                    det_emb, meta = extract_vehicle_embedding(str(args.reid), _crop(view, target["bbox"]), runtime=args.vehicle_runtime)
                     timings.append(time.perf_counter() - start)
                     if meta.get("backend") != "vehicle-onnx":
                         raise RuntimeError(f"ReID unavailable: {meta}")
@@ -235,6 +235,7 @@ def run_videos(args):
     cfg = engine.MtmcConfig(
         camera_ids=[71, 81], enable_person=False, enable_vehicle=True,
         det_vehicle_path=str(args.detector), vehicle_reid_root=str(args.reid),
+        vehicle_reid_runtime=args.vehicle_runtime,
         conf=args.conf, sample_fps=args.sample_fps, width=args.width, plate_budget=0,
         appear_thresh=args.threshold, vehicle_appear_thresh=args.threshold,
         confirm_thresh=args.threshold, candidate_thresh=max(0.2, args.threshold - 0.1),
@@ -333,6 +334,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--detector", type=Path, default=BACKEND / "uploads/models/yolo26n/yolo26n.pt")
     parser.add_argument("--reid", type=Path, required=True)
+    parser.add_argument("--vehicle-runtime", choices=["python", "cpp", "auto"], default="python")
     parser.add_argument("--stage", choices=["screenshots", "videos", "all"], default="all")
     parser.add_argument("--threshold", type=float, default=0.48)
     parser.add_argument("--margin", type=float, default=0.04)
