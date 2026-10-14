@@ -8,6 +8,20 @@
       title="行人重识别（Youtu ReID）：独立权限与底库。远距/背影/脸不清用外观；开启混合后近距正脸仍用人脸。登记请用全身或半身图。"
     />
 
+    <el-form :inline="true" class="cfg-card">
+      <el-form-item label="外观推理版本">
+        <el-select v-model="reidRuntime" style="width: 230px" :disabled="running || busy || searching || enrolling">
+          <el-option label="原有推理" value="python" />
+          <el-option label="C++ 运行时" value="cpp" />
+          <el-option label="C++ 优先（允许回退）" value="auto" />
+        </el-select>
+      </el-form-item>
+      <el-form-item v-if="lastRuntime.provider" label="实际运行">
+        <el-tag :type="lastRuntime.degraded ? 'warning' : 'success'">{{ lastRuntime.provider }}</el-tag>
+      </el-form-item>
+    </el-form>
+    <el-alert v-if="lastRuntime.fallbackReason" type="warning" :closable="false" :title="`推理已回退：${lastRuntime.fallbackReason}`" />
+
     <el-tabs v-model="tab" class="tabs">
       <el-tab-pane label="实时识别" name="live" />
       <el-tab-pane label="图库/录像检索" name="search" />
@@ -323,6 +337,8 @@ const reidModels = ref([])
 const detModels = ref([])
 const faceModels = ref([])
 const reidModelId = ref(null)
+const reidRuntime = ref('python')
+const lastRuntime = ref({})
 const detModelId = ref(null)
 const faceModelId = ref(null)
 const threshold = ref(0.45)
@@ -451,6 +467,7 @@ const buildForm = (blob) => {
   const fd = new FormData()
   fd.append('file', blob, 'frame.jpg')
   fd.append('modelId', reidModelId.value)
+  fd.append('reidRuntime', reidRuntime.value)
   if (detModelId.value) fd.append('detectorModelId', detModelId.value)
   fd.append('threshold', threshold.value)
   fd.append('draw', '0')
@@ -461,6 +478,7 @@ const buildForm = (blob) => {
 
 const recognizeBlob = async (blob) => {
   const res = await reidApi.recognize(buildForm(blob))
+  lastRuntime.value = res.data.runtime || {}
   const list = res.data.detections || []
   dets.value = list
   drawBoxes(list)
@@ -631,10 +649,12 @@ const runSearch = async () => {
     const fd = new FormData()
     fd.append('file', queryFile.value)
     fd.append('modelId', reidModelId.value)
+    fd.append('reidRuntime', reidRuntime.value)
     if (detModelId.value) fd.append('detectorModelId', detModelId.value)
     if (searchMode.value === 'gallery') {
       fd.append('topk', 10)
       const res = await reidApi.search(fd)
+      lastRuntime.value = res.data.runtime || {}
       galleryHits.value = res.data.matches || []
       ElMessage.success(`命中 ${galleryHits.value.length} 条`)
     } else {
@@ -642,6 +662,7 @@ const runSearch = async () => {
       fd.append('video', searchVideoFile.value)
       fd.append('threshold', threshold.value)
       const res = await reidApi.searchVideo(fd)
+      lastRuntime.value = res.data.runtime || {}
       videoHits.value = res.data.hits || []
       ElMessage.success(`命中 ${videoHits.value.length} 处`)
     }
@@ -896,9 +917,11 @@ const doEnroll = async () => {
   try {
     const fd = new FormData()
     fd.append('modelId', enrollModelId.value)
+    fd.append('reidRuntime', reidRuntime.value)
     if (detModelId.value) fd.append('detectorModelId', detModelId.value)
     enrollFiles.value.forEach((f) => fd.append('files', f.raw || f))
-    await reidApi.enroll(enrollPerson.value.id, fd)
+    const res = await reidApi.enroll(enrollPerson.value.id, fd)
+    lastRuntime.value = res.data.runtime || {}
     ElMessage.success('登记成功')
     enrollDlg.value = false
     await loadPersons()

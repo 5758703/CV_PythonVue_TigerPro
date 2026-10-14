@@ -1,0 +1,60 @@
+{
+  "scope": "feature-extraction-only",
+  "inputKind": "synthetic-random-crops",
+  "model": "person_reid_youtu_2021nov.onnx",
+  "modelSha256": "0579683334d4b9440221606dcb461656dd0dc64143b18f48faedaced9b4f580d",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 94 Stepping 3, GenuineIntel",
+  "cpuCount": 8,
+  "python": "3.13.5 | packaged by Anaconda, Inc. | (main, Jun 12 2025, 16:37:03) [MSC v.1929 64 bit (AMD64)]",
+  "opencv": "5.0.0",
+  "onnxruntime": "1.27.0",
+  "iterations": 30,
+  "warmup": 5,
+  "batchSize": 1,
+  "workers": 1,
+  "results": [
+    {
+      "mode": "legacy",
+      "sessionCreateMs": 0.0032999996619764715,
+      "firstBatchMs": 386.5845000000263,
+      "p50BatchMs": 63.84960000013962,
+      "p95BatchMs": 67.7605400011089,
+      "cropsPerSecond": 15.474171158259285,
+      "provider": "opencv-dnn-cpu",
+      "threads": "existing-default"
+    },
+    {
+      "mode": "python-ort-tuned",
+      "sessionCreateMs": 589.2425000001822,
+      "firstBatchMs": 91.15879999990284,
+      "p50BatchMs": 88.13795000151003,
+      "p95BatchMs": 92.853579999246,
+      "cropsPerSecond": 11.410893455083137,
+      "provider": "onnxruntime-python-cpu",
+      "threads": 2
+    },
+    {
+      "mode": "cpp",
+      "sessionCreateMs": 531.6633000002184,
+      "firstBatchMs": 85.30530000098224,
+      "p50BatchMs": 86.74450000034994,
+      "p95BatchMs": 94.73170000019307,
+      "cropsPerSecond": 11.462602476148737,
+      "provider": "onnxruntime-cpp-cpu",
+      "threads": 2,
+      "dynamicBatch": true
+    }
+  ],
+  "errors": {},
+  "parity": {
+    "maxAbsError": 0.0,
+    "minCosine": 1.000000238418579,
+    "allclose": true
+  },
+  "legacyParity": {
+    "maxAbsError": 2.384185791015625e-06,
+    "minCosine": 1.0,
+    "allclose": true
+  }
+}

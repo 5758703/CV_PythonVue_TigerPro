@@ -163,6 +163,7 @@ def _job_multi_video_reid(app, params: dict, job_id: str) -> dict:
     from inference import search_reid_in_video
 
     hits_all: list[dict] = []
+    runtime_by_camera: dict[str, dict] = {}
     total = len(camera_ids)
     for i, cid in enumerate(camera_ids):
         cam = Camera.query.get(cid)
@@ -185,12 +186,16 @@ def _job_multi_video_reid(app, params: dict, job_id: str) -> dict:
                 max_frames=max_frames,
                 det_abs_path=det_path,
                 det_conf=float(params.get("detConf") or 0.35),
+                **({"runtime": params["reidRuntime"]} if params.get("reidRuntime") else {}),
             )
-            for h in data.get("matches") or []:
+            runtime_by_camera[str(cid)] = data.get("runtime") or {}
+            for h in data.get("hits") or data.get("matches") or []:
                 h["cameraId"] = cid
                 h["cameraName"] = cam.name
                 hits_all.append(h)
         except Exception as e:  # noqa: BLE001
+            runtime_by_camera[str(cid)] = {"requestedRuntime": params.get("reidRuntime"),
+                                          "provider": "unavailable", "error": str(e)}
             hits_all.append({
                 "cameraId": cid,
                 "cameraName": cam.name,
@@ -207,4 +212,5 @@ def _job_multi_video_reid(app, params: dict, job_id: str) -> dict:
         "matchCount": len(hits_all),
         "matches": hits_all[:topk * total],
         "cameraIds": camera_ids,
+        "runtimeByCamera": runtime_by_camera,
     }

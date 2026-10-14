@@ -10,7 +10,7 @@ import os
 import tempfile
 import uuid
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from werkzeug.utils import secure_filename
 
 from extensions import db
@@ -27,6 +27,18 @@ reid_bp = Blueprint("reid", __name__, url_prefix="/api/ai/reid")
 
 REID_LIBS = ("opencv-reid", "youtu-reid", "youtureid", "person-reid")
 MODALITY_APPEARANCE = "appearance"
+
+
+@reid_bp.before_request
+def _validate_runtime():
+    if request.method == "POST" and request.endpoint in {
+        "reid.enroll", "reid.recognize", "reid.search_gallery", "reid.search_video",
+    }:
+        from services.reid_runtime import runtime_name
+        try:
+            g.reid_runtime = runtime_name(request.form.get("reidRuntime"))
+        except ValueError as error:
+            return jsonify(code=400, message=str(error)), 400
 
 
 def _resolve_reid_model(mid: int):
@@ -263,6 +275,8 @@ def enroll(pid):
     from services.reid_gallery import l2_normalize
     import numpy as np
 
+    from services.reid_runtime import summarize_runtime
+    runtime_records = []
     vectors = []
     source_paths = []
     for f in files:
@@ -282,8 +296,12 @@ def enroll(pid):
                 c = _crop_person(img, best["bbox"])
                 if c is not None:
                     crop = c
-        feat, _meta = extract_feature(root, crop)
+        try:
+            feat, _meta = extract_feature(root, crop, runtime=g.reid_runtime)
+        except Exception as error:
+            return jsonify(code=500, message=f"外观特征提取失败：{error}"), 500
         vectors.append(l2_normalize(np.asarray(feat, dtype=np.float32)))
+        runtime_records.append(_meta)
         rel = _save_enroll_image(p.id, f)
         if rel:
             source_paths.append(rel)
@@ -313,7 +331,7 @@ def enroll(pid):
     return jsonify(
         code=0,
         message=f"外观登记成功（{len(vectors)} 张）",
-        data=p.to_dict(with_embeddings=True),
+        data={**p.to_dict(with_embeddings=True), "runtime": summarize_runtime(runtime_records)},
     )
 
 
@@ -394,6 +412,7 @@ def recognize():
             face_library=face_library or "opencv-face",
             face_model_key=face_model_key,
             face_threshold=face_threshold,
+            runtime=g.reid_runtime,
         )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"识别失败：{e}"), 500
@@ -424,6 +443,7 @@ def search_gallery():
         data = search_reid_gallery(
             root, m.model_key, file.read(),
             topk=topk, det_abs_path=det_path, det_conf=_parse_float("detConf", 0.35),
+            runtime=g.reid_runtime,
         )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"检索失败：{e}"), 500
@@ -469,6 +489,7 @@ def search_video():
             max_frames=_parse_int("maxFrames", 120) or 120,
             det_abs_path=det_path,
             det_conf=_parse_float("detConf", 0.35),
+            runtime=g.reid_runtime,
         )
     except Exception as e:  # noqa: BLE001
         return jsonify(code=500, message=f"录像检索失败：{e}"), 500

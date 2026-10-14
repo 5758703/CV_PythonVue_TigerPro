@@ -190,8 +190,11 @@ def _forward_ort(onnx_path: str, blob: np.ndarray) -> np.ndarray:
     return np.asarray(out, dtype=np.float32)
 
 
-def extract_feature(model_path: str, image_bgr: np.ndarray, prefer: str = "fp32"):
+def extract_feature(model_path: str, image_bgr: np.ndarray, prefer: str = "fp32", *, runtime=None):
     """返回 (embedding float32 [D], meta)。"""
+    from services.reid_runtime import runtime_name, extract_youtu
+    if runtime_name(runtime) != "python":
+        return extract_youtu(model_path, image_bgr, prefer=prefer, runtime=runtime)
     onnx = resolve_onnx(model_path, prefer=prefer)
     blob = preprocess_crop(image_bgr)
     t0 = time.perf_counter()

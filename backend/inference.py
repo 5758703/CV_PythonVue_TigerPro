@@ -5589,13 +5589,13 @@ def _detect_persons_yolo(det_abs_path: str, img, conf: float = 0.35):
     return out
 
 
-def extract_reid_embedding(reid_root: str, image_bytes: bytes, *, full_body: bool = True):
+def extract_reid_embedding(reid_root: str, image_bytes: bytes, *, full_body: bool = True, runtime=None):
     """从整图或已裁剪图提取外观特征。返回 (emb, img, meta)。"""
     from person_reid_dnn import extract_feature
     from services.reid_gallery import l2_normalize
 
     img = _decode_bgr(image_bytes)
-    feat, meta = extract_feature(reid_root, img)
+    feat, meta = extract_feature(reid_root, img, **({"runtime": runtime} if runtime is not None else {}))
     emb = l2_normalize(np.asarray(feat, dtype=np.float32))
     meta = dict(meta or {})
     meta["fullBody"] = bool(full_body)
@@ -5624,6 +5624,7 @@ def recognize_persons(
     face_model_key: str | None = None,
     face_threshold: float = 0.4,
     face_min_h: float = 48.0,
+    runtime=None,
 ):
     """行人检测 → ReID 1:N；可选与人脸融合。
 
@@ -5631,6 +5632,8 @@ def recognize_persons(
     """
     from person_reid_dnn import extract_feature
     from services.reid_gallery import l2_normalize, match_embedding
+    from services.reid_runtime import runtime_name, extract_youtu_batch
+    selected_runtime = runtime_name(runtime)
 
     img = _decode_bgr(image_bytes)
     h, w = img.shape[:2]
@@ -5659,6 +5662,7 @@ def recognize_persons(
             face_list = []
 
     detections = []
+    native_pending = []
     for p in persons:
         bbox = p["bbox"]
         det = {
@@ -5708,8 +5712,12 @@ def recognize_persons(
         if not used_face:
             crop = _crop_person(img, bbox)
             if crop is not None and crop.size > 0:
+                if selected_runtime != "python":
+                    native_pending.append((det, crop))
+                    detections.append(det)
+                    continue
                 try:
-                    feat, _meta = extract_feature(reid_root, crop)
+                    feat, _meta = extract_feature(reid_root, crop, **({"runtime": runtime} if runtime is not None else {}))
                     emb = l2_normalize(np.asarray(feat, dtype=np.float32))
                     m = match_embedding(
                         emb, reid_model_key, threshold=threshold,
@@ -5726,6 +5734,16 @@ def recognize_persons(
                 except Exception:  # noqa: BLE001
                     pass
         detections.append(det)
+
+    runtime_meta = {}
+    if native_pending:
+        features, runtime_meta = extract_youtu_batch(reid_root, [crop for _, crop in native_pending], runtime=selected_runtime)
+        for (det, _crop), feature in zip(native_pending, features):
+            match = match_embedding(l2_normalize(feature), reid_model_key, threshold=threshold,
+                                    model_version=_reid_model_version(runtime_meta))
+            det.update({"personId": match.get("personId"), "facePersonId": match.get("facePersonId"),
+                        "name": match.get("name") or "未知", "score": match.get("score", 0),
+                        "matched": bool(match.get("matched")), "inference": runtime_meta})
 
     image_b64 = None
     if draw and detections:
@@ -5762,7 +5780,8 @@ def recognize_persons(
         "imageBase64": image_b64,
         "threshold": float(threshold),
         "hybrid": bool(hybrid),
-        "backend": "youtu-reid",
+        "backend": runtime_meta.get("backend", "youtu-reid"),
+        "runtime": runtime_meta,
     }
 
 
@@ -5774,6 +5793,7 @@ def search_reid_gallery(
     topk: int = 5,
     det_abs_path: str | None = None,
     det_conf: float = 0.35,
+    runtime=None,
 ):
     """指定行人图在底库中检索 Top-K。"""
     from person_reid_dnn import extract_feature
@@ -5790,7 +5810,7 @@ def search_reid_gallery(
             c = _crop_person(img, query_bbox)
             if c is not None:
                 crop = c
-    feat, meta = extract_feature(reid_root, crop)
+    feat, meta = extract_feature(reid_root, crop, **({"runtime": runtime} if runtime is not None else {}))
     emb = l2_normalize(np.asarray(feat, dtype=np.float32))
     hits = topk_match(
         emb, reid_model_key, topk=topk,
@@ -5802,6 +5822,7 @@ def search_reid_gallery(
         "queryBbox": query_bbox,
         "embedDim": int(emb.size),
         "backend": (meta or {}).get("backend"),
+        "runtime": meta,
     }
 
 
@@ -5817,15 +5838,22 @@ def search_reid_in_video(
     max_frames: int = 120,
     det_abs_path: str | None = None,
     det_conf: float = 0.35,
+    runtime=None,
 ):
     """指定行人图在录像片段中检索相似出现。"""
     from person_reid_dnn import extract_feature
     from services.reid_gallery import l2_normalize
+    from services.reid_runtime import runtime_name, extract_youtu_batch
+    runtime_kwargs = {"runtime": runtime} if runtime is not None else {}
+    selected_runtime = runtime_name(runtime)
 
     q = search_reid_gallery(
         reid_root, reid_model_key, query_bytes,
         topk=1, det_abs_path=det_abs_path, det_conf=det_conf,
+        **runtime_kwargs,
     )
+    from services.reid_runtime import summarize_runtime
+    runtime_records = [q.get("runtime") or {}]
     # 直接用 query embedding
     img_q = _decode_bgr(query_bytes)
     crop_q = img_q
@@ -5836,7 +5864,8 @@ def search_reid_in_video(
             c = _crop_person(img_q, best["bbox"])
             if c is not None:
                 crop_q = c
-    feat_q, _query_meta = extract_feature(reid_root, crop_q)
+    feat_q, _query_meta = extract_feature(reid_root, crop_q, **runtime_kwargs)
+    runtime_records.append(_query_meta)
     q_emb = l2_normalize(np.asarray(feat_q, dtype=np.float32))
 
     cap = cv2.VideoCapture(video_path)
@@ -5864,12 +5893,28 @@ def search_reid_in_video(
                 "bbox": [0.0, 0.0, float(frame.shape[1]), float(frame.shape[0])],
                 "confidence": 1.0,
             }]
-        for p in persons:
+        batch_features, batch_meta = {}, {}
+        if selected_runtime != "python":
+            candidates = [(i, _crop_person(frame, p["bbox"])) for i, p in enumerate(persons)]
+            candidates = [(i, crop) for i, crop in candidates if crop is not None and crop.size]
+            if candidates:
+                try:
+                    features, batch_meta = extract_youtu_batch(reid_root, [crop for _, crop in candidates], runtime=selected_runtime)
+                    runtime_records.append(batch_meta)
+                    batch_features = {i: feature for (i, _), feature in zip(candidates, features)}
+                except Exception:
+                    cap.release()
+                    raise
+        for person_index, p in enumerate(persons):
             crop = _crop_person(frame, p["bbox"])
             if crop is None:
                 continue
             try:
-                feat, frame_meta = extract_feature(reid_root, crop)
+                if selected_runtime != "python":
+                    feat, frame_meta = batch_features[person_index], batch_meta
+                else:
+                    feat, frame_meta = extract_feature(reid_root, crop, **runtime_kwargs)
+                    runtime_records.append(frame_meta)
                 emb = l2_normalize(np.asarray(feat, dtype=np.float32))
                 score = float(np.dot(q_emb, emb))
             except Exception:  # noqa: BLE001
@@ -5900,5 +5945,6 @@ def search_reid_in_video(
         "sampledFrames": sampled,
         "galleryHint": q.get("matches") or [],
         "threshold": float(threshold),
+        "runtime": summarize_runtime(runtime_records),
     }
 

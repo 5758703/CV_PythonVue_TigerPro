@@ -240,6 +240,13 @@
                     <el-option label="IoU（轻量）" value="iou" />
                   </el-select>
                 </el-form-item>
+                <el-form-item label="行人外观推理">
+                  <el-select v-model="form.reidRuntime" style="width: 220px" :disabled="session?.running">
+                    <el-option label="原有推理" value="python" />
+                    <el-option label="C++ 运行时" value="cpp" />
+                    <el-option label="C++ 优先（允许回退）" value="auto" />
+                  </el-select>
+                </el-form-item>
                 <el-form-item label="CMC">
                   <el-switch v-model="form.enableCmc" />
                 </el-form-item>
@@ -821,6 +828,29 @@
       </el-tab-pane>
     </el-tabs>
 
+    <el-dialog v-model="searchResultOpen" title="检索结果" width="80%">
+      <p>匹配 {{ searchResult.matchCount ?? searchResult.eventCount ?? 0 }} 条</p>
+      <el-table v-if="searchRuntimeRows.length" :data="searchRuntimeRows" border size="small">
+        <el-table-column prop="cameraId" label="摄像头" width="100" />
+        <el-table-column prop="provider" label="实际推理后端" />
+        <el-table-column prop="effectiveRuntime" label="运行时" width="110" />
+        <el-table-column label="运行状态">
+          <template #default="{ row }">
+            <span :style="row.degraded || row.error ? 'color: var(--el-color-warning)' : ''">{{ row.error || row.fallbackReason || '正常' }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-table :data="searchResult.matches || searchResult.events || []" border stripe max-height="380" style="margin-top: 12px">
+        <el-table-column prop="cameraName" label="摄像头" />
+        <el-table-column prop="timeSec" label="时间（秒）" />
+        <el-table-column prop="frameIndex" label="帧" />
+        <el-table-column prop="score" label="相似度" />
+        <el-table-column prop="name" label="行人" />
+        <el-table-column prop="globalId" label="全局 ID" />
+        <el-table-column prop="error" label="错误" />
+      </el-table>
+    </el-dialog>
+
     <el-drawer v-model="trajOpen" title="跨镜轨迹" size="40%">
       <el-timeline>
         <el-timeline-item
@@ -874,6 +904,10 @@ const candidates = ref([])
 const candidateDb = ref([])
 const crossEvents = ref([])
 const searchJobs = ref([])
+const searchResultOpen = ref(false)
+const searchResult = ref({})
+const searchRuntimeRows = computed(() => Object.entries(searchResult.value.runtimeByCamera || {})
+  .map(([cameraId, meta]) => ({ cameraId, ...meta })))
 const overlayBust = reactive({})
 let pollTimer = null
 
@@ -901,6 +935,7 @@ const effectiveTopologyText = computed(() => topologyPolicyText(
 ))
 
 const form = reactive({
+  reidRuntime: 'python',
   sourceMode: 'camera',
   cameraIds: [],
   enablePerson: true,
@@ -926,6 +961,7 @@ const detectForm = reactive({
 
 const resetSessionDefaults = () => {
   Object.assign(form, {
+    reidRuntime: 'python',
     enablePerson: true,
     enableVehicle: true,
     sampleFps: 4,
@@ -960,6 +996,7 @@ const deviceSlots = reactive([{ name: '本机摄像头', device: '' }])
 const devices = ref([])
 
 const sessionPayload = () => ({
+  reidRuntime: form.reidRuntime,
   enablePerson: form.enablePerson,
   enableVehicle: form.enableVehicle,
   sampleFps: form.sampleFps,
@@ -1590,6 +1627,7 @@ const onQueryFile = (ev) => {
 const submitMultiVideoSearch = async () => {
   const fd = new FormData()
   fd.append('jobType', 'multi_video_reid')
+  fd.append('reidRuntime', form.reidRuntime)
   fd.append('cameraIds', searchForm.cameraIds.join(','))
   fd.append('query', searchForm.queryFile)
   fd.append('threshold', '0.45')
@@ -1605,8 +1643,8 @@ const showSearchResult = async (row) => {
     ElMessage.info(res.data.message || '尚无结果')
     return
   }
-  ElMessage.info(`匹配 ${result.matchCount ?? result.eventCount ?? '-'} 条，详见控制台`)
-  console.log('MTMC search result', res.data)
+  searchResult.value = result
+  searchResultOpen.value = true
 }
 
 const showTraj = async (gid) => {

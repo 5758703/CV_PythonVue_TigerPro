@@ -115,12 +115,13 @@ def _pad_or_trim(v: np.ndarray, dim: int) -> np.ndarray:
     return out
 
 
-def extract_youtu(youtu_root: str | None, image_bgr: np.ndarray) -> tuple[np.ndarray | None, dict]:
+def extract_youtu(youtu_root: str | None, image_bgr: np.ndarray, *, runtime=None) -> tuple[np.ndarray | None, dict]:
     if not youtu_root:
         return None, {}
     try:
         from person_reid_dnn import extract_feature
-        feat, meta = extract_feature(youtu_root, image_bgr)
+        kwargs = {"runtime": runtime} if runtime is not None else {}
+        feat, meta = extract_feature(youtu_root, image_bgr, **kwargs)
         meta = dict(meta or {})
         meta.setdefault("modelVersion", meta.get("onnx"))
         return _l2(feat), meta
@@ -128,18 +129,21 @@ def extract_youtu(youtu_root: str | None, image_bgr: np.ndarray) -> tuple[np.nda
         return None, {"youtuError": str(e)}
 
 
-def extract_strong(strong_root: str | None, image_bgr: np.ndarray) -> tuple[np.ndarray | None, dict]:
+def extract_strong(strong_root: str | None, image_bgr: np.ndarray, *, runtime=None) -> tuple[np.ndarray | None, dict]:
     onnx = resolve_strong_onnx(strong_root)
     if not onnx:
         return None, {"strong": False}
     try:
-        feat = _infer_onnx(onnx, image_bgr)
+        from services.reid_runtime import extract_strong as runtime_extract
+        feat, runtime_meta = runtime_extract(onnx, image_bgr, runtime=runtime,
+                                            legacy=lambda: _infer_onnx(onnx, image_bgr))
         return _l2(feat), {
             "strong": True,
             "onnx": os.path.basename(onnx),
             "modelKey": _strong_model_key(onnx),
             "modelVersion": os.path.basename(onnx),
             "dim": int(feat.size),
+            **runtime_meta,
         }
     except Exception as e:  # noqa: BLE001
         return None, {"strong": False, "strongError": str(e)}
@@ -210,10 +214,12 @@ def extract_person_embeddings(
     *,
     youtu_root: str | None = None,
     strong_root: str | None = None,
+    runtime=None,
 ) -> tuple[dict[str, np.ndarray], dict]:
     """Extract independent embeddings keyed by their stable model spaces."""
-    strong, strong_meta = extract_strong(strong_root, image_bgr)
-    youtu, youtu_meta = extract_youtu(youtu_root, image_bgr)
+    kwargs = {"runtime": runtime} if runtime is not None else {}
+    strong, strong_meta = extract_strong(strong_root, image_bgr, **kwargs)
+    youtu, youtu_meta = extract_youtu(youtu_root, image_bgr, **kwargs)
     spaces: dict[str, np.ndarray] = {}
     backends = {
         "strong": _backend_status(
@@ -234,6 +240,7 @@ def extract_person_embeddings(
         key = str(strong_meta.get("modelKey") or _strong_model_key(strong_meta.get("onnx") or "unknown.onnx"))
         spaces[key] = _l2(strong)
         backends["strong"] = {
+            **strong_meta,
             "ready": True,
             "backend": strong_meta.get("backend") or "strong-onnx",
             "provider": strong_meta.get("provider") or "onnxruntime-cpu",
@@ -246,6 +253,7 @@ def extract_person_embeddings(
         key = "opencv-person-reid-youtu"
         spaces[key] = _l2(youtu)
         backends["youtu"] = {
+            **youtu_meta,
             "ready": True,
             "backend": youtu_meta.get("backend") or "youtu-reid",
             "provider": youtu_meta.get("provider") or "unknown",

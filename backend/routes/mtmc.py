@@ -31,6 +31,19 @@ from services.mtmc_engine import MtmcConfig, VirtualVideoSource, next_virtual_ca
 mtmc_bp = Blueprint("mtmc", __name__, url_prefix="/api/ai/mtmc")
 
 
+@mtmc_bp.before_request
+def _validate_reid_runtime():
+    if request.method == "POST" and request.endpoint in {
+        "mtmc.start_session", "mtmc.start_session_videos", "mtmc.start_session_video_paths", "mtmc.start_session_sources", "mtmc.submit_search_job",
+    }:
+        from services.reid_runtime import runtime_name
+        data = request.get_json(silent=True) or request.form
+        try:
+            runtime_name(data.get("reidRuntime"))
+        except ValueError as error:
+            return jsonify(code=400, message=str(error)), 400
+
+
 def _form_bool(val, default=False) -> bool:
     if val is None:
         return default
@@ -40,6 +53,8 @@ def _form_bool(val, default=False) -> bool:
 
 
 def _parse_session_params(data: dict) -> MtmcConfig:
+    from services.reid_runtime import runtime_name
+    selected_reid_runtime = runtime_name(data.get("reidRuntime"))
     person_m = _pick_model(
         data.get("personDetModelId"),
         task="object-detection",
@@ -86,6 +101,7 @@ def _parse_session_params(data: dict) -> MtmcConfig:
         det_vehicle_path=vehicle_path,
         youtu_root=youtu_path,
         strong_reid_root=strong_path,
+        reid_runtime=selected_reid_runtime,
         vehicle_reid_root=vehicle_reid_path,
         plate_model_path=plate_path,
         ocr_fn=ocr_fn,
@@ -885,6 +901,7 @@ def submit_search_job():
             "cameraIds": camera_ids,
             "queryImagePath": tmp_path,
             "reidRoot": _abs_weight(youtu_m),
+            "reidRuntime": (data.get("reidRuntime") or request.form.get("reidRuntime")),
             "modelKey": youtu_m.model_key if youtu_m else "opencv-person-reid-youtu",
             "detPath": _abs_weight(person_m),
             "threshold": float(data.get("threshold") or request.form.get("threshold") or 0.45),

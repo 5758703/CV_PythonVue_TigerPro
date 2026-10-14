@@ -171,6 +171,8 @@ class MtmcConfig:
     # Route-selected model records. Runtime inference may replace the effective
     # ReID entry when a configured backend degrades to a fallback.
     selected_models: dict[str, dict] = field(default_factory=dict)
+    # Person appearance inference only; tracking/association keep existing semantics.
+    reid_runtime: str | None = None
 
 
 @dataclass
@@ -1597,13 +1599,16 @@ def _person_reid_runtime_observation(
     if cfg.youtu_root:
         expected.append("youtu")
     reason = _runtime_error_reason(backends, expected)
+    fallback_reasons = [str(row["fallbackReason"]) for row in backends.values() if row.get("fallbackReason")]
+    if fallback_reasons:
+        reason = "; ".join(filter(None, [reason, *fallback_reasons]))
     selected_embedding = embeddings.get(selected_key) if selected_key else None
     if active_backend == "youtu":
         backend = backend_detail.get("backend") or "youtu-reid"
         provider = backend_detail.get("provider") or "unknown"
         input_size = backend_detail.get("inputSize") or meta.get("inputSize")
     elif active_backend == "strong":
-        runtime_io = _strong_runtime_io(cfg.strong_reid_root)
+        runtime_io = {} if backend_detail.get("provider") and backend_detail.get("inputSize") else _strong_runtime_io(cfg.strong_reid_root)
         backend = backend_detail.get("backend") or "strong-onnx"
         provider = (
             backend_detail.get("provider")
@@ -3030,6 +3035,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
                         crop,
                         youtu_root=cfg.youtu_root,
                         strong_root=cfg.strong_reid_root,
+                        **({"runtime": cfg.reid_runtime} if cfg.reid_runtime is not None else {}),
                     )
                     embeddings = {key: l2_normalize(value) for key, value in embeddings.items()}
                     model_key = meta.get("bestModelKey")
