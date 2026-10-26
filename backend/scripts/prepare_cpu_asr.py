@@ -12,6 +12,15 @@ BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
 
+def runtime_packages(python_version=None):
+    """PyAV 19 requires Python 3.12; the deployed Conda backend may use 3.10."""
+    version = tuple(python_version or sys.version_info[:2])
+    av_version = '19.0.2' if version >= (3, 12) else '16.1.0'
+    return ['sherpa-onnx==1.13.3', 'sherpa-onnx-core==1.13.3', 'faster-whisper==1.2.1',
+            'moonshine-voice==0.1.5', 'ctranslate2==4.8.4', f'av=={av_version}',
+            'sounddevice==0.5.6', 'google-crc32c==1.9.0']
+
+
 def main():
     from flask import Flask
     from config import Config
@@ -24,9 +33,7 @@ def main():
     parser.add_argument('--install-deps', action='store_true', help='安装新增 SDK 到项目 runtime 目录；核心环境先按 requirements.txt 准备')
     args = parser.parse_args()
     if args.install_deps:
-        packages = ['sherpa-onnx==1.13.3', 'sherpa-onnx-core==1.13.3', 'faster-whisper==1.2.1',
-                    'moonshine-voice==0.1.5', 'ctranslate2==4.8.4', 'av==19.0.2',
-                    'sounddevice==0.5.6', 'google-crc32c==1.9.0']
+        packages = runtime_packages()
         subprocess.run([sys.executable, '-m', 'pip', 'install', '--no-deps', '--no-cache-dir',
                         '--target', str(EXTRA_PACKAGES), *packages], check=True)
         if str(EXTRA_PACKAGES) not in sys.path:

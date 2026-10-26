@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { selectableAudioModels, hasSubtitleTimestamps, fmtSrtTime, fmtAssTime } from './asrModels.js'
+import { selectableAudioModels, hasSubtitleTimestamps, fmtSrtTime, fmtAssTime, asrResultNotice } from './asrModels.js'
 
 test('music model remains selectable before weights are downloaded', () => {
   const music = { id: 21, task: 'audio-text-to-text', library: 'moss-music-gguf', status: '0', runtimeReady: false }
@@ -43,4 +43,13 @@ test('native subtitle fractions carry into the next second, minute and hour', ()
   assert.equal(fmtAssTime(59.9996), '0:01:00.00')
   assert.equal(fmtSrtTime(NaN), '00:00:00,000')
   assert.equal(fmtAssTime(-1), '0:00:00.00')
+})
+
+test('empty recognition is distinct from the initial screen and explains unsupported languages', () => {
+  assert.equal(asrResultNotice(null), '')
+  assert.equal(asrResultNotice({text: ' ', recognitionMessage: '未识别到文字；Parakeet 不支持中文。'}),
+    '未识别到文字；Parakeet 不支持中文。')
+  assert.match(asrResultNotice({text: ''}), /未识别到文字/)
+  assert.match(asrResultNotice({text: 'Hello', timestampsAvailable: false}), /没有.*字幕时间戳/)
+  assert.equal(asrResultNotice({text: 'Hello', segments: [{start:0,end:1,text:'Hello'}]}), '')
 })

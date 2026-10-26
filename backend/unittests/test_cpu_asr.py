@@ -251,3 +251,43 @@ def test_new_native_engines_are_dispatched_to_isolated_worker(music_app, tmp_pat
     with music_app.app_context():
         cpu_asr.transcribe('moonshine-small-streaming', tmp_path / 'audio.wav', model_dir=tmp_path)
     assert calls[-1][1]['language'] == 'en'
+
+
+@pytest.mark.parametrize('version,av_version', [((3, 10), '16.1.0'), ((3, 11), '16.1.0'),
+                                               ((3, 12), '19.0.2'), ((3, 13), '19.0.2')])
+def test_cpu_runtime_installer_selects_pyav_compatible_with_backend_python(version, av_version):
+    from scripts.prepare_cpu_asr import runtime_packages
+    assert f'av=={av_version}' in runtime_packages(version)
+    assert 'faster-whisper==1.2.1' in runtime_packages(version)
+
+
+def test_refresh_discovers_optional_runtime_created_after_backend_import(tmp_path, monkeypatch):
+    import sys
+    from services import cpu_asr
+    target = tmp_path / 'runtime-created-later'
+    module = 'cpu_asr_late_dependency_fixture'
+    monkeypatch.setattr(cpu_asr, 'EXTRA_PACKAGES', target)
+    monkeypatch.setattr(sys, 'path', list(sys.path))
+    assert not cpu_asr._has_module(module)
+    target.mkdir()
+    (target / f'{module}.py').write_text('READY = True\n')
+    assert cpu_asr._has_module(module)
+
+
+@pytest.mark.parametrize('key,expected_hint', [
+    ('parakeet-tdt-0p6b-v3-int8', '不支持中文'),
+    ('moonshine-tiny-streaming', '英文'),
+    ('faster-whisper-small-int8', '音量'),
+])
+def test_empty_transcript_reports_model_scope_instead_of_silent_success(key, expected_hint, tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from services import cpu_asr
+    monkeypatch.setitem(sys.modules, 'services.cpu_asr_worker_client', SimpleNamespace(
+        transcribe_isolated=lambda *a, **k: {'text': '  ', 'segments': [], 'timestampsAvailable': False}))
+    monkeypatch.setattr(cpu_asr, 'runtime_status', lambda *a, **k: {'runtimeReady': True})
+    result = cpu_asr.transcribe(key, tmp_path / 'audio.wav', model_dir=tmp_path)
+    assert result['recognitionStatus'] == 'empty'
+    assert '未识别到文字' in result['recognitionMessage']
+    assert expected_hint in result['recognitionMessage']
+    assert result['text'] == '' and result['segments'] == []

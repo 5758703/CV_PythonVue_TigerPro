@@ -16,8 +16,17 @@ from flask import current_app, has_app_context
 
 BACKEND = Path(__file__).resolve().parents[1]
 EXTRA_PACKAGES = BACKEND / 'runtime' / f'cpu-asr-python-{sys.implementation.cache_tag}-{sysconfig.get_platform()}'
-if EXTRA_PACKAGES.is_dir() and str(EXTRA_PACKAGES) not in sys.path:
-    sys.path.insert(0, str(EXTRA_PACKAGES))
+
+
+def _ensure_runtime_path():
+    # Dependencies may be prepared after this module was imported by the web
+    # server. A model-state refresh must discover the matching ABI directory.
+    if EXTRA_PACKAGES.is_dir() and str(EXTRA_PACKAGES) not in sys.path:
+        sys.path.insert(0, str(EXTRA_PACKAGES))
+        importlib.invalidate_caches()
+
+
+_ensure_runtime_path()
 
 _RELEASE = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/'
 _MOON_FILES = ('adapter.ort', 'cross_kv.ort', 'decoder_kv.ort', 'encoder.ort',
@@ -95,6 +104,7 @@ def model_directory(key, model_dir=None):
 
 
 def _has_module(name):
+    _ensure_runtime_path()
     try:
         return importlib.util.find_spec(name) is not None
     except (ImportError, ValueError, AttributeError):
@@ -289,6 +299,15 @@ def transcribe(key, audio_path, *, model_dir=None, language='auto'):
         result = infer(spec['engine'], directory, str(audio_path),
                        threads=int(_config('CPU_ASR_THREADS', 4)), language=language,
                        model_arch=spec.get('arch'), timeout=int(_config('CPU_ASR_TIMEOUT_SECONDS', 1800)))
+    result['text'] = str(result.get('text') or '').strip()
+    result['recognitionStatus'] = 'recognized' if result['text'] else 'empty'
+    if not result['text']:
+        message = '未识别到文字。请确认录音中有人声且音量清晰，并使用模型支持的语言。'
+        if spec['engine'] == 'parakeet':
+            message += ' Parakeet 仅支持英语等 25 种欧洲语言，不支持中文或中英混合；中文请选 Paraformer、中文 Zipformer、faster-whisper 或 Qwen3-ASR。'
+        elif spec['engine'] == 'moonshine':
+            message += ' 当前 Moonshine Streaming 模型仅支持英文；中文请选 Paraformer、中文 Zipformer、faster-whisper 或 Qwen3-ASR。'
+        result['recognitionMessage'] = message
     result['elapsedSeconds'] = round(time.perf_counter() - started, 3)
     result['modelKey'] = key
     return result
