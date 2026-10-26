@@ -69,6 +69,19 @@ Moonshine 固定使用 v0.1.5 对应的 `quantized_26_08_21` 英文资源。下�
 
 ## 已执行的验证
 
+### 网页实际环境修复（2026-10-26）
+
+此前权重验收使用 Anaconda 基础 Python 3.13，网页后端实际通过 `H:\DevelopmentEnv\anaconda3\envs\cv_python_tigerpro\python.exe`（Python 3.10.20）运行。因此此前的依赖检查不能代表网页环境；3.10 也不能加载 3.13 原生扩展。
+
+- 已在实际后端解释器中执行 `scripts/prepare_cpu_asr.py --install-deps --check`，将配套 SDK 安装到 `backend/runtime/cpu-asr-python-cpython-310-win-amd64`，不改全局 Torch。
+- 安装器现按 Python 版本选择 PyAV：3.10/3.11 使用 16.1.0，3.12 以上使用 19.0.2，修复旧固定版本在 3.10 下无法安装的问题。刷新模型状态也会重新发现启动后才创建的本地依赖目录。
+- 在 Python 3.10 中完成真实转写：faster-whisper 中文、Parakeet 英文、Moonshine Tiny/Small/Medium 英文均返回非空文字。
+- 用户确认 Parakeet 测试音频为中文或中英混合。该模型不支持中文；对中文可能输出空文字或错误英文，并不代表正常识别。不能通过参数把它变成中文模型，也不会自动换模型来冒充 Parakeet 结果。
+- 空结果现返回 `recognitionStatus=empty` 和明确的录音/语言说明，页面显示提示；仅有文字而无字幕时间戳时显示全文并允许复制或导出 JSON。
+- 本轮使用实际 Python 3.10 执行回归：131 项通过、1 项因 Windows 符号链接权限跳过；前端 8 项通过。
+
+### 初次集成验收
+
 - 八个选项已登记到当前数据库，管理端 options 返回全部八项（含缺少资源项）；浏览器挂载实际 Vue ASR 组件并逐项选中，选中标签与说明正常。验证入口使用真实数据库选项数据，不代表已重启线上后端。
 - 本机八项权重均已准备并绑定到数据库；全新 Python 进程执行 `--check`，八项本地文件与依赖预检查均通过。权重与本地 SDK 位于忽略目录，源码提交不会携带这些大文件；其他机器仍需按上文安装和准备。
 - 已在本机用真实权重成功转写 Paraformer、Zipformer、Qwen3 中文示例，以及 Parakeet、faster-whisper 和 Moonshine Tiny/Small/Medium 英文示例；这些是功能验收，不是同机隔离条件下的准确率排行榜。
