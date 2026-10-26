@@ -66,6 +66,17 @@ class AiModel(db.Model):
         if (self.task or "") == "text-to-speech":
             result["ttsClone"] = lib in TTS_CLONE_LIBS
             result["ttsCloneRequired"] = lib in TTS_CLONE_REQUIRED_LIBS
+        from services.cpu_asr import get_spec, runtime_status as cpu_asr_status
+        if get_spec(self.model_key, lib):
+            from flask import current_app, has_app_context
+            from pathlib import Path
+            from services.model_paths import resolve_managed_model_path
+            root = (current_app.config.get('UPLOAD_FOLDER') or str(Path(current_app.config['MODEL_FOLDER']).parent)
+                    ) if has_app_context() else str(Path(__file__).resolve().parents[1] / 'uploads')
+            path = resolve_managed_model_path(root, self.file_path) if self.file_path else None
+            result.update(cpu_asr_status(self.model_key, path))
+            if self.file_path and path is None:
+                result.update(runtimeReady=False, runtimeMessage='已绑定的权重路径无效，请在模型管理重新绑定')
         if lib == 'moss-music-gguf':
             from flask import current_app, has_app_context
             from pathlib import Path

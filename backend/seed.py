@@ -1527,6 +1527,8 @@ def seed_ai_models():
         description="Paraformer 中英语音识别(funasr)，非自回归、工业级准确率(中文 CER ~1-2%)，CPU 快。语音识别页使用。", status="0",
     ))
     # 语音识别（SenseVoice 量化 onnx，242MB，更小更快；funasr_onnx 引擎）
+    from services.cpu_asr import seed_cpu_asr_models
+    created |= seed_cpu_asr_models()
     created |= _ensure_ai_model("sensevoice-small-onnx", dict(
         model_name="SenseVoice 语音识别(onnx量化)", category="语音识别",
         task="automatic-speech-recognition", library="funasr-onnx", version="v1",

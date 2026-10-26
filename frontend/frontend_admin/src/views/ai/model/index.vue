@@ -247,6 +247,9 @@
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="Confucius4-R2T2（独立语音服务）" value="confucius-r2t2" />
             <el-option label="MOSS-Music GGUF（音乐理解 / 歌词）" value="moss-music-gguf" />
+            <el-option label="sherpa-onnx ASR（Zipformer / Parakeet / Qwen3）" value="sherpa-onnx-asr" />
+            <el-option label="faster-whisper（CTranslate2 CPU INT8）" value="faster-whisper" />
+            <el-option label="Moonshine Streaming（原生 CPU 流式）" value="moonshine-streaming" />
             <el-option label="Confucius4-T3PO（独立翻译服务）" value="confucius-t3po" />
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="yolo-master（Tencent YOLO-Master）" value="yolo-master" />
@@ -427,6 +430,7 @@ const hubMeta = (h) => HUB_META[h] || HUB_META.other;
 
 const DIR_WEIGHT_LIBS = new Set([
   'moss-music-gguf',
+  'sherpa-onnx-asr', 'faster-whisper', 'moonshine-streaming',
   "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts",
 ]);
 const isDirWeightLib = (lib) => DIR_WEIGHT_LIBS.has((lib || "").toLowerCase());
@@ -483,6 +487,9 @@ const taskLabel = (t) => TASK_LABELS[t] || t || "目标检测";
 const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "image-classification" ? "success" : "");
 
 const LIB_DEFAULT_TASK = {
+  'sherpa-onnx-asr': 'automatic-speech-recognition',
+  'faster-whisper': 'automatic-speech-recognition',
+  'moonshine-streaming': 'automatic-speech-recognition',
   'moss-music-gguf': 'audio-text-to-text',
   'confucius-r2t2': 'automatic-speech-recognition',
   'confucius-t3po': 'translation',

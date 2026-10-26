@@ -17,6 +17,7 @@ from models import AiModel
 from security import permission_required
 from services.model_paths import resolve_managed_model_path
 from services import admin_jobs
+from services import cpu_asr
 
 ai_model_bp = Blueprint("ai_model", __name__, url_prefix="/api/ai/model")
 
@@ -113,6 +114,7 @@ def list_model_options():
         db.or_(
             db.and_(AiModel.file_path.isnot(None), AiModel.file_path != ""),
             AiModel.library.in_(("confucius-r2t2", "confucius-t3po", "moss-music-gguf")),
+            AiModel.model_key.in_(cpu_asr.CPU_MODEL_KEYS),
         ),
     )
     if task:
@@ -771,6 +773,7 @@ def _looks_like_diffusers_lora_dir(path):
 _DIR_WEIGHT_LIBS = frozenset({
     "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano",
     "vibevoice", "voxcpm", "neutts", "vlm-fo1", "moss-music-gguf",
+    "sherpa-onnx-asr", "faster-whisper", "moonshine-streaming",
 })
 
 
@@ -1159,7 +1162,10 @@ def fetch_weight(mid):
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if lib == 'moss-music-gguf':
+        if cpu_asr.get_spec(m.model_key, lib):
+            size = cpu_asr.download_model(m.model_key, folder, token=current_app.config.get('HF_TOKEN'))
+            rel = f'models/{sub}'
+        elif lib == 'moss-music-gguf':
             from services.moss_music import download_weights
             size = download_weights(folder, token=current_app.config.get('HF_TOKEN'))
             rel = f'models/{sub}'
@@ -1392,8 +1398,16 @@ def transcribe_route(mid):
     m = AiModel.query.get_or_404(mid)
     if m.status != '0':
         return jsonify(code=400, message='模型已停用'), 400
+    if m.library in cpu_asr.CPU_LIBRARIES and not cpu_asr.get_spec(m.model_key, m.library):
+        return jsonify(code=400, message='此 CPU 推理库需要使用已登记的模型标识，请选择内置 CPU ASR 模型'), 400
     path = _abs_model_path(m)
-    if m.library == 'moss-music-gguf':
+    if cpu_asr.get_spec(m.model_key, m.library):
+        if m.file_path and path is None:
+            return jsonify(code=400, message='已绑定的权重路径不存在或无效，请在模型管理重新绑定'), 400
+        state = cpu_asr.runtime_status(m.model_key, path)
+        if not state['runtimeReady']:
+            return jsonify(code=400, message=state['runtimeMessage']), 400
+    elif m.library == 'moss-music-gguf':
         from services.moss_music import runtime_status
         state = runtime_status(path)
         if not state['runtimeReady']:
@@ -1430,7 +1444,10 @@ def transcribe_route(mid):
             extract_audio_wav(media_path, extracted_wav)
             audio_path = extracted_wav
 
-        if m.library == 'moss-music-gguf':
+        if cpu_asr.get_spec(m.model_key, m.library):
+            result = cpu_asr.transcribe(m.model_key, audio_path, model_dir=path,
+                                        language=request.form.get('language') or 'auto')
+        elif m.library == 'moss-music-gguf':
             from services.moss_music import analyze
             result = analyze(audio_path, model_dir=path, mode=request.form.get('mode') or 'lyrics')
         elif m.library == 'confucius-r2t2':

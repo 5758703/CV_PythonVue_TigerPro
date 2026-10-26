@@ -48,6 +48,7 @@ frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://loc
 | **开放词汇检测 OmDet-Turbo** | 文本类别列表零样本检测（Swin Tiny）；图像检测页「提示类别」；与固定类 YOLO 并存 | `/ai/image` · 模型键 `omdet-turbo-swin-tiny` |
 | **多模态定位 VLM-FO1** | 自然语言 / REC 细粒度定位；YOLO 候选框 + FO1 筛选；图像检测页提示词 | `/ai/image` · 模型键 `vlm-fo1-3b` |
 | **ASR · MOSS-Transcribe-Diarize** | 多人说话人转写 + 时间戳；音/视频上传；字幕预览与 JSON/SRT/ASS 导出 | `/ai/asr` · 模型键 `moss-transcribe-diarize-0p9b` |
+| **CPU 语音识别模型** | Paraformer-zh、Streaming Zipformer INT8、faster-whisper Small INT8、Parakeet TDT 0.6B v3、Moonshine 流式 Tiny/Small/Medium、Qwen3-ASR 0.6B；本地文件转写、资源就绪状态与语言说明 | `/ai/asr` · [接入与部署](backend/docs/CPU_ASR_INTEGRATION.md) |
 | **跨镜 MTMC · 证据落库** | 三档门控（确认 / 候选 / 新建）+ Tracklet 证据；会话「证据落库」开关；候选人工晋升/驳回 | `/ai/mtmc` · [文档](docs/mtmc-cross-camera-reid.md) |
 | **跨镜 MTMC 重识别** | 多路共享拉流 → Tracklet → OSNet/CLIP 并联 Youtu → 车辆视觉 ReID+车牌融合 → 全局 ID；监控墙 AI 叠加；McByte++ | `/ai/mtmc` · [文档](docs/mtmc-cross-camera-reid.md) |
 | **跌倒检测** | 姿态四指标；图片 / 视频 / 摄像头；异步标注视频与触发事件；告警规则 + 告警音 | `/ai/fall` · 告警页 `fall_detection` |

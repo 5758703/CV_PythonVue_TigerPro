@@ -51,6 +51,7 @@ backend/debug_*.jpg
 
 # ===== 测试缓存 =====
 .pytest_cache/
+.cache/
 
 # ===== 第三方推理代码（vendored，体积大，部署时各自 git clone）=====
 third_party/

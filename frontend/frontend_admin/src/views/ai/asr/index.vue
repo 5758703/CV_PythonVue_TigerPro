@@ -58,6 +58,18 @@
               </el-form-item>
               <el-button link type="primary" @click="loadModels">刷新模型状态</el-button>
             </template>
+            <template v-if="selectedModel?.asrCpu">
+              <el-alert type="info" :closable="false" :title="selectedModel.asrHint + (selectedModel.maxAudioSeconds ? ` 当前文件上限 ${selectedModel.maxAudioSeconds} 秒。` : '')" class="mb8" />
+              <el-alert v-if="selectedModel.runtimeReady === false" type="warning" :closable="false"
+                :title="selectedModel.runtimeMessage" class="mb8" />
+              <el-form-item v-if="cpuLanguages.length > 1" label="识别语言">
+                <el-select v-model="cpuLanguage" style="width: 100%">
+                  <el-option v-for="language in cpuLanguages" :key="language.value"
+                    :label="language.label" :value="language.value" />
+                </el-select>
+              </el-form-item>
+              <el-button link type="primary" @click="loadModels">刷新模型状态</el-button>
+            </template>
             <el-form-item label="模型分类">
               <el-select v-model="category" placeholder="全部分类" clearable style="width: 100%" @change="onCategoryChange">
                 <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
@@ -247,7 +259,7 @@ import {
 
 import { modelApi } from '../../../api/ai'
 import { useInferProgress } from '../../../composables/useInferProgress'
-import { selectableAudioModels, hasSubtitleTimestamps } from '../../../utils/asrModels'
+import { selectableAudioModels, hasSubtitleTimestamps, fmtSrtTime, fmtAssTime } from '../../../utils/asrModels'
 
 const AUDIO_EXTS = new Set(['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac'])
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'])
@@ -293,28 +305,17 @@ const fmtDuration = (s) => {
   const sec = Math.floor(s % 60)
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
 }
-const fmtSrtTime = (s) => {
-  if (s == null || !Number.isFinite(Number(s))) return '00:00:00,000'
-  const v = Math.max(0, Number(s))
-  const h = Math.floor(v / 3600)
-  const m = Math.floor((v % 3600) / 60)
-  const sec = Math.floor(v % 60)
-  const ms = Math.round((v - Math.floor(v)) * 1000)
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')},${String(ms).padStart(3, '0')}`
-}
-const fmtAssTime = (s) => {
-  if (s == null || !Number.isFinite(Number(s))) return '0:00:00.00'
-  const v = Math.max(0, Number(s))
-  const h = Math.floor(v / 3600)
-  const m = Math.floor((v % 3600) / 60)
-  const sec = Math.floor(v % 60)
-  const cs = Math.round((v - Math.floor(v)) * 100)
-  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
-}
 
 const selectedModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
 const isMusicModel = computed(() => selectedModel.value?.library === 'moss-music-gguf')
 const musicMode = ref('lyrics')
+const cpuLanguage = ref('auto')
+const cpuLanguages = computed(() => selectedModel.value?.asrLanguages || [])
+watch(selectedModel, () => {
+  if (!cpuLanguages.value.some((item) => item.value === cpuLanguage.value)) {
+    cpuLanguage.value = cpuLanguages.value[0]?.value || 'auto'
+  }
+})
 const isNanoModel = computed(() => selectedModel.value?.library === 'funasr-nano')
 const isConfuciusModel = computed(() => selectedModel.value?.library === 'confucius-r2t2')
 const confuciusLanguage = ref('auto')
@@ -480,9 +481,10 @@ const loadModels = async () => {
   const rows = selectableAudioModels(responses.flatMap((res) => res.data || []))
   rows.sort((a, b) => asrRank(a.modelKey) - asrRank(b.modelKey))
   modelOptions.value = rows
-  if (modelOptions.value.length && !modelId.value) {
-    const moss = modelOptions.value.find((m) => (m.modelKey || '').includes('moss-transcribe-diarize'))
-    modelId.value = moss?.id || modelOptions.value[0].id
+  if (category.value && !categories.value.includes(category.value)) category.value = ''
+  if (!filteredModels.value.some((m) => m.id === modelId.value)) {
+    const first = filteredModels.value.find((m) => m.runtimeReady !== false) || filteredModels.value[0]
+    modelId.value = first?.id || null
   }
 }
 
@@ -523,6 +525,7 @@ const run = async () => {
     if (isNanoModel.value) fd.append('language', asrLanguage.value)
     if (isConfuciusModel.value) fd.append('language', confuciusLanguage.value)
     if (isMusicModel.value) fd.append('mode', musicMode.value)
+    if (selectedModel.value?.asrCpu) fd.append('language', cpuLanguage.value)
     const res = await modelApi.transcribe(modelId.value, fd)
     result.value = res.data
     await nextTick()

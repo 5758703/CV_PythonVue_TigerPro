@@ -9,6 +9,8 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 class Config:
+    CPU_ASR_THREADS = int(os.getenv('CPU_ASR_THREADS', '4'))
+    CPU_ASR_TIMEOUT_SECONDS = int(os.getenv('CPU_ASR_TIMEOUT_SECONDS', '1800'))
     MOSS_MUSIC_EXECUTABLE = os.getenv('MOSS_MUSIC_EXECUTABLE', '')
     MOSS_MUSIC_THREADS = int(os.getenv('MOSS_MUSIC_THREADS', '4'))
     MOSS_MUSIC_MAX_SECONDS = int(os.getenv('MOSS_MUSIC_MAX_SECONDS', '60'))
