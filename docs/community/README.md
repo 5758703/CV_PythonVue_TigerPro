@@ -24,4 +24,4 @@
 | [边缘 AI 视频分析引擎可行性](../edge-ai-video-pipeline-engine.md) | 拖拽流水线 · ONNX · RTSP · 告警推送 生产方案 |
 | [人脸识别](../face-recognition.md) | InsightFace + YuNet+SFace |
 | [OpenCV Zoo 轻量视觉](../opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet 等 |
-| 更多见根目录 [README 文档表](../../README.md#文档) | |
+| 更多见根目录 [README 文档表](../../README.zh-CN.md#文档) | |

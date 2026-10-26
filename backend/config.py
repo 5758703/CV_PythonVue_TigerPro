@@ -9,6 +9,11 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
 class Config:
+    MOSS_MUSIC_EXECUTABLE = os.getenv('MOSS_MUSIC_EXECUTABLE', '')
+    MOSS_MUSIC_THREADS = int(os.getenv('MOSS_MUSIC_THREADS', '4'))
+    MOSS_MUSIC_MAX_SECONDS = int(os.getenv('MOSS_MUSIC_MAX_SECONDS', '60'))
+    MOSS_MUSIC_MAX_TOKENS = int(os.getenv('MOSS_MUSIC_MAX_TOKENS', '512'))
+    MOSS_MUSIC_TIMEOUT_SECONDS = float(os.getenv('MOSS_MUSIC_TIMEOUT_SECONDS', '1800'))
     CONFUCIUS_R2T2_BACKEND = os.getenv('CONFUCIUS_R2T2_BACKEND', 'official')
     CONFUCIUS_T3PO_BACKEND = os.getenv('CONFUCIUS_T3PO_BACKEND', 'official')
     CONFUCIUS_R2T2_CPU_URL = os.getenv('CONFUCIUS_R2T2_CPU_URL', 'http://127.0.0.1:8273')

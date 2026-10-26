@@ -1,4 +1,3 @@
-
 # CV Python Tigerpro
 
 <p align="center">
@@ -6,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <a href="README.en.md">English</a>
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -15,75 +14,72 @@
   <img src="https://img.shields.io/badge/Vue-3-182A40?labelColor=18A6B2" alt="Vue 3" />
 </p>
 
+A Flask + Vue platform for **multi-task computer vision and speech AI**, with separate portal and admin applications. It brings together RBAC, model management, detection, pose estimation, face and vehicle analysis, OCR, training, testing, and inference.
 
-Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RBAC + 模型管理 + 检测 / 姿态 / 人脸 / 车辆 / OCR 等）。
+**License:** [Apache-2.0](LICENSE) ([Chinese summary](LICENSE.zh-CN.md); the English license governs) · **Repository:** https://github.com/5758703/CV_PythonVue_TigerPro
 
-**许可证：** [Apache-2.0](./LICENSE)（[中文要点译本](./LICENSE.zh-CN.md)，仅供参考，以英文原版为准）· **仓库：** https://github.com/5758703/CV_PythonVue_TigerPro
-
-**导航 / Explore** · [快速开始](#快速开始) · [功能](#功能) · [演示与截图](#演示与截图) · [后端](#后端-backend) · [前端](#前端) · [文档](#文档) · [参与贡献](#参与贡献)
+**Explore** · [Quick start](#quick-start) · [Features](#features) · [Demos](#demos-and-screenshots) · [Backend](#backend) · [Frontends](#frontends) · [Documentation](#documentation) · [Contributing](#contributing)
 
 ---
 
-## 快速开始
+## Quick start
 
 ```text
 backend/                 Flask + SQLAlchemy + JWT + Ultralytics / InsightFace / OCR …
-frontend/frontend_home/  项目门户（Vue3 + Vite）          → http://localhost:5174
-frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://localhost:5173
+frontend/frontend_home/  Project portal (Vue 3 + Vite)             → http://localhost:5174
+frontend/frontend_admin/ Admin console (Vue 3 + Element Plus)     → http://localhost:5173
 ```
 
-1. 后端：见 [`backend/README.md`](./backend/README.md)（推荐 Python 3.12 + `scripts/setup_venv.ps1` / `run_backend.ps1`）
-2. 控制台：`cd frontend/frontend_admin && npm install && npm run dev`（:5173）
-3. 门户：`cd frontend/frontend_home && npm install && npm run dev`（:5174）
-4. 浏览器打开 http://localhost:5174 ，点「进入控制台」；使用首次启动日志中的 `admin` 随机密码，或 `.env` 里的 `INITIAL_ADMIN_PASSWORD`
+1. **Backend:** follow [`backend/README.md`](backend/README.md). Python 3.12 and the `scripts/setup_venv.ps1` / `run_backend.ps1` scripts are recommended.
+2. **Console:** `cd frontend/frontend_admin && npm install && npm run dev` (`:5173`).
+3. **Portal:** `cd frontend/frontend_home && npm install && npm run dev` (`:5174`).
+4. Open http://localhost:5174 and select **Enter Console**. Use the random `admin` password printed on first startup or `INITIAL_ADMIN_PASSWORD` from `.env`.
 
-> 本机请统一使用 **localhost**（勿混用 `127.0.0.1`）。前端总览见 [`frontend/README.md`](./frontend/README.md)。
+> Use **localhost** consistently on your machine; do not mix it with `127.0.0.1`. See [`frontend/README.md`](frontend/README.md) for the frontend overview.
 
-## 功能
+## Features
 
-### 近期新增（重点）
+### Recent additions
 
-| 能力 | 说明 | 入口 / 文档 |
-|------|------|-------------|
-| **开放词汇检测 OmDet-Turbo** | 文本类别列表零样本检测（Swin Tiny）；图像检测页「提示类别」；与固定类 YOLO 并存 | `/ai/image` · 模型键 `omdet-turbo-swin-tiny` |
-| **多模态定位 VLM-FO1** | 自然语言 / REC 细粒度定位；YOLO 候选框 + FO1 筛选；图像检测页提示词 | `/ai/image` · 模型键 `vlm-fo1-3b` |
-| **ASR · MOSS-Transcribe-Diarize** | 多人说话人转写 + 时间戳；音/视频上传；字幕预览与 JSON/SRT/ASS 导出 | `/ai/asr` · 模型键 `moss-transcribe-diarize-0p9b` |
-| **跨镜 MTMC · 证据落库** | 三档门控（确认 / 候选 / 新建）+ Tracklet 证据；会话「证据落库」开关；候选人工晋升/驳回 | `/ai/mtmc` · [文档](docs/mtmc-cross-camera-reid.md) |
-| **跨镜 MTMC 重识别** | 多路共享拉流 → Tracklet → OSNet/CLIP 并联 Youtu → 车辆视觉 ReID+车牌融合 → 全局 ID；监控墙 AI 叠加；McByte++ | `/ai/mtmc` · [文档](docs/mtmc-cross-camera-reid.md) |
-| **跌倒检测** | 姿态四指标；图片 / 视频 / 摄像头；异步标注视频与触发事件；告警规则 + 告警音 | `/ai/fall` · 告警页 `fall_detection` |
-| **手势识别** | MediaPipe 数字手势 + YOLO 中国手语，可多选同跑，视频序列输出 | `/ai/handpose` |
-| **项目门户** | `frontend_home`（:5174）+ 控制台深链；Cookie `tiger_ai_token` 登录态互通 | http://localhost:5174 |
-| **Windows 屏幕 RTSP** | 本机桌面推流接入摄像头管理 / 监控墙，便于无实体摄像头联调 | [操作说明](docs/camera-screen-rtsp.md) |
-| **模型管理独立目录** | 侧栏根级「模型管理」（模型列表 + 模型训练），与「AI智能识别」同级并置顶 | `/ai/model` · `/ai/training` |
-| **生产模型场景（第一阶段）** | 9 个固定模型路由、4 类工作台、动态就绪状态，以及管理端/Open API 同源推理 | `/ai/scenarios` · [调用示例](backend/docs/openapi_examples.md#生产模型场景) |
+| Capability | What it does | Entry / documentation |
+|---|---|---|
+| **OmDet-Turbo open-vocabulary detection** | Zero-shot detection from a text category list (Swin Tiny); prompt categories on the image detection page; works alongside fixed-class YOLO. | `/ai/image` · model key `omdet-turbo-swin-tiny` |
+| **VLM-FO1 multimodal grounding** | Fine-grained natural-language / REC grounding; YOLO proposals filtered by FO1; prompts on the image detection page. | `/ai/image` · model key `vlm-fo1-3b` |
+| **MOSS-Transcribe-Diarize ASR** | Multi-speaker transcription with timestamps, audio/video upload, subtitle preview, and JSON/SRT/ASS export. | `/ai/asr` · model key `moss-transcribe-diarize-0p9b` |
+| **Cross-camera MTMC evidence storage** | Three gates (confirmed / candidate / new), tracklet evidence, an evidence-storage session switch, and manual candidate promotion/rejection. | `/ai/mtmc` · [guide](docs/mtmc-cross-camera-reid.md) |
+| **Cross-camera MTMC re-identification** | Shared multi-stream ingestion → tracklets → OSNet/CLIP in parallel with Youtu → vehicle visual ReID plus plate fusion → global IDs; AI overlay on the monitoring wall; McByte++. | `/ai/mtmc` · [guide](docs/mtmc-cross-camera-reid.md) |
+| **Fall detection** | Four pose measures; image, video, and camera input; async annotated video and trigger events; alert rules and sound. | `/ai/fall` · `fall_detection` alerts |
+| **Gesture recognition** | MediaPipe number gestures and YOLO Chinese sign language, runnable together with video sequence output. | `/ai/handpose` |
+| **Project portal** | `frontend_home` (`:5174`), console deep links, and shared login state through the `tiger_ai_token` cookie. | http://localhost:5174 |
+| **Windows screen RTSP** | Streams the local desktop into camera management and the monitoring wall for testing without a physical camera. | [Instructions](docs/camera-screen-rtsp.md) |
+| **Separate model-management section** | Top-level sidebar section for the model list and training, next to AI recognition. | `/ai/model` · `/ai/training` |
+| **Production model scenarios, phase one** | Nine fixed model routes, four workbench types, dynamic readiness, and inference shared by the admin UI and Open API. | `/ai/scenarios` · [examples](backend/docs/openapi_examples.md#生产模型场景) |
 
-更完整的功能解读见：[平台近期新增功能说明](docs/articles/平台近期新增功能说明.md)。
+For more detail, see the [recent feature overview](docs/articles/平台近期新增功能说明.md).
 
-### 能力总览
+### Capability overview
 
-- 用户注册 / 登录（JWT 认证）
-- RBAC：用户·角色·部门(无限级树)·岗位·菜单/权限
-- 多对多：用户↔角色、用户↔部门、用户↔岗位、角色↔权限、用户↔权限
-- 权限分类：
-  - 功能权限 — 菜单(M目录/C菜单)、按钮(F，前端 `v-permission`)、API 接口(A，后端校验)
-  - 数据权限 — 角色 `data_scope`：1 仅本人 / 2 本部门 / 3 本部门及下级 / 4 全部
-- 视觉：目标检测 / **开放词汇检测（OmDet-Turbo）** / **多模态自然语言定位（VLM-FO1）** / **吸烟与手机使用检测告警** / 姿态 / 分割 / **跌倒检测** / **手势识别（含中国手语）** / **人脸识别（InsightFace + OpenCV YuNet+SFace）** / **行人重识别（Youtu ReID）** / **跨镜 MTMC 重识别（三档门控 + 证据落库 + 候选晋升 + 监控墙 AI 叠加）** / **图像修复（LaMa）** / **表格识别（YOLO+RapidOCR+SLANet）** / **目标追踪（含车辆追踪、人员离岗检测场景；离岗支持多工位与移动镜头运动补偿）** 等
-- 语音：**ASR（funasr / MOSS-Transcribe-Diarize 多人转写）** / TTS
-- OpenCV Zoo 轻量能力：YuNet+SFace、Youtu Person ReID、EfficientSAM、LaMa、MobileNet V2（DNN + ORT 回退）
-- **安防检测模型包（11 个本地 ONNX）**：烟火 / 森林火灾 / 灾害扩展、PPE 与安全帽、跌倒与行为、打架、武器、车牌等，种子分类「安防检测」（`sec-*`），ONNX Runtime CPU 推理，可挂图片/视频/摄像头检测与告警规则
-- **模型权重转换（pt → onnx）**：模型管理支持异步导出（imgsz / dynamic / half），同目录存在 `.onnx` 时检测优先走 ONNX Runtime（`YOLO_PREFER_ONNX=0` 可关闭）；列表支持自定义每页条数（1–200）并本地记忆
-- 摄像头实时检测：支持 **本地摄像头** 与 **网络摄像头（摄像头管理视频流）**；Windows 本机可将 **桌面屏幕 RTSP 推流** 接入监控，见 [`docs/camera-screen-rtsp.md`](docs/camera-screen-rtsp.md)
-- **双前端**：项目门户（宣传 / 深链入口）+ 管理控制台（RBAC 侧栏与 AI 工作台）
+- User registration and sign-in with JWT authentication.
+- RBAC for users, roles, departments (unlimited-depth tree), posts, menus, and permissions.
+- Many-to-many relations among users, roles, departments, posts, and permissions.
+- Functional permissions for menus (`M` directories / `C` pages), buttons (`F`, frontend `v-permission`), and API endpoints (`A`, backend validation). Role `data_scope`: 1 self, 2 department, 3 department and descendants, 4 all data.
+- Vision: object and open-vocabulary detection (OmDet-Turbo), natural-language grounding (VLM-FO1), smoking/phone-use alerts, pose, segmentation, fall and gesture recognition (including Chinese sign language), face recognition (InsightFace + OpenCV YuNet+SFace), person ReID (Youtu), cross-camera MTMC with evidence and candidate promotion, LaMa inpainting, table recognition (YOLO + RapidOCR + SLANet), and tracking for vehicles and absence from workstations with multi-station and moving-camera compensation.
+- Speech: ASR (`funasr` and MOSS-Transcribe-Diarize multi-speaker transcription) and TTS.
+- Lightweight OpenCV Zoo models: YuNet+SFace, Youtu Person ReID, EfficientSAM, LaMa, and MobileNet V2 with DNN / ONNX Runtime fallback.
+- **Security detection pack:** 11 local ONNX models covering smoke and fire, forest fire and disaster extensions, PPE and helmets, falls and actions, fights, weapons, and plates. Seed category `sec-*`; ONNX Runtime CPU inference with image/video/camera input and alert rules.
+- **Weight conversion (`pt → onnx`):** async export from model management (`imgsz`, `dynamic`, `half`). Detection prefers an `.onnx` in the same directory unless `YOLO_PREFER_ONNX=0`; model lists support page sizes 1–200 with local persistence.
+- Live detection with **local or network cameras**; Windows desktop RTSP can feed the monitoring wall. See the [screen RTSP guide](docs/camera-screen-rtsp.md).
+- **Two frontends:** a public portal with deep links and an admin console with RBAC navigation and AI workbenches.
 
-## 演示与截图
+## Demos and screenshots
 
-```
+```text
 backend/                 Flask + Flask-SQLAlchemy + PyMySQL + Flask-Cors + Flask-JWT-Extended
-frontend/frontend_home/  Vue3 + Vite（项目门户）
-frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
+frontend/frontend_home/  Vue 3 + Vite (project portal)
+frontend/frontend_admin/ Vue 3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 ```
 
-### 演示视频 / Video demos
+### Video demos
 
 |  |  |  |
 | :---: | :---: | :---: |
@@ -95,7 +91,7 @@ frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios
 | [▶ 演示 16 / Demo 16](https://github.com/user-attachments/assets/4adb3002-c697-4d0e-a795-89166f1c2734) | [▶ 演示 17 / Demo 17](https://github.com/user-attachments/assets/e50ffe56-197e-476a-a92c-55b5c40db184) | [▶ 演示 18 / Demo 18](https://github.com/user-attachments/assets/43fb406a-1f5b-4f78-a785-bf266aa4f9a0) |
 | [▶ 演示 19 / Demo 19](https://github.com/user-attachments/assets/661d3ead-cb44-447a-8670-419b52612612) | [▶ 演示 20 / Demo 20](https://github.com/user-attachments/assets/0d52f28b-b3e3-4790-9d78-f19ae5618632) | [▶ 演示 21 / Demo 21](https://github.com/user-attachments/assets/bbd6ffcd-348a-4df1-b7b5-587ac6a6f22f) |
 
-### 界面与结果截图 / Screenshots
+### Screenshots
 
 |  |  |  |
 | :---: | :---: | :---: |
@@ -106,74 +102,72 @@ frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios
 | <img src="https://github.com/user-attachments/assets/c94e004a-1b56-489c-b816-8885ec1292c2" alt="demo_result_on_your_image" width="300" /> | <img src="https://github.com/user-attachments/assets/4b54483e-5e5a-422a-92c7-148ca115909f" alt="微信图片_20260718031938_508_226" width="300" /> | <img src="https://github.com/user-attachments/assets/cdcd0c34-a6cd-4363-b771-c8b3fa380758" alt="微信图片_20260717105559_500_226" width="300" /> |
 | <img src="https://github.com/user-attachments/assets/93c3913e-3e10-4c33-8cfa-1658c18f3fe4" alt="微信图片_20260704112908_365_226" width="300" /> | <img src="https://github.com/user-attachments/assets/fb1596b1-02be-4e89-b861-a765aa416d16" alt="微信图片_20260704235432_374_226" width="300" /> |  |
 
-## 默认账号（种子数据自动写入）
+## Default accounts (automatically seeded)
 
-| 账号 | 密码 | 角色 | 数据范围 | 说明 |
-|------|------|------|----------|------|
-| `admin` | `INITIAL_ADMIN_PASSWORD` 或首次启动日志中的随机密码 | 超级管理员(admin) | 全部数据 | 全菜单 + 全部增删改 |
-| `tiger` | `INITIAL_DEMO_PASSWORD` 或首次启动日志中的随机密码 | 普通角色(common) | 本部门(前端组) | 只读，用户列表仅见本部门 |
+| Account | Password | Role | Data scope | Access |
+|---|---|---|---|---|
+| `admin` | `INITIAL_ADMIN_PASSWORD` or the random password in the first startup log | Super admin (`admin`) | All data | All menus and write operations |
+| `tiger` | `INITIAL_DEMO_PASSWORD` or the random password in the first startup log | Common role (`common`) | Own department (frontend group) | Read-only; user list limited to own department |
 
-> 初始化幂等：`sys_user` 无数据时才灌种子（5 部门 / 4 岗位 / 31 菜单 / 2 角色 / 2 用户）；已有数据库的密码保持原值。
+> Seeding is idempotent: only an empty `sys_user` table receives the initial 5 departments, 4 posts, 31 menus, 2 roles, and 2 users. Existing database passwords remain unchanged.
 
-## 数据表
+## Database tables
 
-| 表 | 说明 |
-|----|------|
-| `sys_user` | 用户（主部门 dept_id）|
-| `sys_role` | 角色（data_scope 数据范围）|
-| `sys_dept` | 部门（无限级树，ancestors 祖级链）|
-| `sys_job` | 岗位 |
-| `sys_menu` | 菜单/权限（menu_type M/C/F/A）|
-| `sys_user_role` / `sys_user_dept` / `sys_user_post` | 用户的角色/部门/岗位（多对多）|
-| `sys_role_menu` / `sys_user_menu` | 角色权限 / 用户直接授权（多对多）|
+| Table | Purpose |
+|---|---|
+| `sys_user` | Users, with a primary `dept_id` |
+| `sys_role` | Roles and `data_scope` |
+| `sys_dept` | Department tree and `ancestors` chain |
+| `sys_job` | Posts |
+| `sys_menu` | Menus / permissions (`M/C/F/A`) |
+| `sys_user_role` / `sys_user_dept` / `sys_user_post` | Many-to-many user relationships |
+| `sys_role_menu` / `sys_user_menu` | Role permissions / direct user permissions |
 
-## 后端 backend
+## Backend
 
 ```bash
 conda activate cv_python_tigerpro
 cd backend
 pip install -r requirements.txt
 
-cp .env.example .env      # 编辑 .env 填入 MySQL 账号密码和固定随机 SECRET_KEY
-# MySQL 建库：
+cp .env.example .env      # Set MySQL credentials and a fixed random SECRET_KEY
+# Create the MySQL database:
 #   CREATE DATABASE cv_python_tigerpro DEFAULT CHARSET utf8mb4;
 
-python app.py            # http://127.0.0.1:5001 （启动自动建表 + 灌种子）
+python app.py             # http://127.0.0.1:5001 (creates tables and seeds on startup)
 ```
 
-返回结构统一 `{ code, message, data }`，`code=0` 成功。请求头带 `Authorization: Bearer <token>`。
+Responses use `{ code, message, data }`, with `code=0` for success. Send `Authorization: Bearer <token>` in requests.
 
-接口：
+| Module | Route | Purpose |
+|---|---|---|
+| Auth | `POST /api/auth/login` | Sign in; returns `{token}` |
+| Auth | `POST /api/auth/register` | Register with the common role by default |
+| Auth | `GET /api/auth/info` | Current user, role identifiers, and permission identifiers |
+| Auth | `GET /api/auth/routers` | Menu tree visible to the current user |
+| Auth | `POST /api/auth/logout` | Sign out |
+| Users | `/api/system/user` | GET list (data scope) / POST / PUT / DELETE |
+| Roles | `/api/system/role` | CRUD, menu grants, `data_scope` |
+| Departments | `/api/system/dept` | Tree and CRUD |
+| Posts | `/api/system/job` | CRUD |
+| Menus | `/api/system/menu` | Tree and CRUD |
+| Model scenarios | `/api/ai/model-scenarios` | Phase-one list, detail, and multipart inference |
+| Faces | `/api/ai/face` | Gallery CRUD, enroll, recognize |
+| Person ReID | `/api/ai/reid` | Gallery CRUD, enroll, recognize, search, search-video |
+| Health | `GET /api/health` | Health check |
 
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| 认证 | `POST /api/auth/login` | 登录，返回 `{token}` |
-| 认证 | `POST /api/auth/register` | 注册（默认普通角色）|
-| 认证 | `GET /api/auth/info` | 当前用户 + 角色标识 + 权限标识 |
-| 认证 | `GET /api/auth/routers` | 当前用户可见菜单树（侧栏）|
-| 认证 | `POST /api/auth/logout` | 退出 |
-| 用户 | `/api/system/user` | GET 列表(数据权限) / POST / PUT / DELETE |
-| 角色 | `/api/system/role` | CRUD + 菜单授权 + data_scope |
-| 部门 | `/api/system/dept` | 树 + CRUD |
-| 岗位 | `/api/system/job` | CRUD |
-| 菜单 | `/api/system/menu` | 树 + CRUD |
-| 模型场景 | `/api/ai/model-scenarios` | 第一阶段列表 / 详情 / multipart 推理 |
-| 人脸 | `/api/ai/face` | 底库 CRUD / enroll / recognize |
-| 行人重识别 | `/api/ai/reid` | 底库 CRUD / enroll / recognize / search / search-video |
-| 健康 | `GET /api/health` | 健康检查 |
+The `@permission_required("system:user:add")` decorator checks functional permission; `apply_user_data_scope()` filters by the role's `data_scope`.
 
-功能权限装饰器 `@permission_required("system:user:add")`；数据权限 `apply_user_data_scope()` 按角色 data_scope 过滤。
+## Frontends
 
-## 前端
+The repository has two frontend applications; see the [frontend overview](frontend/README.md).
 
-仓库包含两个前端应用（总览：[`frontend/README.md`](frontend/README.md)）：
+| Directory | Role | Development URL |
+|---|---|---|
+| [`frontend/frontend_home`](frontend/frontend_home) | Public project portal and entry point | http://localhost:5174 |
+| [`frontend/frontend_admin`](frontend/frontend_admin) | Admin console | http://localhost:5173 |
 
-| 目录 | 角色 | 开发地址 |
-|------|------|----------|
-| [`frontend/frontend_home`](frontend/frontend_home) | 项目门户（宣传 / 入口） | http://localhost:5174 |
-| [`frontend/frontend_admin`](frontend/frontend_admin) | 管理控制台 | http://localhost:5173 |
-
-### 门户 frontend_home
+### Portal: `frontend_home`
 
 ```bash
 cd frontend/frontend_home
@@ -181,11 +175,11 @@ npm install
 npm run dev              # http://localhost:5174
 ```
 
-- 公开接口：`/api/portal/summary`、`/api/health`（经 Vite 代理 → `:5001`）
-- CTA 按登录态跳转：已登录直达目标页，未登录走 `/login?redirect=`；本机统一 `localhost`
-- 登录态：控制台写入 `localStorage` + Cookie `tiger_ai_token`，门户跨端口可读
+- Public `/api/portal/summary` and `/api/health` requests use a Vite proxy to `:5001`.
+- Portal calls to action open the target page when signed in; otherwise they use `/login?redirect=`. Use `localhost` consistently.
+- The console writes `localStorage` and the `tiger_ai_token` cookie; the portal can read login state across local ports.
 
-### 控制台 frontend_admin
+### Console: `frontend_admin`
 
 ```bash
 cd frontend/frontend_admin
@@ -193,98 +187,91 @@ npm install
 npm run dev              # http://localhost:5173
 ```
 
-Vite 代理：`/api` → `http://127.0.0.1:5001`。
+Vite proxies `/api` to `http://127.0.0.1:5001`.
 
-- 登录后守卫调 `getInfo`+`getRouters` → 动态侧栏 + 权限标识
-- 按钮级权限：`v-permission="'system:user:add'"`
-- 顶栏「项目门户」跳转 `VITE_PORTAL_URL`（默认 http://localhost:5174）
-- 支持门户深链：`/login?redirect=/ai/fall`
-- 页面：登录、首页、AI 任务页、系统管理（用户/角色/部门/岗位/菜单）
+- After login, guards call `getInfo` and `getRouters` to build RBAC navigation and permission identifiers.
+- Button permissions use `v-permission="'system:user:add'"`.
+- The top-bar **Project Portal** link uses `VITE_PORTAL_URL` (default: http://localhost:5174).
+- Portal deep links are supported, for example `/login?redirect=/ai/fall`.
+- Pages cover login, dashboard, AI tasks, and system management (users, roles, departments, posts, menus).
 
-## 文档
+## Documentation
 
-> 仓库目前仅追踪 `docs/community/` 下的文档；下表其余 `docs/` 链接对应本地资料，远程浏览时可能无法打开。为保留原文件内容，链接仍按原样列出。
+> The repository currently tracks only `docs/community/`. Other `docs/` links below refer to local materials and may not open on GitHub. They remain listed to preserve the original README content.
 
-| 文档 | 说明 |
-|------|------|
-| [投资人讲解文档](docs/investor-pitch.md) | 面向 VC 的全模块定位、市场与路演讲稿 |
-| [部署指南总览](docs/deploy/README.md) | **本地 / Linux / Docker** 完整步骤 |
-| [本地开发部署](docs/deploy/local.md) | Windows / macOS / Linux 本机联调 |
-| [Linux 生产部署](docs/deploy/linux.md) | Ubuntu / Debian / CentOS·RHEL：环境配置与完整操作步骤 |
-| [Docker 部署](docs/deploy/docker.md) | Compose 实验性编排 |
-| [Supervision 使用汇总](docs/supervision-usage.md) | RF-DETR 链路中 `supervision.Detections` / Annotator 触点 |
-| [前端总览](frontend/README.md) | 门户 `frontend_home` + 控制台 `frontend_admin` |
-| [羽毛球分析模块](docs/badminton-analysis.md) | 技术栈、姿态/球模型、球场与网线、HUD、API；含 [§11 Roboflow 导出 YOLO zip 与自训指南](docs/badminton-analysis.md#11-附录roboflow-导出-yolo11--yolov8-zip-与平台自训指南) |
-| [图像/视频分割模块](docs/image-segmentation.md) | 技术栈、依赖、模型权重、API 与使用流程（RF-DETR-Seg / YOLOE 图片视频 / MobileSAM） |
-| [数据标注功能说明](docs/数据标注功能说明.md) | 视频抽帧、Canvas 标注、YOLO 格式、构建训练集、API 与 FAQ |
-| [外接标注工具操作说明](docs/外接标注工具操作说明.md) | X-AnyLabeling / CVAT / Roboflow 小白入门、分步举例与回灌说明 |
-| [姿态估计模型选型说明](docs/姿态估计模型选型说明.md) | 平台 7 款姿态模型对比；含羽毛球页六模型速查 |
-| [数据标注质量检测与格式转换](docs/数据标注质量检测与格式转换.md) | 质量检测指标解读、五类格式转换与训前检查清单 |
-| [TigerAI平台模型框架与类型汇总](docs/TigerAI平台模型框架与类型汇总.md) | 推理框架 / 任务类型 / 种子模型与工作台对照（含配图位） |
-| [人脸识别模块](docs/face-recognition.md) | InsightFace + YuNet+SFace、本地视频、五色关键点、底库与 API |
-| [人脸识别功能汇总](docs/人脸识别功能汇总.md) | 选型对照与本项目落地摘要 |
-| [行人重识别](docs/person-reid.md) | Youtu ReID、独立底库/权限、混合人脸、检测器优先级、API |
-| [跨镜 MTMC 重识别](docs/mtmc-cross-camera-reid.md) | 多路共享拉流、强 ReID 并联、车辆车牌融合、全局 ID、监控墙 AI 叠加 |
-| [EMQX / MQTT 场景分析](docs/emqx-mqtt-usage-scenarios.md) | 对照 Paho Python 官方文档：告警/MTMC/离岗等可落地场景（当前未合入代码） |
-| [边缘 AI 视频分析引擎可行性](docs/edge-ai-video-pipeline-engine.md) | ONNX→拖拽流水线→RTSP→检测/跟踪/VLM/MTMC→告警→MQTT/Webhook；**Phase0–3**；控制台根菜单 **EVA流水编排**（`/ai/pipeline`、指标页） |
-| [平台近期新增功能说明](docs/articles/平台近期新增功能说明.md) | 跨镜 MTMC / 跌倒 / 手势 / 门户 / 屏幕 RTSP / 模型管理目录等近期能力解读 |
-| [Windows 屏幕 RTSP 推流](docs/camera-screen-rtsp.md) | 本机桌面推流接入摄像头管理与监控墙 |
-| [OpenCV Zoo 轻量视觉](docs/opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet / 与人脸·行人索引 |
-| [Open API 调用示例](backend/docs/openapi_examples.md) | 模型场景列表、详情、四类 multipart 推理、就绪字段与错误约定 |
-| [表格识别功能汇总](docs/表格识别功能汇总.md) | YOLO 检表 → RapidOCR → SLANet_plus；模型、API、前端与代码位置 |
-| [目标追踪-场景分类说明](docs/目标追踪-场景分类说明.md) | 通用追踪 / 车辆追踪 / 人员离岗三场景架构、权限路由与扩展方式 |
-| [人员离岗检测-功能说明](docs/人员离岗检测-功能说明.md) | 多工位离岗规则、镜头运动补偿（移动镜头工位锚定）、API 与验收 |
-| [车辆追踪-技术说明与操作手册](docs/车辆追踪-技术说明与操作手册.md) | 车牌 OCR、测速、拥堵、运动轨迹与过车记录 |
-| [检测告警模块](docs/detection-alerts.md) | P0 烟火/聚集 + P1 PPE未戴帽/越线入侵、规则引擎与事件 |
-| [P2 监控墙与陌生人脸告警](docs/p2-监控墙与陌生人脸告警.md) | RTSP 监控墙 7×24、陌生人脸告警使用与实现 |
-| [烟火与人员聚集告警功能汇总](docs/烟火与人员聚集告警功能汇总.md) | 框架与检测模型配合、规则阈值、叠加/事件实践、配图占位 |
-| [越线入侵告警功能汇总](docs/越线入侵告警功能汇总.md) | 越线几何原理、规则引擎、追踪页画线使用与配置排查 |
+| Guide | Scope |
+|---|---|
+| [Investor pitch](docs/investor-pitch.md) | Full module positioning, market, and pitch script for VCs |
+| [Deployment overview](docs/deploy/README.md) | Local, Linux, and experimental Docker paths |
+| [Local development](docs/deploy/local.md) | Windows, macOS, and Linux setup |
+| [Linux production](docs/deploy/linux.md) | Ubuntu / Debian / CentOS / RHEL setup and operations |
+| [Docker deployment](docs/deploy/docker.md) | Experimental Compose setup |
+| [Supervision usage](docs/supervision-usage.md) | `supervision.Detections` and Annotator in the RF-DETR path |
+| [Frontend overview](frontend/README.md) | Portal and admin console |
+| [Badminton analysis](docs/badminton-analysis.md) | Stack, pose/ball models, court/net, HUD, API, and [§11 Roboflow export/training guide](docs/badminton-analysis.md#11-附录roboflow-导出-yolo11--yolov8-zip-与平台自训指南) |
+| [Image/video segmentation](docs/image-segmentation.md) | RF-DETR-Seg, YOLOE, MobileSAM, weights, API, and workflow |
+| [Data annotation](docs/数据标注功能说明.md) | Video frames, Canvas labels, YOLO datasets, APIs, and FAQ |
+| [External annotation tools](docs/外接标注工具操作说明.md) | X-AnyLabeling, CVAT, Roboflow, and dataset import |
+| [Pose model selection](docs/姿态估计模型选型说明.md) | Seven pose models and a badminton quick reference |
+| [Annotation quality and conversion](docs/数据标注质量检测与格式转换.md) | Metrics, five format conversions, and pretraining checks |
+| [Tiger AI model frameworks and types](docs/TigerAI平台模型框架与类型汇总.md) | Inference frameworks, task types, seed models, and workbenches |
+| [Face recognition](docs/face-recognition.md) | InsightFace, YuNet+SFace, video, landmarks, gallery, API |
+| [Face recognition overview](docs/人脸识别功能汇总.md) | Model selection and implementation summary |
+| [Person ReID](docs/person-reid.md) | Youtu ReID, gallery, permissions, face fusion, detector priority, API |
+| [Cross-camera MTMC](docs/mtmc-cross-camera-reid.md) | Shared streams, ReID, vehicle/plate fusion, global IDs, monitoring overlay |
+| [EMQX / MQTT scenarios](docs/emqx-mqtt-usage-scenarios.md) | Potential alert, MTMC, and absence uses; not yet merged |
+| [Edge AI pipeline feasibility](docs/edge-ai-video-pipeline-engine.md) | ONNX, visual pipeline, RTSP, detection, VLM, MTMC, alerts, MQTT/Webhook, phases 0–3 |
+| [Recent feature overview](docs/articles/平台近期新增功能说明.md) | MTMC, falls, gestures, portal, RTSP, and model management |
+| [Windows screen RTSP](docs/camera-screen-rtsp.md) | Desktop streaming into camera management and monitoring |
+| [OpenCV Zoo models](docs/opencv-zoo-models.md) | EfficientSAM, LaMa, MobileNet, face/person index |
+| [Open API examples](backend/docs/openapi_examples.md) | Scenario list/detail, multipart inference, readiness, errors |
+| [Table recognition](docs/表格识别功能汇总.md) | YOLO detection, RapidOCR, SLANet_plus, model/API/UI/code |
+| [Tracking scenario classification](docs/目标追踪-场景分类说明.md) | General, vehicle, and absence tracking architecture |
+| [Absence detection](docs/人员离岗检测-功能说明.md) | Multi-station rules, camera motion compensation, API, acceptance |
+| [Vehicle tracking](docs/车辆追踪-技术说明与操作手册.md) | Plate OCR, speed, congestion, trajectories, passage records |
+| [Detection alerts](docs/detection-alerts.md) | Smoke/fire/crowd and PPE/line-crossing rules and events |
+| [Monitoring wall and unknown-face alerts](docs/p2-监控墙与陌生人脸告警.md) | 24/7 RTSP wall and unknown-face alert workflow |
+| [Smoke/fire and crowd alerts](docs/烟火与人员聚集告警功能汇总.md) | Models, thresholds, overlays, events, image placeholders |
+| [Line crossing alerts](docs/越线入侵告警功能汇总.md) | Geometry, rule engine, tracking UI, configuration |
 
-> 文档内保留 **实测截图占位**，可在 `docs/images/` 下按章节补充项目截图后替换。
+> Some documentation retains **measured screenshot placeholders**. Add chapter screenshots under `docs/images/` before replacing them.
 
-## 启动顺序
+## Startup order
 
-1. 启动 MySQL，建库 `cv_python_tigerpro`
-2. 后端 `python app.py`（:5001，自动建表+种子）
-3. 控制台 `cd frontend/frontend_admin && npm run dev` → http://localhost:5173
-4. 门户 `cd frontend/frontend_home && npm run dev` → http://localhost:5174  
-   打开门户后点「进入控制台」，用 `admin` 和首次初始化密码登录
+1. Start MySQL and create `cv_python_tigerpro`.
+2. Start the backend with `python app.py` (`:5001`; creates tables and seeds data).
+3. Start the console: `cd frontend/frontend_admin && npm run dev` → http://localhost:5173.
+4. Start the portal: `cd frontend/frontend_home && npm run dev` → http://localhost:5174. Open the portal, choose **Enter Console**, and sign in with `admin` and the initial password.
 
 |  |  |  |
 | :---: | :---: | :---: |
 | <img src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" alt="744ec6c19b3817d1e7c1efe5d66124e7" width="300" /> | <img src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" alt="243ec0a85149c5fc2c79168466bfd19d" width="300" /> | <img src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" alt="a894ca39be5586d2f9bcc7a587404d4d" width="300" /> |
 
-## 参与贡献
+## Contributing
 
-GitHub 是任务与决策的最终记录场所。统一流程：
+GitHub is the final record for project work and decisions. The workflow is:
 
-**Discussion → Issue（含验收标准）→ 认领 → PR → 评审 → Squash 合并 → CHANGELOG / 发版**
+**Discussion → Issue (with acceptance criteria) → Claim → PR → Review → Squash merge → CHANGELOG / release**
 
-| 文档 | 说明 |
-|------|------|
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
-| [部署指南](./docs/deploy/README.md) | 本地 / Linux / Docker 详细步骤 |
-| [GOVERNANCE.md](./GOVERNANCE.md) | 角色、权限、晋升与决策 |
-| [ROADMAP.md](./ROADMAP.md) | 版本规划 |
-| [SECURITY.md](./SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
-| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 行为准则 |
-| [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 依赖与模型许可证 |
-| [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
-| [新手任务（8 条）](./docs/community/good-first-issues.md) | good-first-issue 文案 |
-| [社区索引](./docs/community/README.md) | 文档导航 |
-
----
+| Document | Purpose |
+|---|---|
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, conventions, branches, PRs |
+| [Deployment guide](docs/deploy/README.md) | Local, Linux, Docker |
+| [GOVERNANCE.md](GOVERNANCE.md) | Roles, permissions, promotion, decisions |
+| [ROADMAP.md](ROADMAP.md) | Version planning |
+| [SECURITY.md](SECURITY.md) | **Report security issues privately, not through public issues** |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Conduct standards |
+| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | Dependencies and model licenses |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [Eight good-first-issues](docs/community/good-first-issues.md) | Beginner-friendly tasks |
+| [Community index](docs/community/README.md) | Community documentation |
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=5758703/CV_PythonVue_TigerPro&type=Date)](https://star-history.com/#5758703/CV_PythonVue_TigerPro&Date)
 
-
-
-
-开源不易，接收赞赏
+Open source takes time and care. Donations are welcome.
 
 |  |  |
 | :---: | :---: |
 | <img src="https://github.com/user-attachments/assets/797c35ba-a7fd-434f-841e-4de19fac4f1a" alt="f0afa6f30ce5b11d3bc0b17c42ab5c9a" width="160" /> | <img src="https://github.com/user-attachments/assets/077e8228-f416-4d44-8c47-c6976788af07" alt="5ea44947061de1d34f2c713fb8ce5ce8" width="160" /> |
-

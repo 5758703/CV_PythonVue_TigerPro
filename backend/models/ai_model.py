@@ -66,6 +66,16 @@ class AiModel(db.Model):
         if (self.task or "") == "text-to-speech":
             result["ttsClone"] = lib in TTS_CLONE_LIBS
             result["ttsCloneRequired"] = lib in TTS_CLONE_REQUIRED_LIBS
+        if lib == 'moss-music-gguf':
+            from flask import current_app, has_app_context
+            from pathlib import Path
+            from services.moss_music import runtime_status
+            from services.model_paths import resolve_managed_model_path
+            root = (current_app.config.get('UPLOAD_FOLDER') or
+                    str(Path(current_app.config['MODEL_FOLDER']).parent)) if has_app_context() else str(
+                        Path(__file__).resolve().parents[1] / 'uploads')
+            path = resolve_managed_model_path(root, self.file_path) if self.file_path else None
+            result.update(runtime_status(path))
         if lib in ("confucius-r2t2", "confucius-t3po"):
             from flask import has_app_context
             from services.confucius import inference_backend

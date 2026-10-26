@@ -112,7 +112,7 @@ def list_model_options():
         AiModel.status == "0",
         db.or_(
             db.and_(AiModel.file_path.isnot(None), AiModel.file_path != ""),
-            AiModel.library.in_(("confucius-r2t2", "confucius-t3po")),
+            AiModel.library.in_(("confucius-r2t2", "confucius-t3po", "moss-music-gguf")),
         ),
     )
     if task:
@@ -770,7 +770,7 @@ def _looks_like_diffusers_lora_dir(path):
 
 _DIR_WEIGHT_LIBS = frozenset({
     "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano",
-    "vibevoice", "voxcpm", "neutts", "vlm-fo1",
+    "vibevoice", "voxcpm", "neutts", "vlm-fo1", "moss-music-gguf",
 })
 
 
@@ -1159,7 +1159,11 @@ def fetch_weight(mid):
     sub = secure_filename(m.model_key or f"model{m.id}")
     folder = os.path.join(current_app.config["MODEL_FOLDER"], sub)
     try:
-        if lib in ("opencv-sam", "efficientsam", "efficient-sam"):
+        if lib == 'moss-music-gguf':
+            from services.moss_music import download_weights
+            size = download_weights(folder, token=current_app.config.get('HF_TOKEN'))
+            rel = f'models/{sub}'
+        elif lib in ("opencv-sam", "efficientsam", "efficient-sam"):
             rel, size = _fetch_efficient_sam_weight(folder, sub)
         elif lib in ("opencv-lama", "lama", "inpainting", "opencv-inpaint"):
             rel, size = _fetch_lama_weight(folder, sub)
@@ -1386,8 +1390,15 @@ def ocr_paddle_route():
 def transcribe_route(mid):
     """语音识别：上传音频或视频 →（视频则 ffmpeg 抽音）→ 转写。"""
     m = AiModel.query.get_or_404(mid)
+    if m.status != '0':
+        return jsonify(code=400, message='模型已停用'), 400
     path = _abs_model_path(m)
-    if m.library == 'confucius-r2t2':
+    if m.library == 'moss-music-gguf':
+        from services.moss_music import runtime_status
+        state = runtime_status(path)
+        if not state['runtimeReady']:
+            return jsonify(code=400, message=state['runtimeMessage']), 400
+    elif m.library == 'confucius-r2t2':
         from services.confucius import service_configuration
         _, reason = service_configuration(m.library)
         if m.status != '0' or reason:
@@ -1405,7 +1416,7 @@ def transcribe_route(mid):
 
     audio_folder = current_app.config["AUDIO_FOLDER"]
     _ensure_dir(audio_folder)
-    ts = int(time.time())
+    ts = uuid.uuid4().hex
     base = secure_filename(os.path.splitext(file.filename)[0]) or "media"
     media_path = os.path.join(audio_folder, f"{base}_{ts}{ext}")
     file.save(media_path)
@@ -1419,7 +1430,10 @@ def transcribe_route(mid):
             extract_audio_wav(media_path, extracted_wav)
             audio_path = extracted_wav
 
-        if m.library == 'confucius-r2t2':
+        if m.library == 'moss-music-gguf':
+            from services.moss_music import analyze
+            result = analyze(audio_path, model_dir=path, mode=request.form.get('mode') or 'lyrics')
+        elif m.library == 'confucius-r2t2':
             from services.confucius import transcribe
             result = transcribe(audio_path, language=request.form.get('language') or 'auto')
         elif (m.library or "") == "funasr-onnx":

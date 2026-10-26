@@ -246,6 +246,7 @@
         <el-form-item label="推理库" prop="library">
           <el-select v-model="form.library" style="width: 100%" @change="onLibChange">
             <el-option label="Confucius4-R2T2（独立语音服务）" value="confucius-r2t2" />
+            <el-option label="MOSS-Music GGUF（音乐理解 / 歌词）" value="moss-music-gguf" />
             <el-option label="Confucius4-T3PO（独立翻译服务）" value="confucius-t3po" />
             <el-option label="ultralytics（YOLO 单文件权重）" value="ultralytics" />
             <el-option label="yolo-master（Tencent YOLO-Master）" value="yolo-master" />
@@ -296,6 +297,7 @@
             <el-option label="命名实体识别 token-classification" value="token-classification" />
             <el-option label="问答 question-answering" value="question-answering" />
             <el-option label="语音识别 automatic-speech-recognition" value="automatic-speech-recognition" />
+            <el-option label="音乐理解 audio-text-to-text" value="audio-text-to-text" />
             <el-option label="语音合成 text-to-speech" value="text-to-speech" />
             <el-option label="数字人 talking-head" value="talking-head" />
           </el-select>
@@ -424,6 +426,7 @@ const HUB_META = {
 const hubMeta = (h) => HUB_META[h] || HUB_META.other;
 
 const DIR_WEIGHT_LIBS = new Set([
+  'moss-music-gguf',
   "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts",
 ]);
 const isDirWeightLib = (lib) => DIR_WEIGHT_LIBS.has((lib || "").toLowerCase());
@@ -450,6 +453,7 @@ const emptyForm = () => ({
 
 // 切库时给个合理的默认任务
 const TASK_LABELS = {
+  'audio-text-to-text': '音乐理解 / 歌词',
   "object-detection": "目标检测",
   "instance-segmentation": "实例分割",
   "interactive-segmentation": "交互分割",
@@ -479,6 +483,7 @@ const taskLabel = (t) => TASK_LABELS[t] || t || "目标检测";
 const taskTagType = (t) => (t === "text-classification" ? "warning" : t === "image-classification" ? "success" : "");
 
 const LIB_DEFAULT_TASK = {
+  'moss-music-gguf': 'audio-text-to-text',
   'confucius-r2t2': 'automatic-speech-recognition',
   'confucius-t3po': 'translation',
   ultralytics: "object-detection",
@@ -923,6 +928,7 @@ const TASK_PAGE = {
   obb: { path: "/ai/image", label: "图像检测" },
   "image-classification": { path: "/ai/imgcls", label: "图像分类" },
   "automatic-speech-recognition": { path: "/ai/asr", label: "语音识别" },
+  'audio-text-to-text': { path: '/ai/asr', label: '音乐理解 / 歌词' },
   "text-to-speech": { path: "/ai/tts", label: "文本转语音" },
   "talking-head": { path: "/ai/talker", label: "数字人合成" },
   "ocr": { path: "/ai/ocr", label: "文字识别" },

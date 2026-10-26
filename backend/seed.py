@@ -1511,6 +1511,8 @@ def seed_ai_models():
         description="给定上下文回答问题(抽取式)。智能问答页使用。", status="0",
     ))
     # 语音识别（funasr SenseVoice，ModelScope 原生来源，验证 ModelScope 下载源）
+    from services.moss_music import MODEL_KEY as music_key, MODEL_FIELDS as music_fields
+    created |= _ensure_ai_model(music_key, music_fields)
     created |= _ensure_ai_model("sensevoice-small", dict(
         model_name="SenseVoice 语音识别", category="语音识别",
         task="automatic-speech-recognition", library="funasr", version="v1",

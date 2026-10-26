@@ -34,7 +34,7 @@
         <el-card shadow="never" class="side-card">
           <div class="step-title"><span class="step-num">2</span>识别设置</div>
           <el-form label-position="top" class="settings-form">
-            <el-form-item label="语音模型">
+            <el-form-item label="语音 / 音乐模型">
               <el-select v-model="modelId" placeholder="选择模型" style="width: 100%">
                 <el-option
                   v-for="m in filteredModels"
@@ -44,6 +44,20 @@
                 />
               </el-select>
             </el-form-item>
+            <template v-if="isMusicModel">
+              <el-alert type="info" :closable="false" class="mb8"
+                :title="`音乐理解与歌词转写；CPU 建议先试 10–30 秒，当前上限 ${selectedModel?.maxAudioSeconds || 60} 秒。输出不含字幕时间戳。`" />
+              <el-alert v-if="selectedModel?.runtimeReady === false" type="warning" :closable="false"
+                :title="selectedModel.runtimeMessage" class="mb8" />
+              <el-form-item label="音乐任务">
+                <el-select v-model="musicMode" style="width: 100%">
+                  <el-option label="歌词转写" value="lyrics" />
+                  <el-option label="音乐描述（曲风 / 乐器 / 人声）" value="prose" />
+                  <el-option label="结构化音乐描述" value="mm3" />
+                </el-select>
+              </el-form-item>
+              <el-button link type="primary" @click="loadModels">刷新模型状态</el-button>
+            </template>
             <el-form-item label="模型分类">
               <el-select v-model="category" placeholder="全部分类" clearable style="width: 100%" @change="onCategoryChange">
                 <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
@@ -87,7 +101,7 @@
             class="run-btn"
             :icon="MagicStick"
             :loading="running"
-            :disabled="!modelId || !file"
+            :disabled="!modelId || !file || selectedModel?.runtimeReady === false"
             @click="run"
           >
             开始识别
@@ -129,7 +143,7 @@
 
           <el-card shadow="never" class="subtitle-card">
             <template #header>
-              <span>字幕预览</span>
+              <span>{{ isMusicModel ? '音乐分析结果' : '字幕预览' }}</span>
               <div class="header-actions">
                 <el-tag v-if="speakerCount && diarize" size="small" type="success" effect="plain">说话人 {{ speakerCount }}</el-tag>
                 <el-tag v-if="displaySegments.length" size="small" type="info" effect="plain">{{ displaySegments.length }} 段</el-tag>
@@ -206,7 +220,7 @@
         <el-card shadow="never" class="export-card">
           <div class="step-title"><span class="step-num">3</span>导出字幕文件</div>
           <div class="export-row">
-            <el-button class="exp-json" :disabled="!canExport" @click="exportJson">
+            <el-button class="exp-json" :disabled="!result?.text" @click="exportJson">
               <span class="exp-ico">{ }</span> JSON
             </el-button>
             <el-button class="exp-srt" :disabled="!canExport" @click="exportSrt">
@@ -233,6 +247,7 @@ import {
 
 import { modelApi } from '../../../api/ai'
 import { useInferProgress } from '../../../composables/useInferProgress'
+import { selectableAudioModels, hasSubtitleTimestamps } from '../../../utils/asrModels'
 
 const AUDIO_EXTS = new Set(['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac'])
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'])
@@ -298,14 +313,17 @@ const fmtAssTime = (s) => {
 }
 
 const selectedModel = computed(() => modelOptions.value.find((m) => m.id === modelId.value) || null)
+const isMusicModel = computed(() => selectedModel.value?.library === 'moss-music-gguf')
+const musicMode = ref('lyrics')
 const isNanoModel = computed(() => selectedModel.value?.library === 'funasr-nano')
 const isConfuciusModel = computed(() => selectedModel.value?.library === 'confucius-r2t2')
 const confuciusLanguage = ref('auto')
 const isMossModel = computed(() => (selectedModel.value?.modelKey || '').includes('moss-transcribe-diarize'))
 
 watch(isMossModel, (v) => {
-  if (v) diarize.value = true
-})
+  diarize.value = v
+}, { immediate: true })
+watch([modelId, musicMode], () => { result.value = null })
 
 const filterList = computed(() =>
   filterWords.value.split(/[,，、\s]+/).map((w) => w.trim()).filter(Boolean)
@@ -321,6 +339,7 @@ const applyFilter = (text) => {
 }
 
 const rawSegments = computed(() => {
+  if (!hasSubtitleTimestamps(result.value)) return []
   const segs = result.value?.segments
   if (Array.isArray(segs) && segs.length) {
     return segs.map((s) => ({
@@ -453,12 +472,12 @@ const onTimelineClick = (e) => {
   seekTo(t)
 }
 
-const ASR_LIBS = new Set(['funasr', 'funasr-onnx', 'funasr-nano', 'transformers', 'confucius-r2t2'])
 const loadModels = async () => {
-  const res = await modelApi.options({ task: 'automatic-speech-recognition' })
-  const rows = (res.data || []).filter(
-    (m) => ASR_LIBS.has(m.library) && (m.filePath || m.library === 'confucius-r2t2') && m.status === '0'
-  )
+  const responses = await Promise.all([
+    modelApi.options({ task: 'automatic-speech-recognition' }),
+    modelApi.options({ task: 'audio-text-to-text' }),
+  ])
+  const rows = selectableAudioModels(responses.flatMap((res) => res.data || []))
   rows.sort((a, b) => asrRank(a.modelKey) - asrRank(b.modelKey))
   modelOptions.value = rows
   if (modelOptions.value.length && !modelId.value) {
@@ -496,12 +515,14 @@ const clearMedia = (resetResult = true) => {
 }
 
 const run = async () => {
+  if (!modelId.value || !file.value || selectedModel.value?.runtimeReady === false) return
   start()
   try {
     const fd = new FormData()
     fd.append('file', file.value)
     if (isNanoModel.value) fd.append('language', asrLanguage.value)
     if (isConfuciusModel.value) fd.append('language', confuciusLanguage.value)
+    if (isMusicModel.value) fd.append('mode', musicMode.value)
     const res = await modelApi.transcribe(modelId.value, fd)
     result.value = res.data
     await nextTick()

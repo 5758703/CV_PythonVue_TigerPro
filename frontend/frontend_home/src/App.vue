@@ -535,8 +535,10 @@ onUnmounted(() => {
           </a>
         </div>
       </section>
+    </div>
 
-      <footer>
+    <footer>
+      <div class="container footer-inner">
         <p>Tiger AI Platform · 多任务 AI 模型管理与测试平台</p>
         <p>
           <CircleDot :size="14" fill="currentColor" :class="{ offline: !backendOnline }" />
@@ -545,7 +547,7 @@ onUnmounted(() => {
             · OpenAPI uptime {{ Math.round(openApiMeta.uptimeSec) }}s
           </template>
         </p>
-      </footer>
-    </div>
+      </div>
+    </footer>
   </main>
 </template>

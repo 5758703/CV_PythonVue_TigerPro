@@ -13,6 +13,13 @@ const PAGE_TIPS = {
 
 /** @type {Record<string, object>} */
 const EXACT = {
+  'moss-music-8b-instruct-gguf': {
+    summary: 'MOSS-Music 8B Instruct GGUF：音乐理解、歌词转写与曲风/乐器/人声分析。',
+    scenarios: ['带伴奏歌曲的歌词转写', '音乐素材描述', '曲风与配器分析'],
+    effects: ['输出歌词或音乐描述文本', '支持结构化音乐描述'],
+    tips: ['需配套 HOT-Step ace-caption 引擎', 'Q8 语言模型与 FP16 音频编码器共约 10.43GB，建议 32GB 内存',
+      '普通语音转文字优先 SenseVoice ONNX / Paraformer', '当前接入不输出时间戳；BPM/调性需专门分析工具复核'],
+  },
   'yolo26n': {
     summary: 'Ultralytics YOLO26 Nano：COCO 80 类通用目标检测，体量小、推理快，是平台默认通用检测基线之一。',
     scenarios: ['安防巡检原型', '人车基础盘点', '课堂/实验室演示', '实时摄像头预览'],
