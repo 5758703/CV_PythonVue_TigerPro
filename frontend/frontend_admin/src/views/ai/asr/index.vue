@@ -155,13 +155,15 @@
 
           <el-card shadow="never" class="subtitle-card">
             <template #header>
-              <span>{{ isMusicModel ? '音乐分析结果' : '字幕预览' }}</span>
+              <span>{{ isMusicModel ? '音乐分析结果' : result?.timestampsAvailable === false ? '识别文字' : '字幕预览' }}</span>
               <div class="header-actions">
                 <el-tag v-if="speakerCount && diarize" size="small" type="success" effect="plain">说话人 {{ speakerCount }}</el-tag>
                 <el-tag v-if="displaySegments.length" size="small" type="info" effect="plain">{{ displaySegments.length }} 段</el-tag>
                 <el-button v-if="displaySegments.length" link type="primary" :icon="CopyDocument" @click="copySegments">复制</el-button>
               </div>
             </template>
+            <el-alert v-if="!running && resultNotice" :title="resultNotice"
+              :type="result?.text?.trim() ? 'info' : 'warning'" :closable="false" show-icon class="mb8" />
             <div v-if="running" class="progress-box">
               <div class="progress-title">识别中… 预计剩余 {{ etaText }}</div>
               <el-progress :percentage="percent" :stroke-width="14" :text-inside="true" />
@@ -184,7 +186,7 @@
               </div>
             </div>
             <div v-else-if="result?.text" class="plain-text">{{ result.text }}</div>
-            <el-empty v-else description="识别结果将显示在这里" :image-size="72" />
+            <el-empty v-else-if="!result" description="识别结果将显示在这里" :image-size="72" />
           </el-card>
         </div>
 
@@ -259,7 +261,7 @@ import {
 
 import { modelApi } from '../../../api/ai'
 import { useInferProgress } from '../../../composables/useInferProgress'
-import { selectableAudioModels, hasSubtitleTimestamps, fmtSrtTime, fmtAssTime } from '../../../utils/asrModels'
+import { selectableAudioModels, hasSubtitleTimestamps, fmtSrtTime, fmtAssTime, asrResultNotice } from '../../../utils/asrModels'
 
 const AUDIO_EXTS = new Set(['.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aac'])
 const VIDEO_EXTS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'])
@@ -273,6 +275,7 @@ const mediaSrc = ref('')
 const mediaInfo = ref(null)
 const isVideo = ref(false)
 const result = ref(null)
+const resultNotice = computed(() => asrResultNotice(result.value))
 const asrLanguage = ref('auto')
 const diarize = ref(true)
 const filterWords = ref('')

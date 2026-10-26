@@ -15,6 +15,15 @@ export function hasSubtitleTimestamps(result) {
   return !!result && result.timestampsAvailable !== false
 }
 
+export function asrResultNotice(result) {
+  if (!result) return ''
+  if (!String(result.text || '').trim()) {
+    return result.recognitionMessage || '未识别到文字。请确认录音中有人声且音量清晰，并使用模型支持的语言。'
+  }
+  return result.timestampsAvailable === false
+    ? '识别完成；当前结果仅包含文字，没有可用的字幕时间戳。可复制全文或导出 JSON。' : ''
+}
+
 function subtitleClock(seconds, scale) {
   const value = Number(seconds)
   const total = Number.isFinite(value) ? Math.round(Math.max(0, value) * scale) : 0
