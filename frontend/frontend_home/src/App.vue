@@ -1,8 +1,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
-  Activity, ArrowRight, Boxes, BrainCircuit, CheckCircle2, ChevronRight, CircleDot,
-  Database, Dumbbell, ExternalLink, FolderKanban, GitBranch, Hand, BookOpen, Mic, Play,
+  Activity, ArrowRight, AudioLines, Boxes, BrainCircuit, CheckCircle2, ChevronRight, CircleDot,
+  Cpu, Database, Dumbbell, ExternalLink, FolderKanban, GitBranch, BookOpen, Mic, Play,
   ScanFace, ScanLine, ShieldCheck, Sparkles, Stethoscope, TrendingUp, Users, Workflow,
 } from 'lucide-vue-next'
 
@@ -135,55 +135,55 @@ const steps = [
 
 const recentUpdates = [
   {
-    date: '2026-09',
-    title: 'RADAR 腹部 CT 诊断',
-    detail: '接入阿里达摩院 RADAR：NIfTI 上传、多 finding 筛查、DeepSeek 报告，独立页与场景工作台双入口。',
-    path: '/ai/radar',
-    tone: 'cyan',
+    date: '2026-10',
+    title: 'CPU 语音识别 6 类 8 模型',
+    detail: 'Paraformer、Zipformer、faster-whisper、Parakeet、Moonshine 三规格与 Qwen3-ASR 同页可选；就绪提示、语言范围与字幕导出。',
+    path: '/ai/asr',
+    tone: 'red',
   },
   {
-    date: '2026-09',
-    title: '深蹲计数工作台',
-    detail: '姿态估计驱动单人深蹲计数，支持视频与本地/网络摄像头实时会话与叠加显示。',
-    path: '/ai/scenarios/squat-counting',
-    tone: 'orange',
-  },
-  {
-    date: '2026-09',
-    title: '生产场景扩展至 91',
-    detail: '模型场景目录与生产工作台扩容，覆盖检测、分割、姿态、ReID、OCR、医学影像等分组。',
-    path: '/ai/scenarios',
+    date: '2026-10',
+    title: '跨镜外观 C++ 运行时',
+    detail: '行人 Strong/Youtu 与车辆 ONNX 特征均可走 C++17 + ONNX Runtime；短时 ByteTrack，长时独立 ReID。',
+    path: '/ai/mtmc',
     tone: 'blue',
   },
   {
-    date: '2026-09',
-    title: '训练数据增强超参',
-    detail: '训练页支持标准 / 增强模式：mosaic、mixup、旋转、HSV 等 Ultralytics 安全超参可调。',
-    path: '/ai/training',
-    tone: 'green',
+    date: '2026-10',
+    title: 'NeuTTS Air 音色克隆',
+    detail: '英文即时音色克隆接入文本转语音页；参考音频 + 参考文本生成目标语音。',
+    path: '/ai/tts',
+    tone: 'pink',
+  },
+  {
+    date: '2026-10',
+    title: 'Confucius R2T2 / T3PO',
+    detail: '独立语音转写与翻译服务完成 CPU 推理适配，可在模型管理与 ASR/翻译场景选用。',
+    path: '/ai/model',
+    tone: 'orange',
   },
 ]
 
 const scenarios = [
+  { title: 'CPU 语音识别', description: '6 类 8 模型同页可选：中文、多语种、欧洲语言、英文流式与方言入口，支持字幕导出。', tag: '语音识别', tagTone: 'red', icon: Mic, path: '/ai/asr' },
+  { title: '跨镜重识别', description: 'ByteTrack 短时跟踪 + C++ 外观特征；三档门控、证据落库与监控墙叠加。', tag: '跨镜追踪', tagTone: 'blue', icon: Cpu, path: '/ai/mtmc' },
+  { title: '音色克隆 TTS', description: 'NeuTTS Air 英文即时克隆：参考音频与参考文本生成目标语音。', tag: '语音合成', tagTone: 'pink', icon: AudioLines, path: '/ai/tts' },
   { title: '腹部 CT 诊断', description: '达摩院 RADAR：腹部增强 CT 多 finding 辅助筛查，支持报告与案例库。', tag: '医学影像', tagTone: 'cyan', icon: Stethoscope, path: '/ai/radar' },
   { title: '深蹲计数', description: 'YOLO / RTMPose 姿态驱动计数，视频回放与实时摄像头会话均可。', tag: '运动健身', tagTone: 'orange', icon: Dumbbell, path: '/ai/scenarios/squat-counting' },
   { title: '生产模型场景', description: '91 个生产场景目录：统一合同、就绪探测、Open API 与专用工作台。', tag: '场景目录', tagTone: 'blue', icon: Boxes, path: '/ai/scenarios' },
   { title: '开放词汇检测', description: 'OmDet-Turbo：输入类别列表做零样本检测，与固定类 YOLO 并存。', tag: '开放词汇', tagTone: 'blue', icon: Sparkles, path: '/ai/image' },
   { title: '多模态定位', description: 'VLM-FO1：自然语言 / REC 细粒度定位，YOLO 候选 + FO1 筛选。', tag: '多模态', tagTone: 'pink', icon: BrainCircuit, path: '/ai/image' },
-  { title: '跨镜重识别', description: '三档门控 + 证据落库 + 候选晋升，多路全局 ID 与监控墙叠加。', tag: '跨镜追踪', tagTone: 'blue', icon: Workflow, path: '/ai/mtmc' },
-  { title: '语音转写 ASR', description: 'MOSS 多人说话人转写与时间戳，支持音视频与字幕导出。', tag: '语音识别', tagTone: 'red', icon: Mic, path: '/ai/asr' },
   { title: '跌倒检测', description: '姿态四指标判定，支持图片、视频与实时摄像头。', tag: '安全监测', tagTone: 'red', icon: ShieldCheck, path: '/ai/fall' },
-  { title: '手势识别', description: '数字手势与中国手语识别，支持多视角输入。', tag: '姿态识别', tagTone: 'pink', icon: Hand, path: '/ai/handpose' },
   { title: '人员离岗检测', description: '多工位在岗判定，支持移动镜头运动补偿。', tag: '行为分析', tagTone: 'orange', icon: Users, path: '/ai/track', query: { scenario: 'absence' } },
   { title: '车辆追踪', description: '车牌 OCR、测速抓拍、运动轨迹与过车记录。', tag: '智慧交通', tagTone: 'blue', icon: ScanLine, path: '/ai/track', query: { scenario: 'vehicle' } },
   { title: '人脸识别', description: 'InsightFace / YuNet+SFace 底库与 1:N 实时识别。', tag: '身份识别', tagTone: 'cyan', icon: ScanFace, path: '/ai/face' },
 ]
 
 const heroTags = [
-  ['腹部 CT', 'cyan'],
-  ['深蹲计数', 'orange'],
-  ['91 场景', 'blue'],
-  ['训练增强', 'green'],
+  ['CPU ASR', 'red'],
+  ['C++ ReID', 'blue'],
+  ['NeuTTS', 'pink'],
+  ['ByteTrack', 'green'],
 ]
 
 const runItems = computed(() => {
@@ -334,7 +334,7 @@ onUnmounted(() => {
               <h1>让每一个 AI 模型，都能更快走向可用</h1>
               <p class="hero-description">
                 统一管理视觉、文本、语音与医学影像模型。从数据构建、训练评估到在线测试，在一个清晰的工作流中完成。
-                近期上线：达摩院 RADAR 腹部 CT、深蹲计数工作台、91 个生产模型场景，以及训练页可调数据增强超参。
+                近期上线：CPU 语音识别 6 类 8 模型、跨镜行人/车辆外观 C++ 运行时、NeuTTS Air 音色克隆，以及 Confucius R2T2 / T3PO CPU 推理。
               </p>
             </div>
             <div class="actions">

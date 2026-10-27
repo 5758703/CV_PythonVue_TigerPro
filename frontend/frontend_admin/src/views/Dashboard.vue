@@ -34,8 +34,8 @@
           <span class="hero-desc">
             一站式管理与在线测试多种 AI 模型：从 <b>HuggingFace / ModelScope / Roboflow</b> 拉取权重、统一纳管、按任务即点即测。
             平台现支持 <b>15+ 类 AI 任务</b>与 <b>91 个生产模型场景</b>，推理引擎涵盖
-            <b>YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · RADAR · transformers · funasr / MOSS · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行（大模型建议 GPU）。
-            近期重点：<b>达摩院 RADAR 腹部 CT</b>、<b>深蹲计数工作台</b>、<b>生产场景目录扩容</b>、<b>训练数据增强超参</b>；
+            <b>YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · RADAR · transformers · funasr / MOSS · sherpa-onnx · RF-DETR</b> 等，纯 <b>CPU</b> 即可运行（大模型建议 GPU）。
+            近期重点：<b>CPU 语音识别 6 类 8 模型</b>、<b>跨镜行人/车辆 C++ 外观特征</b>、<b>NeuTTS Air 音色克隆</b>、<b>Confucius R2T2 / T3PO</b>；
             同时保留开放词汇检测、多模态定位、跨镜 MTMC、跌倒 / 手势等能力；图片与医学报告可调 <b>DeepSeek AI</b>。
           </span>
         </div>
@@ -181,11 +181,16 @@ function toggleScenePanel() {
 const heroIntroFull =
   "多任务 / 多模态 AI 模型管理与测试学习平台 —— 视觉 · 文本 · 语音 · 医学影像 全栈纳管。" +
   "一站式管理与在线测试多种 AI 模型：从 HuggingFace / ModelScope / Roboflow 拉取权重、统一纳管、按任务即点即测。" +
-  "平台现支持 15+ 类 AI 任务与 91 个生产模型场景，推理引擎涵盖 YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · RADAR · transformers · funasr / MOSS · RF-DETR 等，纯 CPU 即可运行（大模型建议 GPU）。" +
-  "近期重点：达摩院 RADAR 腹部 CT、深蹲计数工作台、生产场景目录扩容、训练数据增强超参；" +
+  "平台现支持 15+ 类 AI 任务与 91 个生产模型场景，推理引擎涵盖 YOLO · OmDet · VLM-FO1 · ByteTrack · InsightFace · MediaPipe · RADAR · transformers · funasr / MOSS · sherpa-onnx · RF-DETR 等，纯 CPU 即可运行（大模型建议 GPU）。" +
+  "近期重点：CPU 语音识别 6 类 8 模型、跨镜行人/车辆 C++ 外观特征、NeuTTS Air 音色克隆、Confucius R2T2 / T3PO；" +
   "同时保留开放词汇检测、多模态定位、跨镜 MTMC、跌倒 / 手势等能力；图片与医学报告可调 DeepSeek AI。";
 
 const heroTags = [
+  { label: "CPU ASR · 6 类 8 模型", color: "#c41d7f" },
+  { label: "跨镜 C++ ReID", color: "#391085" },
+  { label: "NeuTTS Air 音色克隆", color: "#eb2f96" },
+  { label: "Confucius R2T2 / T3PO", color: "#d46b08" },
+  { label: "ByteTrack · 局部跟踪", color: "#389e0d" },
   { label: "RADAR · 腹部 CT", color: "#08979c" },
   { label: "深蹲计数 · 姿态", color: "#d46b08" },
   { label: "91 生产场景", color: "#0958d9" },
@@ -219,26 +224,46 @@ const heroTags = [
 /** 首页「热门场景」快捷入口（含近期新增能力，精简展示） */
 const sceneCards = [
   {
-    title: "腹部 CT 诊断",
+    title: "CPU 语音识别",
     badge: "NEW",
+    desc: "6 类 8 模型 · Paraformer / Zipformer / Whisper / Parakeet / Moonshine / Qwen3",
+    to: { path: "/ai/asr" },
+  },
+  {
+    title: "跨镜重识别",
+    badge: "NEW",
+    desc: "ByteTrack 短时跟踪 · 行人/车辆 C++ 外观 · 三档门控 · 证据落库",
+    to: { path: "/ai/mtmc" },
+  },
+  {
+    title: "音色克隆 TTS",
+    badge: "NEW",
+    desc: "NeuTTS Air · 英文即时克隆 · 参考音频 + 参考文本",
+    to: { path: "/ai/tts" },
+  },
+  {
+    title: "Confucius 语音/翻译",
+    badge: "NEW",
+    desc: "R2T2 转写 · T3PO 翻译 · 独立服务 CPU 推理适配",
+    to: { path: "/ai/model" },
+  },
+  {
+    title: "腹部 CT 诊断",
     desc: "达摩院 RADAR · NIfTI 上传 · 多 finding 筛查 · DeepSeek 报告",
     to: { path: "/ai/radar" },
   },
   {
     title: "深蹲计数",
-    badge: "NEW",
     desc: "姿态估计驱动 · 视频/摄像头会话 · 计数叠加与状态回传",
     to: { path: "/ai/scenarios/squat-counting" },
   },
   {
     title: "生产模型场景",
-    badge: "NEW",
     desc: "91 场景目录 · 统一合同 · 就绪探测 · Open API / 专用工作台",
     to: { path: "/ai/scenarios" },
   },
   {
     title: "模型训练",
-    badge: "NEW",
     desc: "标准/增强数据增强 · mosaic/mixup/HSV 等超参 · 曲线与 mAP",
     to: { path: "/ai/training" },
   },
@@ -253,14 +278,9 @@ const sceneCards = [
     to: { path: "/ai/image" },
   },
   {
-    title: "语音转写 ASR",
-    desc: "MOSS 多人识别 · 时间戳 · 音/视频 · 字幕导出 SRT/ASS",
+    title: "MOSS 多人转写",
+    desc: "说话人分离 · 时间戳 · 音/视频 · 字幕导出 SRT/ASS",
     to: { path: "/ai/asr" },
-  },
-  {
-    title: "跨镜重识别",
-    desc: "三档门控 · 证据落库 · 候选晋升 · 全局 ID · 监控墙叠加",
-    to: { path: "/ai/mtmc" },
   },
   {
     title: "跌倒检测",
