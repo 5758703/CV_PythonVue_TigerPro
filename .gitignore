@@ -43,11 +43,18 @@ runs/
 backend/yolo_dataset/
 backend/weights/water_gauge_yolo1.pt
 backend/weights/confucius/
+backend/weights/model.onnx
 backend/runtime/
 
 # ===== 调试输出（临时图片/脚本产物）=====
 backend/debug_yolo_*.jpg
 backend/debug_*.jpg
+backend/bench_*.json
+backend/scripts/diag_*.py
+backend/scripts/sim_mtmc_two_videos.py
+
+# ===== 误放进前端目录的 Python 依赖快照 =====
+frontend/**/requirements.txt
 
 # ===== 测试缓存 =====
 .pytest_cache/
