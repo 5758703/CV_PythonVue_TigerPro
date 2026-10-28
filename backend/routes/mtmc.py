@@ -328,12 +328,24 @@ def _pick_ocr_models():
     det = _pick_model(
         None,
         task="ocr",
-        keys=["paddleocr-det", "PP-OCRv6_small_det_onnx", "pp-ocrv6-det"],
+        keys=[
+            "paddleocr-det",
+            "PP-OCRv6_small_det_onnx",
+            "PP-OCRv6_medium_det_onnx",
+            "PP-OCRv6_tiny_det_onnx",
+            "pp-ocrv6-det",
+        ],
     )
     rec = _pick_model(
         None,
         task="ocr",
-        keys=["paddleocr-rec", "PP-OCRv6_small_rec_onnx", "pp-ocrv6-rec"],
+        keys=[
+            "paddleocr-rec",
+            "PP-OCRv6_small_rec_onnx",
+            "PP-OCRv6_medium_rec_onnx",
+            "PP-OCRv6_tiny_rec_onnx",
+            "pp-ocrv6-rec",
+        ],
     )
     return det, rec
 

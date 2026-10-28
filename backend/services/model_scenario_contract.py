@@ -466,6 +466,20 @@ _CONTRACTS = {
         "extensions": frozenset((".safetensors", ".bin", ".msgpack", ".pt", ".pth")),
         "runtime": ("transformers",),
     },
+    "PP-OCRv6_tiny_det_onnx": {
+        "task": "text-detection",
+        "library": "rapidocr",
+        "adapter": "rapidocr_det",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("rapidocr_onnxruntime",),
+    },
+    "PP-OCRv6_tiny_rec_onnx": {
+        "task": "text-recognition",
+        "library": "rapidocr",
+        "adapter": "rapidocr_rec",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("rapidocr_onnxruntime",),
+    },
     "PP-OCRv6_small_det_onnx": {
         "task": "text-detection",
         "library": "rapidocr",
@@ -474,6 +488,20 @@ _CONTRACTS = {
         "runtime": ("rapidocr_onnxruntime",),
     },
     "PP-OCRv6_small_rec_onnx": {
+        "task": "text-recognition",
+        "library": "rapidocr",
+        "adapter": "rapidocr_rec",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("rapidocr_onnxruntime",),
+    },
+    "PP-OCRv6_medium_det_onnx": {
+        "task": "text-detection",
+        "library": "rapidocr",
+        "adapter": "rapidocr_det",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("rapidocr_onnxruntime",),
+    },
+    "PP-OCRv6_medium_rec_onnx": {
         "task": "text-recognition",
         "library": "rapidocr",
         "adapter": "rapidocr_rec",
@@ -563,6 +591,34 @@ _CONTRACTS = {
         "adapter": "sherpa_tts",
         "extensions": frozenset((".onnx",)),
         "runtime": ("sherpa_onnx",),
+    },
+    "piper-x_low": {
+        "task": "text-to-speech",
+        "library": "piper",
+        "adapter": "piper_tts",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("onnxruntime",),
+    },
+    "piper-low": {
+        "task": "text-to-speech",
+        "library": "piper",
+        "adapter": "piper_tts",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("onnxruntime",),
+    },
+    "piper-medium": {
+        "task": "text-to-speech",
+        "library": "piper",
+        "adapter": "piper_tts",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("onnxruntime",),
+    },
+    "piper-high": {
+        "task": "text-to-speech",
+        "library": "piper",
+        "adapter": "piper_tts",
+        "extensions": frozenset((".onnx",)),
+        "runtime": ("onnxruntime",),
     },
     "mms-tts-eng": {
         "task": "text-to-speech",
@@ -983,7 +1039,7 @@ def evaluate_scenario_contract(
         or contract["library"] in (
             "transformers", "modelscope", "rapidocr", "rapidtable",
             "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "linly",
-            "sherpa-onnx", "opencv-reid",
+            "sherpa-onnx", "piper", "opencv-reid",
         )
     ) and configured_path is not None:
         selected = configured_path if configured_path.is_dir() else configured_path.parent

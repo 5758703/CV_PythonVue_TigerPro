@@ -1277,20 +1277,48 @@ def seed_ai_models():
         source_url="https://huggingface.co/morsetechlab/yolov11-license-plate-detection#license-plate-finetune-v1s.pt",
         description="YOLOv11 small 车牌定位（morsetechlab）。精度更高，CPU 仍可用。", status="0",
     ))
-    # RapidOCR PP-OCRv6 small（CPU/ONNX，行驶号牌推荐）
+    # RapidOCR PP-OCRv6 三档（tiny/small/medium，PaddlePaddle 官方 ONNX，CPU）
+    created |= _ensure_ai_model("PP-OCRv6_tiny_det_onnx", dict(
+        model_name="PP-OCRv6 tiny 检测（边缘）", category="文档解析",
+        task="text-detection", library="rapidocr", version="v6",
+        source_url="https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det_onnx",
+        file_path="models/PP-OCRv6_tiny_det_onnx",
+        description="PP-OCRv6 tiny 文本检测 ONNX（~0.43M，边缘/极速）。须与同档 rec 配对。", status="0",
+    ))
+    created |= _ensure_ai_model("PP-OCRv6_tiny_rec_onnx", dict(
+        model_name="PP-OCRv6 tiny 识别（边缘）", category="文档解析",
+        task="text-recognition", library="rapidocr", version="v6",
+        source_url="https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx",
+        file_path="models/PP-OCRv6_tiny_rec_onnx",
+        description="PP-OCRv6 tiny 文本识别 ONNX（边缘/极速）。与 tiny det 配对。", status="0",
+    ))
     created |= _ensure_ai_model("PP-OCRv6_small_det_onnx", dict(
         model_name="PP-OCRv6 small 检测（推荐）", category="文档解析",
         task="text-detection", library="rapidocr", version="v6",
-        source_url="https://www.modelscope.cn/models/RapidAI/RapidOCR",
+        source_url="https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx",
         file_path="models/PP-OCRv6_small_det_onnx",
         description="PP-OCRv6 small 文本检测 ONNX（CPU）。车辆追踪/PaddleOCR/表格识别推荐。", status="0",
     ))
     created |= _ensure_ai_model("PP-OCRv6_small_rec_onnx", dict(
         model_name="PP-OCRv6 small 识别（推荐）", category="文档解析",
         task="text-recognition", library="rapidocr", version="v6",
-        source_url="https://www.modelscope.cn/models/RapidAI/RapidOCR",
+        source_url="https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx",
         file_path="models/PP-OCRv6_small_rec_onnx",
         description="PP-OCRv6 small 文本识别 ONNX（CPU）。与 det 配对用于号牌 OCR。", status="0",
+    ))
+    created |= _ensure_ai_model("PP-OCRv6_medium_det_onnx", dict(
+        model_name="PP-OCRv6 medium 检测（高精度）", category="文档解析",
+        task="text-detection", library="rapidocr", version="v6",
+        source_url="https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx",
+        file_path="models/PP-OCRv6_medium_det_onnx",
+        description="PP-OCRv6 medium 文本检测 ONNX（~15.5M，高精度）。须与同档 rec 配对。", status="0",
+    ))
+    created |= _ensure_ai_model("PP-OCRv6_medium_rec_onnx", dict(
+        model_name="PP-OCRv6 medium 识别（高精度）", category="文档解析",
+        task="text-recognition", library="rapidocr", version="v6",
+        source_url="https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx",
+        file_path="models/PP-OCRv6_medium_rec_onnx",
+        description="PP-OCRv6 medium 文本识别 ONNX（高精度）。与 medium det 配对。", status="0",
     ))
     # SLANet_plus 表格结构（rapid-table / ONNX，CPU）
     created |= _ensure_ai_model("rapidtable-slanet-plus", dict(
@@ -1627,6 +1655,36 @@ def seed_ai_models():
         source_url="https://huggingface.co/wolfofbackstreet/melotts_chinese_mix_english_onnx",
         description="MeloTTS 中英混合 onnx(sherpa-onnx 引擎)，纯 onnx、小而快、CPU 秒级，中英混读。文本转语音页使用。", status="0",
     ))
+    # Piper TTS 官方四档（x_low/low/medium/high；目录约 177 语音 / 58 语种）
+    # 本地下载 .onnx，onnxruntime 直接推理；同档语音可按需懒加载。
+    created |= _ensure_ai_model("piper-x_low", dict(
+        model_name="Piper TTS x_low（极速）", category="语音合成",
+        task="text-to-speech", library="piper", version="v1",
+        source_url="https://huggingface.co/rhasspy/piper-voices#zh_CN-huayan-x_low",
+        file_path="models/piper-x_low",
+        description="Piper 官方 x_low（16kHz 极速）。本地 ONNX + onnxruntime；默认 zh_CN-huayan-x_low。", status="0",
+    ))
+    created |= _ensure_ai_model("piper-low", dict(
+        model_name="Piper TTS low（快速）", category="语音合成",
+        task="text-to-speech", library="piper", version="v1",
+        source_url="https://huggingface.co/rhasspy/piper-voices#en_US-amy-low",
+        file_path="models/piper-low",
+        description="Piper 官方 low（16kHz 快速）。本地 ONNX + onnxruntime；默认 en_US-amy-low。", status="0",
+    ))
+    created |= _ensure_ai_model("piper-medium", dict(
+        model_name="Piper TTS medium（推荐）", category="语音合成",
+        task="text-to-speech", library="piper", version="v1",
+        source_url="https://huggingface.co/rhasspy/piper-voices#zh_CN-huayan-medium",
+        file_path="models/piper-medium",
+        description="Piper 官方 medium（22.05kHz 均衡，推荐）。本地 ONNX + onnxruntime；默认 zh_CN-huayan-medium。", status="0",
+    ))
+    created |= _ensure_ai_model("piper-high", dict(
+        model_name="Piper TTS high（高音质）", category="语音合成",
+        task="text-to-speech", library="piper", version="v1",
+        source_url="https://huggingface.co/rhasspy/piper-voices#en_US-lessac-high",
+        file_path="models/piper-high",
+        description="Piper 官方 high（22.05kHz 高音质）。本地 ONNX + onnxruntime；默认 en_US-lessac-high。", status="0",
+    ))
     # 文本转语音（NeuTTS Air：即时音色克隆，需参考音频+转录；系统需 espeak-ng）
     created |= _ensure_ai_model("neutts-air", dict(
         model_name="NeuTTS Air 音色克隆合成", category="语音合成",
@@ -1795,7 +1853,7 @@ def seed_ai_models():
 
 def _patch_dir_weight_model_paths():
     """目录型权重：file_path 应指向模型目录，修正误记为目录内单文件的路径。"""
-    dir_libs = ("modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts")
+    dir_libs = ("modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts", "piper")
     base = os.path.dirname(os.path.abspath(__file__))
     uploads = os.path.join(base, "uploads")
     changed = False
@@ -2203,22 +2261,26 @@ def _bind_vehicle_track_models():
                 changed = True
 
     ocr_specs = [
-        ("PP-OCRv6_small_det_onnx", "PP-OCRv6 small 检测（推荐）", "text-detection", "models/PP-OCRv6_small_det_onnx"),
-        ("PP-OCRv6_small_rec_onnx", "PP-OCRv6 small 识别（推荐）", "text-recognition", "models/PP-OCRv6_small_rec_onnx"),
+        ("PP-OCRv6_tiny_det_onnx", "PP-OCRv6 tiny 检测（边缘）", "text-detection",
+         "models/PP-OCRv6_tiny_det_onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det_onnx"),
+        ("PP-OCRv6_tiny_rec_onnx", "PP-OCRv6 tiny 识别（边缘）", "text-recognition",
+         "models/PP-OCRv6_tiny_rec_onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec_onnx"),
+        ("PP-OCRv6_small_det_onnx", "PP-OCRv6 small 检测（推荐）", "text-detection",
+         "models/PP-OCRv6_small_det_onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx"),
+        ("PP-OCRv6_small_rec_onnx", "PP-OCRv6 small 识别（推荐）", "text-recognition",
+         "models/PP-OCRv6_small_rec_onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx"),
+        ("PP-OCRv6_medium_det_onnx", "PP-OCRv6 medium 检测（高精度）", "text-detection",
+         "models/PP-OCRv6_medium_det_onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx"),
+        ("PP-OCRv6_medium_rec_onnx", "PP-OCRv6 medium 识别（高精度）", "text-recognition",
+         "models/PP-OCRv6_medium_rec_onnx", "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx"),
     ]
-    for key, name, task, rel in ocr_specs:
+    for key, name, task, rel, source in ocr_specs:
         m = AiModel.query.filter_by(model_key=key).first()
         if not m:
             continue
-        abs_dir = os.path.join(uploads, rel.replace("/", os.sep))
-        if not os.path.isdir(abs_dir):
-            continue
-        size = 0
-        for root, _dirs, files in os.walk(abs_dir):
-            for f in files:
-                fp = os.path.join(root, f)
-                if os.path.isfile(fp):
-                    size += os.path.getsize(fp)
+        if m.source_url != source:
+            m.source_url = source
+            changed = True
         if m.model_name != name:
             m.model_name = name
             changed = True
@@ -2228,6 +2290,15 @@ def _bind_vehicle_track_models():
         if (m.library or "").lower() != "rapidocr":
             m.library = "rapidocr"
             changed = True
+        abs_dir = os.path.join(uploads, rel.replace("/", os.sep))
+        if not os.path.isdir(abs_dir):
+            continue
+        size = 0
+        for root, _dirs, files in os.walk(abs_dir):
+            for f in files:
+                fp = os.path.join(root, f)
+                if os.path.isfile(fp):
+                    size += os.path.getsize(fp)
         if m.file_path != rel:
             m.file_path = rel
             changed = True

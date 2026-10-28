@@ -97,8 +97,12 @@ EXPECTED_PHASE_SEVEN_KEYS = (
     'bert-fill-mask',
     'distilbart-cnn',
     'opus-mt-en-zh',
+    'PP-OCRv6_tiny_det_onnx',
+    'PP-OCRv6_tiny_rec_onnx',
     'PP-OCRv6_small_det_onnx',
     'PP-OCRv6_small_rec_onnx',
+    'PP-OCRv6_medium_det_onnx',
+    'PP-OCRv6_medium_rec_onnx',
 )
 
 EXPECTED_PHASE_EIGHT_KEYS = (
@@ -117,6 +121,10 @@ EXPECTED_PHASE_NINE_KEYS = (
     'opencv-person-reid-youtu',
     'osnet-x1-0',
     'melotts-zh-en',
+    'piper-x_low',
+    'piper-low',
+    'piper-medium',
+    'piper-high',
     'mms-tts-eng',
     'vibevoice-realtime',
     'fun-asr-nano',
@@ -199,14 +207,14 @@ def test_phase_four_through_ten_scenarios_are_unique_and_in_document_order():
         scenarios = list_scenarios(phase=phase)
         assert const_keys == expected_keys
         assert tuple(item["modelKey"] for item in scenarios) == expected_keys
-        assert len(scenarios) == len(set(item["modelKey"] for item in scenarios)) == 9
+        assert len(scenarios) == len(set(item["modelKey"] for item in scenarios)) == len(expected_keys)
 
 
 def test_full_catalog_covers_ninety_one_models():
     scenarios = list_scenarios()
-    assert len(scenarios) == 93
-    assert len({item["modelKey"] for item in scenarios}) == 93
-    assert [item["order"] for item in scenarios] == list(range(1, 94))
+    assert len(scenarios) == 101
+    assert len({item["modelKey"] for item in scenarios}) == 101
+    assert [item["order"] for item in scenarios] == list(range(1, 102))
 
 
 def test_phase_eleven_radar_scenario():

@@ -4758,6 +4758,26 @@ def synthesize_speech_melotts(model_dir, text, speed=1.0):
     return {"audio": _b64.b64encode(buf.getvalue()).decode(), "sampleRate": sr, "speaker": None}
 
 
+def synthesize_speech_piper(model_dir, text, voice_key=None, quality=None, speaker_id=None):
+    """Piper TTS（官方四档 x_low/low/medium/high）。返回 {audio, sampleRate, speaker}。"""
+    from services import piper_tts as piper_svc
+
+    return piper_svc.synthesize(
+        model_dir,
+        text,
+        voice_key=voice_key,
+        quality=quality,
+        speaker_id=speaker_id,
+    )
+
+
+def list_piper_voices(model_dir=None, quality=None):
+    """Piper 语音目录（可按档过滤），返回 speaker key 列表。"""
+    from services import piper_tts as piper_svc
+
+    return piper_svc.list_voice_keys(quality=quality, folder=model_dir)
+
+
 # ------------------------------------------------------------ VoxCPM2 文本转语音 / 克隆 / 音色设计
 _voxcpm_cache = _model_cache()  # model_dir -> VoxCPM 实例
 

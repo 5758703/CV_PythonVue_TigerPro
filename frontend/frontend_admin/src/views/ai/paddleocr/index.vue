@@ -82,8 +82,10 @@ const loadModels = async () => {
     const res = await modelApi.list({ pageNum: 1, pageSize: 100 })
     allModels.value = (res.data.rows || []).filter(
       (m) => m.library === 'rapidocr' && m.filePath && m.status === '0')
-    if (detModels.value.length && !detId.value) detId.value = detModels.value[0].id
-    if (recModels.value.length && !recId.value) recId.value = recModels.value[0].id
+    const preferSmall = (list) =>
+      list.find((m) => String(m.modelKey || '').includes('_small_')) || list[0]
+    if (detModels.value.length && !detId.value) detId.value = preferSmall(detModels.value).id
+    if (recModels.value.length && !recId.value) recId.value = preferSmall(recModels.value).id
   } catch (e) {
     ElMessage.error('加载模型列表失败')
   }

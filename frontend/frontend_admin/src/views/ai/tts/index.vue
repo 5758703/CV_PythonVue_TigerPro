@@ -31,8 +31,13 @@
         <el-form-item v-if="supportsClone && !cloneRequired" label="音色克隆">
           <el-switch v-model="useClone" />
         </el-form-item>
-        <el-form-item v-if="!isClone && speakers.length" label="音色">
-          <el-select v-model="speaker" placeholder="选择音色" style="width: 130px">
+        <el-form-item v-if="!isClone && speakers.length" :label="isPiper ? '语音' : '音色'">
+          <el-select
+            v-model="speaker"
+            placeholder="选择语音/音色"
+            filterable
+            :style="{ width: isPiper ? '280px' : '130px' }"
+          >
             <el-option v-for="s in speakers" :key="s" :label="s" :value="s" />
           </el-select>
         </el-form-item>
@@ -144,6 +149,7 @@ import { useInferProgress } from '../../../composables/useInferProgress'
 const CLONE_LIBS = new Set(['voxcpm', 'neutts'])
 const CLONE_REQUIRED_LIBS = new Set(['neutts'])
 const PREFERRED_TTS_KEY = 'melotts-zh-en'
+const PREFERRED_PIPER_KEY = 'piper-medium'
 const PREFERRED_CLONE_KEY = 'neutts-air'
 
 const modelOptions = ref([])
@@ -200,6 +206,7 @@ const supportsClone = computed(() => isCloneCapableModel(currentModel.value))
 const cloneRequired = computed(() => isCloneRequiredModel(currentModel.value))
 const isClone = computed(() => !!(cloneRequired.value || (supportsClone.value && useClone.value)))
 const hasCloneModels = computed(() => modelOptions.value.some((m) => isCloneCapableModel(m)))
+const isPiper = computed(() => modelLibOf(currentModel.value) === 'piper')
 
 const cloneHint = computed(() =>
   cloneRequired.value
@@ -213,6 +220,9 @@ const textPlaceholder = computed(() => {
   }
   if (modelLibOf(currentModel.value) === 'voxcpm') {
     return '输入文本；可在开头用括号描述音色，如「(年轻女声，温柔)你好…」'
+  }
+  if (modelLibOf(currentModel.value) === 'piper') {
+    return '输入要合成的文本（Piper 支持多语种；中文建议选 zh_CN-* 语音）…'
   }
   return '输入要合成的文本…'
 })
@@ -250,8 +260,9 @@ function rankModel(m) {
   const key = modelKeyOf(m)
   if (key === PREFERRED_CLONE_KEY || key.includes('neutts')) return 0
   if (key === PREFERRED_TTS_KEY) return 1
-  if (isCloneCapableModel(m)) return 2
-  return 3
+  if (key === PREFERRED_PIPER_KEY || key.startsWith('piper-')) return 2
+  if (isCloneCapableModel(m)) return 3
+  return 4
 }
 
 async function loadModels() {

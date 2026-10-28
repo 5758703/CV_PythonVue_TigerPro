@@ -99,7 +99,7 @@ flowchart TD
 | ASR SenseVoice/Paraformer | FunASR `AutoModel(device=cpu)`→generate；SenseVoice ONNX 专用路径 | 解码/重采样 + 声学网络，长音频串行；VAD/分段、缓存重采样、同长度批处理，评估 ONNX CPU | P1 |
 | ASR Fun-ASR-Nano/Whisper/Moonshine | 特定加载与 dtype 兼容，Whisper pipeline/direct 备用，Moonshine processor/model | CPU autoregressive 解码，音频转换重复；减少 beam/无效生成、分块与有效上下文，记录 RTF/WER | P1 |
 | ASR MOSS 转写/说话人 | `moss_mtd.py` 音频提取→processor→causal model.generate，支持推理模式与设备/dtype | 音频 token 长度、生成长度、前处理和说话人片段解析；按时长分块、限制 token，上 GPU 后核验 dtype/内存 | P1 |
-| TTS Melo/MMS/VibeVoice | Melo sherpa-onnx；MMS Transformers；VibeVoice 第三方 processor/model + 音色 | 神经声码器/采样、音色加载；复用音色、文本句切、流式策略、缓存同文本，度量首音与 RTF | P1 |
+| TTS Melo/MMS/VibeVoice/Piper | Melo sherpa-onnx；MMS Transformers；VibeVoice 第三方；Piper 本地下载 ONNX + onnxruntime 直载（四档） | 神经声码器/采样、音色加载；复用音色、文本句切、流式策略、缓存同文本，度量首音与 RTF | P1 |
 | TTS VoxCPM2/NeuTTS 克隆 | `_get_voxcpm/_get_neutts`缓存；参考音频/文本→生成/codec；NeuTTS 额外 tokenizer/espeak/兼容修补 | 重复参考音频处理和初次 codec 资产准备；离线准备、参考 embedding 缓存、显式迭代数与内存预算 | P1 |
 | 数字人 LinlyTalker | `synthesize_talking_head` 第三方脚本/子进程→音频/图像→视频 | 进程启动、重复模型加载、视频合成；固定专用 worker，常驻模型/身份模板，推理与编码分离 | P2 |
 | RADAR 腹部 CT | `radar.py` real/mock 选择；real 载入第三方 3D 模型与文本编码器→NIfTI处理→CSV解析 | 3D 体数据内存、预处理、设备；复用权重、固定体素/ROI、独立队列。mock 是演示逻辑，不能统计为真实模型推理吞吐 | P1 |
@@ -329,8 +329,12 @@ python -m pytest @mtmcTests backend/unittests/test_reid_cpp_runtime.py backend/u
 | bert-fill-mask | BERT 完形填空 | transformers_fill_mask | fill-mask |
 | distilbart-cnn | DistilBART 文本摘要 | transformers_summarize | summarization |
 | opus-mt-en-zh | Opus 英译中 | transformers_translate | translation |
+| PP-OCRv6_tiny_det_onnx | PP-OCRv6 tiny 检测（边缘） | rapidocr_det | document-ocr |
+| PP-OCRv6_tiny_rec_onnx | PP-OCRv6 tiny 识别（边缘） | rapidocr_rec | document-ocr |
 | PP-OCRv6_small_det_onnx | PP-OCRv6 small 检测（推荐） | rapidocr_det | document-ocr |
 | PP-OCRv6_small_rec_onnx | PP-OCRv6 small 识别（推荐） | rapidocr_rec | document-ocr |
+| PP-OCRv6_medium_det_onnx | PP-OCRv6 medium 检测（高精度） | rapidocr_det | document-ocr |
+| PP-OCRv6_medium_rec_onnx | PP-OCRv6 medium 识别（高精度） | rapidocr_rec | document-ocr |
 | rapidtable-slanet-plus | SLANet_plus 表格结构 | rapidtable | document-ocr |
 | yolov8m-table-extraction | 文档表格检测 | ultralytics_detection | document-ocr |
 | yolo-master-obb-n | YOLO-Master OBB-N 旋转框检测 | yolo_master_obb | obb |
@@ -343,6 +347,10 @@ python -m pytest @mtmcTests backend/unittests/test_reid_cpp_runtime.py backend/u
 | opencv-person-reid-youtu | OpenCV Youtu Person ReID | person_reid_onnx | person-reid |
 | osnet-x1-0 | OSNet x1.0 Person ReID（强） | person_reid_onnx | person-reid |
 | melotts-zh-en | MeloTTS 中英混合合成 | sherpa_tts | text-to-speech |
+| piper-x_low | Piper TTS x_low（极速） | piper_tts | text-to-speech |
+| piper-low | Piper TTS low（快速） | piper_tts | text-to-speech |
+| piper-medium | Piper TTS medium（推荐） | piper_tts | text-to-speech |
+| piper-high | Piper TTS high（高音质） | piper_tts | text-to-speech |
 | mms-tts-eng | MMS-TTS 英文语音合成 | transformers_tts | text-to-speech |
 | vibevoice-realtime | VibeVoice 实时语音合成 | vibevoice_tts | text-to-speech |
 | fun-asr-nano | Fun-ASR-Nano 语音识别 | funasr_nano | speech-recognition |

@@ -773,7 +773,7 @@ def _looks_like_diffusers_lora_dir(path):
 _DIR_WEIGHT_LIBS = frozenset({
     "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano",
     "vibevoice", "voxcpm", "neutts", "vlm-fo1", "moss-music-gguf",
-    "sherpa-onnx-asr", "faster-whisper", "moonshine-streaming",
+    "sherpa-onnx-asr", "faster-whisper", "moonshine-streaming", "piper",
 })
 
 
@@ -1187,6 +1187,24 @@ def fetch_weight(mid):
             rel, size = _fetch_rtmlib_weight(folder, sub, m.model_key)
         elif lib == "insightface":
             rel, size = _fetch_insightface_weight(m)
+        elif lib == "piper":
+            from services import piper_tts as piper_svc
+            quality = piper_svc.quality_of_model_key(m.model_key) or "medium"
+            _ensure_dir(folder)
+            # 锚点可指定默认语音，如 .../piper-voices#zh_CN-huayan-medium
+            want = _weight_hint_from_url(m.source_url)
+            if want:
+                piper_svc.ensure_voices_catalog(folder)
+                piper_svc.ensure_voice(folder, want)
+            else:
+                piper_svc.download_quality_bundle(folder, quality)
+            size = 0
+            for root, _dirs, files in os.walk(folder):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    if os.path.isfile(fp):
+                        size += os.path.getsize(fp)
+            rel = f"models/{sub}"
         elif _is_direct_weight_url(m.source_url):
             rel, size = _fetch_direct_weight(m.source_url, folder, sub)
         else:
@@ -1483,11 +1501,28 @@ def transcribe_route(mid):
 @ai_model_bp.get("/<int:mid>/tts-speakers")
 @permission_required("ai:model:query")
 def tts_speakers_route(mid):
-    """文本转语音可用音色列表（VibeVoice 等有预置音色；transformers TTS 无）。"""
+    """文本转语音可用音色列表（VibeVoice / Piper 等有预置音色；transformers TTS 无）。"""
     m = AiModel.query.get_or_404(mid)
-    if (m.library or "") == "vibevoice":
+    lib = (m.library or "").lower()
+    if lib == "vibevoice":
         from inference import list_vibevoice_voices
         return jsonify(code=0, data=list_vibevoice_voices())
+    if lib == "piper":
+        from services import piper_tts as piper_svc
+        path = _abs_model_path(m)
+        quality = piper_svc.quality_of_model_key(m.model_key) or "medium"
+        folder = path if path and os.path.isdir(path) else None
+        try:
+            if folder:
+                piper_svc.ensure_voices_catalog(folder)
+            keys = piper_svc.list_voice_keys(quality=quality, folder=folder)
+        except Exception as e:  # noqa: BLE001
+            return jsonify(code=500, message=f"加载 Piper 语音目录失败：{e}"), 500
+        # 默认语音置顶，便于前端选中
+        default = piper_svc.default_voice_for_quality(quality)
+        if default in keys:
+            keys = [default] + [k for k in keys if k != default]
+        return jsonify(code=0, data=keys)
     return jsonify(code=0, data=[])
 
 
@@ -1516,6 +1551,13 @@ def tts_route(mid):
         elif (m.library or "") == "sherpa-onnx":
             from inference import synthesize_speech_melotts
             result = synthesize_speech_melotts(path, text)
+        elif (m.library or "") == "piper":
+            from services import piper_tts as piper_svc
+            from inference import synthesize_speech_piper
+            quality = piper_svc.quality_of_model_key(m.model_key) or "medium"
+            voice_key = speaker if speaker and "-" in speaker else None
+            result = synthesize_speech_piper(
+                path, text, voice_key=voice_key, quality=quality)
         elif (m.library or "") == "voxcpm":
             from inference import synthesize_speech_voxcpm
             result = synthesize_speech_voxcpm(path, text)

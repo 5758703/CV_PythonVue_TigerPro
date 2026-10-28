@@ -1081,6 +1081,15 @@ def _speech_tts(model: AiModel, path: Path, form, scenario: dict) -> dict:
             from inference import synthesize_speech_melotts
 
             return synthesize_speech_melotts(str(path), text)
+        if library == "piper":
+            from services import piper_tts as piper_svc
+            from inference import synthesize_speech_piper
+
+            quality = piper_svc.quality_of_model_key(model.model_key) or "medium"
+            voice = form.get("speaker") or scenario["defaults"].get("speaker")
+            voice_key = str(voice).strip() if voice and "-" in str(voice) else None
+            return synthesize_speech_piper(
+                str(path), text, voice_key=voice_key, quality=quality)
         if library == "vibevoice":
             from inference import synthesize_speech_vibevoice
 
@@ -1142,10 +1151,19 @@ def _document_ocr(model: AiModel, path: Path, raw: bytes, form, scenario: dict) 
                 return {"tables": result, "engine": "rapidtable"}
             except Exception as exc:  # noqa: BLE001
                 raise ScenarioInputError(str(exc) or "table structure failed") from exc
-        # PP-OCR: prefer paired det+rec under MODEL_FOLDER when available.
+        # PP-OCR: 按档位配对 det+rec（tiny/small/medium），缺档回退 small。
         model_folder = Path(current_app.config["MODEL_FOLDER"])
-        det_dir = model_folder / "PP-OCRv6_small_det_onnx"
-        rec_dir = model_folder / "PP-OCRv6_small_rec_onnx"
+        tier = "small"
+        for name in ("tiny", "medium", "small"):
+            if f"_{name}_" in key:
+                tier = name
+                break
+        det_dir = model_folder / f"PP-OCRv6_{tier}_det_onnx"
+        rec_dir = model_folder / f"PP-OCRv6_{tier}_rec_onnx"
+        if not det_dir.is_dir():
+            det_dir = model_folder / "PP-OCRv6_small_det_onnx"
+        if not rec_dir.is_dir():
+            rec_dir = model_folder / "PP-OCRv6_small_rec_onnx"
         if not det_dir.is_dir():
             det_dir = path if path.is_dir() else path.parent
         if not rec_dir.is_dir():

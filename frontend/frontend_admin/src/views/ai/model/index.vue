@@ -265,6 +265,7 @@
             <el-option label="funasr-onnx（语音识别 onnx）" value="funasr-onnx" />
             <el-option label="sherpa-onnx（语音合成 onnx）" value="sherpa-onnx" />
             <el-option label="vibevoice（实时语音合成）" value="vibevoice" />
+            <el-option label="piper（Piper 四档 TTS）" value="piper" />
             <el-option label="voxcpm（语音合成/克隆/音色设计）" value="voxcpm" />
             <el-option label="neutts（NeuTTS Air 音色克隆）" value="neutts" />
             <el-option label="rapidocr（PaddleOCR onnx）" value="rapidocr" />
@@ -431,7 +432,7 @@ const hubMeta = (h) => HUB_META[h] || HUB_META.other;
 const DIR_WEIGHT_LIBS = new Set([
   'moss-music-gguf',
   'sherpa-onnx-asr', 'faster-whisper', 'moonshine-streaming',
-  "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts",
+  "modelscope", "transformers", "funasr", "funasr-onnx", "funasr-nano", "vibevoice", "voxcpm", "neutts", "piper",
 ]);
 const isDirWeightLib = (lib) => DIR_WEIGHT_LIBS.has((lib || "").toLowerCase());
 const isRemoteModel = (row) => ['confucius-r2t2', 'confucius-t3po'].includes(row.library);
@@ -507,6 +508,7 @@ const LIB_DEFAULT_TASK = {
   "funasr-nano": "automatic-speech-recognition",
   "funasr-onnx": "automatic-speech-recognition",
   "sherpa-onnx": "text-to-speech",
+  "piper": "text-to-speech",
   "vibevoice": "text-to-speech",
   "voxcpm": "text-to-speech",
   "neutts": "text-to-speech",

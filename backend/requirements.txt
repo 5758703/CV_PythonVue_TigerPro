@@ -60,6 +60,8 @@ funasr_onnx==0.4.1
 accelerate==1.6.0
 # MeloTTS 中英混合文本转语音：sherpa-onnx 纯 onnx 引擎（CPU，win wheel）。
 sherpa-onnx==1.13.3
+# Piper TTS：本地下载 ONNX，onnxruntime 直接推理；piper-tts 仅提供 espeak 音素桥（[zh] 含中文）。
+piper-tts[zh]==1.8.0
 # CPU ASR：原生 Moonshine 流式与 CTranslate2 INT8 Whisper；不替换现有 Torch/Transformers。
 faster-whisper==1.2.1
 moonshine-voice==0.1.5
