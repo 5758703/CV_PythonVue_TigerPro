@@ -84,6 +84,14 @@ frontend/frontend_home/  Vue3 + Vite（项目门户）
 frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios + ECharts
 ```
 
+### 控制台登录页展示 / Admin login showcase
+
+亮暗色主题切换 · 科技感背景（粒子 / 星座连线 / 极光 / 扫描线 / CRT）
+
+https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4
+
+仓库内同步保存：[`assets/demos/tiger-ai-platform-login.mp4`](assets/demos/tiger-ai-platform-login.mp4)
+
 ### 演示视频 / Video demos
 
 |  |  |  |

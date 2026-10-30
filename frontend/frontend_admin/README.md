@@ -120,6 +120,14 @@ location /openapi/ {
 
 子域部署时：门户与控制台分别 `root`；构建前设置 `VITE_PORTAL_URL` / 门户侧 `VITE_ADMIN_URL`。
 
+## 登录页演示
+
+亮暗色主题与科技背景动效展示视频（仓库内保存）：
+
+[`../../assets/demos/tiger-ai-platform-login.mp4`](../../assets/demos/tiger-ai-platform-login.mp4)
+
+亦收录于根目录 [README 演示与截图](../../README.zh-CN.md#控制台登录页展示--admin-login-showcase)。
+
 ## 说明
 
 - 门户深链：`/login?redirect=/ai/fall` 登录后进入目标页（防开放重定向，仅允许站内路径）。
