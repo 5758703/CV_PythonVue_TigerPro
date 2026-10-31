@@ -264,14 +264,14 @@ GitHub is the final record for project work and decisions. The workflow is:
 
 | Document | Purpose |
 |---|---|
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, conventions, branches, PRs |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, conventions, branches, PRs |
 | [Deployment guide](docs/deploy/README.md) | Local, Linux, Docker |
-| [GOVERNANCE.md](GOVERNANCE.md) | Roles, permissions, promotion, decisions |
-| [ROADMAP.md](ROADMAP.md) | Version planning |
-| [SECURITY.md](SECURITY.md) | **Report security issues privately, not through public issues** |
-| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Conduct standards |
-| [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) | Dependencies and model licenses |
-| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [GOVERNANCE.md](docs/GOVERNANCE.md) | Roles, permissions, promotion, decisions |
+| [ROADMAP.md](docs/ROADMAP.md) | Version planning |
+| [SECURITY.md](docs/SECURITY.md) | **Report security issues privately, not through public issues** |
+| [CODE_OF_CONDUCT.md](docs/CODE_OF_CONDUCT.md) | Conduct standards |
+| [THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md) | Dependencies and model licenses |
+| [CHANGELOG.md](docs/CHANGELOG.md) | Version history |
 | [Eight good-first-issues](docs/community/good-first-issues.md) | Beginner-friendly tasks |
 | [Community index](docs/community/README.md) | Community documentation |
 

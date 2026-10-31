@@ -271,14 +271,14 @@ GitHub 是任务与决策的最终记录场所。统一流程：
 
 | 文档 | 说明 |
 |------|------|
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
+| [CONTRIBUTING.md](./docs/CONTRIBUTING.md) | 开发环境、规范、分支与 PR |
 | [部署指南](./docs/deploy/README.md) | 本地 / Linux / Docker 详细步骤 |
-| [GOVERNANCE.md](./GOVERNANCE.md) | 角色、权限、晋升与决策 |
-| [ROADMAP.md](./ROADMAP.md) | 版本规划 |
-| [SECURITY.md](./SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
-| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) | 行为准则 |
-| [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 依赖与模型许可证 |
-| [CHANGELOG.md](./CHANGELOG.md) | 版本变更 |
+| [GOVERNANCE.md](./docs/GOVERNANCE.md) | 角色、权限、晋升与决策 |
+| [ROADMAP.md](./docs/ROADMAP.md) | 版本规划 |
+| [SECURITY.md](./docs/SECURITY.md) | **安全漏洞请私密报告，勿公开开 Issue** |
+| [CODE_OF_CONDUCT.md](./docs/CODE_OF_CONDUCT.md) | 行为准则 |
+| [THIRD_PARTY_NOTICES.md](./docs/THIRD_PARTY_NOTICES.md) | 依赖与模型许可证 |
+| [CHANGELOG.md](./docs/CHANGELOG.md) | 版本变更 |
 | [新手任务（8 条）](./docs/community/good-first-issues.md) | good-first-issue 文案 |
 | [社区索引](./docs/community/README.md) | 文档导航 |
 

@@ -36,7 +36,7 @@ GitHub 权限对照：
 - Collaborator → Triage
 - 其他人 → 通过 Fork 贡献
 
-目录评审人见 [`.github/CODEOWNERS`](./.github/CODEOWNERS)。
+目录评审人见 [`.github/CODEOWNERS`](../.github/CODEOWNERS)。
 
 ---
 

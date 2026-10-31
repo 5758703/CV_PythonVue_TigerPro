@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        请尽量提供可复现信息。安全漏洞请走 [SECURITY.md](../../SECURITY.md)，不要在此贴利用细节。
+        请尽量提供可复现信息。安全漏洞请走 [SECURITY.md](../../docs/SECURITY.md)，不要在此贴利用细节。
   - type: textarea
     id: background
     attributes:

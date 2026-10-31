@@ -5,7 +5,7 @@
 
 认领方式：在 Issue 评论「我来认领」，维护者 Assignees 后改标签 `in-progress`。
 
-协作总流程见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+协作总流程见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
 
 ---
 
@@ -154,7 +154,7 @@
 **建议标签：** `docs` `ai` `good-first-issue` `ready` `P3`
 
 **背景和目标：**  
-[THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md) 表格需更精确的「许可证链接」列，减少商用误用风险。
+[THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) 表格需更精确的「许可证链接」列，减少商用误用风险。
 
 **涉及模块：** docs, ai  
 

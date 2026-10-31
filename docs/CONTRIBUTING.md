@@ -6,7 +6,7 @@
 > 微信/飞书等即时通讯仅用于沟通加速，重要结论必须回写到 Discussion / Issue / PR。
 
 仓库：https://github.com/5758703/CV_PythonVue_TigerPro  
-许可证：[Apache License 2.0](./LICENSE)
+许可证：[Apache License 2.0](../LICENSE)
 
 ---
 
@@ -130,7 +130,7 @@ flowchart TD
 | `help-wanted` | 欢迎协助 |
 | `advanced` | 需要较强领域经验 |
 
-标签维护说明见 [`.github/LABELS.md`](./.github/LABELS.md)。可认领的新手任务见 [docs/community/good-first-issues.md](./docs/community/good-first-issues.md)。
+标签维护说明见 [`.github/LABELS.md`](../.github/LABELS.md)。可认领的新手任务见 [docs/community/good-first-issues.md](./community/good-first-issues.md)。
 
 ---
 
@@ -168,7 +168,7 @@ python app.py            # 默认 http://127.0.0.1:5001
 
 ### 3.3 前端
 
-前端拆为两个应用，总览见 [`frontend/README.md`](./frontend/README.md)。本机请统一使用 **localhost**。
+前端拆为两个应用，总览见 [`frontend/README.md`](../frontend/README.md)。本机请统一使用 **localhost**。
 
 ```powershell
 # 管理控制台（业务 / 登录）
@@ -259,9 +259,9 @@ chore(ci): 添加基础 lint 脚本
 ## 6. Pull Request 流程
 
 1. 确保关联 Issue：`Closes #123` 或 `Refs #123`
-2. 填写 [PR 模板](./.github/PULL_REQUEST_TEMPLATE.md)
+2. 填写 [PR 模板](../.github/PULL_REQUEST_TEMPLATE.md)
 3. 自测清单勾选完成
-4. 请求评审：相关目录见 [CODEOWNERS](./.github/CODEOWNERS)
+4. 请求评审：相关目录见 [CODEOWNERS](../.github/CODEOWNERS)
 5. CI / 人工检查通过后，由 Maintainer **Squash merge**
 6. 合并后删除功能分支
 

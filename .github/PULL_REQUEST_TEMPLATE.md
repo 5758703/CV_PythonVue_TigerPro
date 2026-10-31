@@ -38,8 +38,8 @@
 ## 文档与通知
 
 - [ ] 需要更新用户文档 / README
-- [ ] 需要更新 `CHANGELOG.md`（维护者发版时亦可补）
-- [ ] 新增依赖或模型时已更新 `THIRD_PARTY_NOTICES.md`
+- [ ] 需要更新 `docs/CHANGELOG.md`（维护者发版时亦可补）
+- [ ] 新增依赖或模型时已更新 `docs/THIRD_PARTY_NOTICES.md`
 
 ## 截图 / 录屏（UI 类）
 
@@ -47,6 +47,6 @@
 
 ## 检查清单
 
-- [ ] 已阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)
+- [ ] 已阅读 [CONTRIBUTING.md](../docs/CONTRIBUTING.md)
 - [ ] 分支命名符合约定
 - [ ] PR 体积合理；大改动已先 Discussion/Issue 确认
