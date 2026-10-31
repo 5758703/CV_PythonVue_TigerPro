@@ -45,6 +45,9 @@ backend/weights/water_gauge_yolo1.pt
 backend/weights/confucius/
 backend/runtime/
 
+# ===== 后端本地技术文档（保留本机，不推送远程）=====
+backend/docs/
+
 # ===== 调试输出（临时图片/脚本产物）=====
 backend/debug_yolo_*.jpg
 backend/debug_*.jpg

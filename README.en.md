@@ -46,7 +46,7 @@ frontend/frontend_admin/ Admin console (Vue 3 + Element Plus)     → http://loc
 | **OmDet-Turbo open-vocabulary detection** | Zero-shot detection from a text category list (Swin Tiny); prompt categories on the image detection page; works alongside fixed-class YOLO. | `/ai/image` · model key `omdet-turbo-swin-tiny` |
 | **VLM-FO1 multimodal grounding** | Fine-grained natural-language / REC grounding; YOLO proposals filtered by FO1; prompts on the image detection page. | `/ai/image` · model key `vlm-fo1-3b` |
 | **MOSS-Transcribe-Diarize ASR** | Multi-speaker transcription with timestamps, audio/video upload, subtitle preview, and JSON/SRT/ASS export. | `/ai/asr` · model key `moss-transcribe-diarize-0p9b` |
-| **CPU speech recognition** | Paraformer-zh, Streaming Zipformer INT8, faster-whisper Small INT8, Parakeet TDT 0.6B v3, Moonshine Tiny/Small/Medium Streaming, and Qwen3-ASR 0.6B. Local file transcription with model readiness and language guidance. | `/ai/asr` · [CPU ASR setup](backend/docs/CPU_ASR_INTEGRATION.md) |
+| **CPU speech recognition** | Paraformer-zh, Streaming Zipformer INT8, faster-whisper Small INT8, Parakeet TDT 0.6B v3, Moonshine Tiny/Small/Medium Streaming, and Qwen3-ASR 0.6B. Local file transcription with model readiness and language guidance. | `/ai/asr` |
 | **Cross-camera MTMC evidence storage** | Three gates (confirmed / candidate / new), tracklet evidence, an evidence-storage session switch, and manual candidate promotion/rejection. | `/ai/mtmc` · [guide](docs/mtmc-cross-camera-reid.md) |
 | **Cross-camera MTMC re-identification** | Shared multi-stream ingestion → tracklets → OSNet/CLIP in parallel with Youtu → vehicle visual ReID plus plate fusion → global IDs; AI overlay on the monitoring wall; McByte++. | `/ai/mtmc` · [guide](docs/mtmc-cross-camera-reid.md) |
 | **Fall detection** | Four pose measures; image, video, and camera input; async annotated video and trigger events; alert rules and sound. | `/ai/fall` · `fall_detection` alerts |
@@ -54,7 +54,7 @@ frontend/frontend_admin/ Admin console (Vue 3 + Element Plus)     → http://loc
 | **Project portal** | `frontend_home` (`:5174`), console deep links, and shared login state through the `tiger_ai_token` cookie. | http://localhost:5174 |
 | **Windows screen RTSP** | Streams the local desktop into camera management and the monitoring wall for testing without a physical camera. | [Instructions](docs/camera-screen-rtsp.md) |
 | **Separate model-management section** | Top-level sidebar section for the model list and training, next to AI recognition. | `/ai/model` · `/ai/training` |
-| **Production model scenarios, phase one** | Nine fixed model routes, four workbench types, dynamic readiness, and inference shared by the admin UI and Open API. | `/ai/scenarios` · [examples](backend/docs/openapi_examples.md#生产模型场景) |
+| **Production model scenarios, phase one** | Nine fixed model routes, four workbench types, dynamic readiness, and inference shared by the admin UI and Open API. | `/ai/scenarios` |
 
 For more detail, see the [recent feature overview](docs/articles/平台近期新增功能说明.md).
 
@@ -233,7 +233,6 @@ Vite proxies `/api` to `http://127.0.0.1:5001`.
 | [Recent feature overview](docs/articles/平台近期新增功能说明.md) | MTMC, falls, gestures, portal, RTSP, and model management |
 | [Windows screen RTSP](docs/camera-screen-rtsp.md) | Desktop streaming into camera management and monitoring |
 | [OpenCV Zoo models](docs/opencv-zoo-models.md) | EfficientSAM, LaMa, MobileNet, face/person index |
-| [Open API examples](backend/docs/openapi_examples.md) | Scenario list/detail, multipart inference, readiness, errors |
 | [Table recognition](docs/表格识别功能汇总.md) | YOLO detection, RapidOCR, SLANet_plus, model/API/UI/code |
 | [Tracking scenario classification](docs/目标追踪-场景分类说明.md) | General, vehicle, and absence tracking architecture |
 | [Absence detection](docs/人员离岗检测-功能说明.md) | Multi-station rules, camera motion compensation, API, acceptance |

@@ -48,7 +48,7 @@ frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://loc
 | **开放词汇检测 OmDet-Turbo** | 文本类别列表零样本检测（Swin Tiny）；图像检测页「提示类别」；与固定类 YOLO 并存 | `/ai/image` · 模型键 `omdet-turbo-swin-tiny` |
 | **多模态定位 VLM-FO1** | 自然语言 / REC 细粒度定位；YOLO 候选框 + FO1 筛选；图像检测页提示词 | `/ai/image` · 模型键 `vlm-fo1-3b` |
 | **ASR · MOSS-Transcribe-Diarize** | 多人说话人转写 + 时间戳；音/视频上传；字幕预览与 JSON/SRT/ASS 导出 | `/ai/asr` · 模型键 `moss-transcribe-diarize-0p9b` |
-| **CPU 语音识别模型** | Paraformer-zh、Streaming Zipformer INT8、faster-whisper Small INT8、Parakeet TDT 0.6B v3、Moonshine 流式 Tiny/Small/Medium、Qwen3-ASR 0.6B；本地文件转写、资源就绪状态与语言说明 | `/ai/asr` · [接入与部署](backend/docs/CPU_ASR_INTEGRATION.md) |
+| **CPU 语音识别模型** | Paraformer-zh、Streaming Zipformer INT8、faster-whisper Small INT8、Parakeet TDT 0.6B v3、Moonshine 流式 Tiny/Small/Medium、Qwen3-ASR 0.6B；本地文件转写、资源就绪状态与语言说明 | `/ai/asr` |
 | **跨镜 MTMC · 证据落库** | 三档门控（确认 / 候选 / 新建）+ Tracklet 证据；会话「证据落库」开关；候选人工晋升/驳回 | `/ai/mtmc` · [文档](docs/mtmc-cross-camera-reid.md) |
 | **跨镜 MTMC 重识别** | 多路共享拉流 → Tracklet → OSNet/CLIP 并联 Youtu → 车辆视觉 ReID+车牌融合 → 全局 ID；监控墙 AI 叠加；McByte++ | `/ai/mtmc` · [文档](docs/mtmc-cross-camera-reid.md) |
 | **跌倒检测** | 姿态四指标；图片 / 视频 / 摄像头；异步标注视频与触发事件；告警规则 + 告警音 | `/ai/fall` · 告警页 `fall_detection` |
@@ -56,7 +56,7 @@ frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://loc
 | **项目门户** | `frontend_home`（:5174）+ 控制台深链；Cookie `tiger_ai_token` 登录态互通 | http://localhost:5174 |
 | **Windows 屏幕 RTSP** | 本机桌面推流接入摄像头管理 / 监控墙，便于无实体摄像头联调 | [操作说明](docs/camera-screen-rtsp.md) |
 | **模型管理独立目录** | 侧栏根级「模型管理」（模型列表 + 模型训练），与「AI智能识别」同级并置顶 | `/ai/model` · `/ai/training` |
-| **生产模型场景（第一阶段）** | 9 个固定模型路由、4 类工作台、动态就绪状态，以及管理端/Open API 同源推理 | `/ai/scenarios` · [调用示例](backend/docs/openapi_examples.md#生产模型场景) |
+| **生产模型场景（第一阶段）** | 9 个固定模型路由、4 类工作台、动态就绪状态，以及管理端/Open API 同源推理 | `/ai/scenarios` |
 
 更完整的功能解读见：[平台近期新增功能说明](docs/articles/平台近期新增功能说明.md)。
 
@@ -239,7 +239,6 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 | [平台近期新增功能说明](docs/articles/平台近期新增功能说明.md) | 跨镜 MTMC / 跌倒 / 手势 / 门户 / 屏幕 RTSP / 模型管理目录等近期能力解读 |
 | [Windows 屏幕 RTSP 推流](docs/camera-screen-rtsp.md) | 本机桌面推流接入摄像头管理与监控墙 |
 | [OpenCV Zoo 轻量视觉](docs/opencv-zoo-models.md) | EfficientSAM / LaMa / MobileNet / 与人脸·行人索引 |
-| [Open API 调用示例](backend/docs/openapi_examples.md) | 模型场景列表、详情、四类 multipart 推理、就绪字段与错误约定 |
 | [表格识别功能汇总](docs/表格识别功能汇总.md) | YOLO 检表 → RapidOCR → SLANet_plus；模型、API、前端与代码位置 |
 | [目标追踪-场景分类说明](docs/目标追踪-场景分类说明.md) | 通用追踪 / 车辆追踪 / 人员离岗三场景架构、权限路由与扩展方式 |
 | [人员离岗检测-功能说明](docs/人员离岗检测-功能说明.md) | 多工位离岗规则、镜头运动补偿（移动镜头工位锚定）、API 与验收 |
