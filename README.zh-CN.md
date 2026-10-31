@@ -264,6 +264,16 @@ Vite 代理：`/api` → `http://127.0.0.1:5001`。
 | :---: | :---: | :---: |
 | <img src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" alt="744ec6c19b3817d1e7c1efe5d66124e7" width="300" /> | <img src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" alt="243ec0a85149c5fc2c79168466bfd19d" width="300" /> | <img src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" alt="a894ca39be5586d2f9bcc7a587404d4d" width="300" /> |
 
+## 技术交流群
+
+想一起聊 AI，或讨论本项目用法？欢迎加入 AI 技术交流群！
+
+扫描下方二维码，或添加微信：**hhhxy666666**。添加好友时备注 **AI** 申请进群，也可以在通过好友申请后私信 **AI**，即可申请邀请进入 AI 技术交流群。
+
+**备注 / 私信：**`AI`，欢迎进群交流。
+
+<img src="docs/community/wechat-qr.png" alt="微信二维码：添加 hhhxy666666，备注或私信 AI 申请进群" width="280" />
+
 ## 参与贡献
 
 GitHub 是任务与决策的最终记录场所。统一流程：

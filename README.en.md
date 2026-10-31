@@ -257,6 +257,16 @@ Vite proxies `/api` to `http://127.0.0.1:5001`.
 | :---: | :---: | :---: |
 | <img src="https://github.com/user-attachments/assets/90d8bbee-e9f1-4e73-a5fe-0e1389ef9769" alt="744ec6c19b3817d1e7c1efe5d66124e7" width="300" /> | <img src="https://github.com/user-attachments/assets/9a0850dd-1607-4b8a-8385-05c62ac37859" alt="243ec0a85149c5fc2c79168466bfd19d" width="300" /> | <img src="https://github.com/user-attachments/assets/a1c939e0-3f35-47df-b878-dfb85e095821" alt="a894ca39be5586d2f9bcc7a587404d4d" width="300" /> |
 
+## AI Technical Discussion Group
+
+Want to chat about AI or discuss how to use this project? Join our WeChat community!
+
+Scan the QR code below or add WeChat ID **hhhxy666666**. Include **AI** in your friend request, or send **AI** in a private message after your request is accepted, to request an invitation to the AI technical discussion group.
+
+**Friend request note / private message:** `AI`. Everyone is welcome to join the discussion.
+
+<img src="docs/community/wechat-qr.png" alt="WeChat QR code — add hhhxy666666 and mention AI to request a group invitation" width="280" />
+
 ## Contributing
 
 GitHub is the final record for project work and decisions. The workflow is:
