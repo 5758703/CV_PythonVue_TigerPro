@@ -88,9 +88,12 @@ frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios
 
 亮暗色主题切换 · 科技感背景（粒子 / 星座连线 / 极光 / 扫描线 / CRT）
 
-https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4
+<video src="https://cdn.jsdelivr.net/gh/5758703/CV_PythonVue_TigerPro@main/assets/demos/tiger-ai-platform-login.mp4" controls playsinline preload="metadata" width="100%">
+  你的浏览器不支持 video 标签。可打开
+  <a href="https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4">登录页演示视频</a>
+</video>
 
-仓库内同步保存：[`assets/demos/tiger-ai-platform-login.mp4`](assets/demos/tiger-ai-platform-login.mp4)
+[下载原片（Release）](https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4) · 仓库内：[`assets/demos/tiger-ai-platform-login.mp4`](assets/demos/tiger-ai-platform-login.mp4)
 
 ### 演示视频 / Video demos
 

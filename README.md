@@ -84,9 +84,12 @@ frontend/frontend_admin/ Vue 3 + Vite + Element Plus + Vue Router + Pinia + Axio
 
 Light / dark theme toggle · tech background (particles, constellation links, aurora, scanlines, CRT)
 
-https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4
+<video src="https://cdn.jsdelivr.net/gh/5758703/CV_PythonVue_TigerPro@main/assets/demos/tiger-ai-platform-login.mp4" controls playsinline preload="metadata" width="100%">
+  Your browser does not support the video tag.
+  <a href="https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4">Open the login demo video</a>
+</video>
 
-Also kept in the repo: [`assets/demos/tiger-ai-platform-login.mp4`](assets/demos/tiger-ai-platform-login.mp4)
+[Download (Release)](https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4) · In-repo: [`assets/demos/tiger-ai-platform-login.mp4`](assets/demos/tiger-ai-platform-login.mp4)
 
 ### Video demos
 
