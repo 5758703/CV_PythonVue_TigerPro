@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 
 from extensions import db
 from models import Menu
-from security import permission_required
+from security import permission_required, platform_admin_required
 
 menu_bp = Blueprint("sys_menu", __name__, url_prefix="/api/system/menu")
 
@@ -37,6 +37,7 @@ def get_menu(mid):
 
 @menu_bp.post("")
 @permission_required("system:menu:add")
+@platform_admin_required
 def create_menu():
     data = request.get_json(silent=True) or {}
     if not data.get("menuName") or not data.get("menuType"):
@@ -60,6 +61,7 @@ def create_menu():
 
 @menu_bp.put("/<int:mid>")
 @permission_required("system:menu:edit")
+@platform_admin_required
 def update_menu(mid):
     menu = Menu.query.get_or_404(mid)
     data = request.get_json(silent=True) or {}
@@ -76,6 +78,7 @@ def update_menu(mid):
 
 @menu_bp.delete("/<int:mid>")
 @permission_required("system:menu:remove")
+@platform_admin_required
 def delete_menu(mid):
     menu = Menu.query.get_or_404(mid)
     if Menu.query.filter_by(parent_id=mid).first():

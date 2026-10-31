@@ -29,6 +29,7 @@ def _forward_headers(token: str) -> dict:
     skip = {
         "host", "content-length", "authorization", "x-api-key", "x-app-id",
         "connection", "transfer-encoding",
+        "x-org-id",
     }
     headers = {}
     for k, v in request.headers:
@@ -78,15 +79,8 @@ def handle_bridge(subpath: str):
     endpoint = resolve_api_endpoint(method, api_path)
 
     if endpoint is None:
-        # 仍尝试转发未知路径（兼容动态规则），但要求域级或通配授权
-        endpoint = {
-            "method": method,
-            "path": api_path,
-            "domain": "other",
-            "scope": "open:other:access",
-            "bridgeable": api_path.startswith("/api/") and not api_path.startswith("/api/system/open-app"),
-            "summary": api_path,
-        }
+        # Unknown/encoded aliases must not skip the non-bridgeable registry.
+        return open_error(403, 403, "该接口未登记为可桥接资源", "forbidden")
 
     if not endpoint.get("bridgeable", False):
         return open_error(403, 403, f"该接口不可通过 Open API 桥接：{api_path}", "forbidden")

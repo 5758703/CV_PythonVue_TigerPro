@@ -14,6 +14,9 @@ request.interceptors.request.use((config) => {
   if (userStore.token) {
     config.headers.Authorization = `Bearer ${userStore.token}`
   }
+  if (userStore.contextOrgId && config.headers['X-Org-Id'] !== null) {
+    config.headers['X-Org-Id'] = String(userStore.contextOrgId)
+  }
   return config
 })
 

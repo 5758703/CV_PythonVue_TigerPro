@@ -9,6 +9,14 @@ export const userApi = {
   remove: (id) => request.delete(`/system/user/${id}`)
 }
 
+export const organizationApi = {
+  overview: (uid) => request.get(`/system/organization/users/${uid}`),
+  addMembership: (uid, data) => request.post(`/system/organization/users/${uid}/memberships`, data),
+  endMembership: (mid) => request.delete(`/system/organization/memberships/${mid}`),
+  addGrant: (uid, data) => request.post(`/system/organization/users/${uid}/grants`, data),
+  revokeGrant: (gid) => request.delete(`/system/organization/grants/${gid}`)
+}
+
 // ---------------- 角色
 export const roleApi = {
   list: (params) => request.get('/system/role', { params }),

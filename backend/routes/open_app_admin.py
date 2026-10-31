@@ -6,11 +6,20 @@ from sqlalchemy import func
 
 from extensions import db
 from models.open_app import OpenApp, OpenApiKey, OpenApiCallLog
-from security import permission_required
+from security import permission_required, login_required, platform_admin_required
 from security_open import generate_api_key, hash_api_key, key_prefix
 from services.webhook import deliver_webhook
 
 open_app_bp = Blueprint("sys_open_app", __name__, url_prefix="/api/system/open-app")
+
+
+@open_app_bp.before_request
+@login_required
+@platform_admin_required
+def _require_platform_configuration_identity():
+    # Apps and keys currently have global ownership. A scoped organization role
+    # cannot safely manage them until an explicit per-organization owner exists.
+    return None
 
 
 @open_app_bp.get("/scopes")

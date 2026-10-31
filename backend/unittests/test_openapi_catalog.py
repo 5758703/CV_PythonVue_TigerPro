@@ -26,6 +26,13 @@ def test_open_app_not_bridgeable():
             assert e["bridgeable"] is False
 
 
+def test_organization_and_system_management_never_use_admin_service_account_bridge():
+    from services.openapi_catalog import _bridgeable
+    for path in ("/api/system/organization/users/3/grants", "/api/system/user/3",
+                 "/api/system/role/2", "/api/auth/info", "/api/auth/contexts"):
+        assert _bridgeable(path) is False
+
+
 def test_resolve_and_domain_scope():
     ep = resolve_api_endpoint("POST", "/api/ai/face/recognize")
     assert ep is not None

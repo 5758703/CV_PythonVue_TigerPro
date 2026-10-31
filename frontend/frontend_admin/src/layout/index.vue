@@ -46,6 +46,17 @@
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <el-select
+            v-if="store.contexts.length"
+            :model-value="store.contextOrgId"
+            placeholder="请选择工作身份"
+            style="width: 240px"
+            :loading="switchingContext"
+            @change="switchWorkContext"
+          >
+            <el-option v-for="c in store.contexts" :key="c.orgId" :value="c.orgId"
+              :label="`${c.orgType === 'PARTY' ? '党组织' : '行政'} / ${c.orgName}`" />
+          </el-select>
           <a
             class="portal-link"
             :href="portalUrl"
@@ -76,7 +87,7 @@
       <el-main class="main">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
-            <component :is="Component" />
+            <component :is="Component" :key="`${$route.path}:${store.contextRevision}`" />
           </transition>
         </router-view>
       </el-main>
@@ -97,6 +108,16 @@ import MenuItem from './MenuItem.vue'
 const router = useRouter()
 const store = useUserStore()
 const collapse = ref(false)
+const switchingContext = ref(false)
+const switchWorkContext = async (orgId) => {
+  switchingContext.value = true
+  try {
+    await store.switchContext(orgId)
+    await router.push('/index')
+  } finally {
+    switchingContext.value = false
+  }
+}
 const portalUrl = computed(() => resolvePortalUrl())
 
 const menuContainsPath = (items, wantedPath, basePath = '') => (items || []).some((item) => {

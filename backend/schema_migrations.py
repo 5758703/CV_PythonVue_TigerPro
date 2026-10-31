@@ -18,6 +18,13 @@ def migrate_schema(db):
                 for ddl in additions:
                     connection.execute(text(f"ALTER TABLE {table} {ddl}"))
 
+    add_columns("sys_dept", [("org_type", "ADD COLUMN org_type VARCHAR(16) NOT NULL DEFAULT 'ADMIN'")])
+    add_columns("sys_role", [("business_domain", "ADD COLUMN business_domain VARCHAR(16) NOT NULL DEFAULT 'SYSTEM'")])
+    add_columns("sys_user", [
+        ("auth_version", "ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1"),
+        ("org_auth_migrated", "ADD COLUMN org_auth_migrated BOOLEAN NOT NULL DEFAULT 0"),
+    ])
+
     add_columns("ai_model", [
         ("task", "ADD COLUMN task VARCHAR(64) DEFAULT 'object-detection'"),
         ("library", "ADD COLUMN library VARCHAR(32) DEFAULT 'ultralytics'"),

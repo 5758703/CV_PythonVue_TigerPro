@@ -3053,6 +3053,12 @@ def seed_open_platform():
 
 
 def init_seed():
+    # Permission catalog only: ordinary roles are never silently granted access
+    # to full phone/email fields during an upgrade.
+    if not Menu.query.filter_by(perms="system:user:sensitive").first() and User.query.first():
+        db.session.add(Menu(parent_id=100, menu_name="用户敏感字段（电话/邮箱）", menu_type="F",
+                            perms="system:user:sensitive", status="0", visible="0"))
+        db.session.commit()
     if User.query.first():
         seed_ai_menus()   # 用户已存在也补齐 AI 菜单种子
         seed_ai_models()  # 用户已存在也补齐 AI 模型种子
@@ -3063,6 +3069,8 @@ def init_seed():
     _seed_depts()
     _seed_jobs()
     _seed_menus()
+    db.session.add(Menu(parent_id=100, menu_name="用户敏感字段（电话/邮箱）", menu_type="F",
+                        perms="system:user:sensitive", status="0", visible="0"))
     db.session.flush()
 
     all_menus = Menu.query.all()

@@ -14,14 +14,15 @@
 
     <el-card shadow="never">
       <div class="toolbar">
-        <el-button v-permission="'system:role:add'" type="primary" :icon="Plus" @click="openAdd">新增角色</el-button>
+        <el-button v-if="store.isAdmin" v-permission="'system:role:add'" type="primary" :icon="Plus" @click="openAdd">新增角色</el-button>
       </div>
 
       <el-table :data="rows" v-loading="loading" border stripe>
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="roleName" label="角色名称" />
         <el-table-column prop="roleKey" label="权限字符" />
-        <el-table-column label="数据范围">
+        <el-table-column prop="businessDomain" label="业务域" width="100" />
+        <el-table-column label="旧表单默认范围">
           <template #default="{ row }">
             <el-tag effect="plain">{{ scopeText(row.dataScope) }}</el-tag>
           </template>
@@ -32,7 +33,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" />
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column v-if="store.isAdmin" label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button v-permission="'system:role:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-permission="'system:role:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
@@ -61,6 +62,7 @@
         <el-form-item label="角色顺序">
           <el-input-number v-model="form.roleSort" :min="0" />
         </el-form-item>
+        <el-form-item label="业务域"><el-select v-model="form.businessDomain"><el-option label="系统管理" value="SYSTEM" /><el-option label="行政业务" value="ADMIN" /><el-option label="党务业务" value="PARTY" /><el-option label="共享基础能力" value="COMMON" /></el-select></el-form-item>
         <el-form-item label="数据范围">
           <el-select v-model="form.dataScope" style="width: 100%">
             <el-option v-for="s in scopes" :key="s.value" :label="s.label" :value="s.value" />
@@ -97,12 +99,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Refresh, Plus, Edit, Delete } from '@element-plus/icons-vue'
 
 import { roleApi, menuApi } from '../../../api/system'
+import { useUserStore } from '../../../store/user'
+const store = useUserStore()
 
 const scopes = [
   { value: 1, label: '仅本人' },
   { value: 2, label: '本部门' },
   { value: 3, label: '本部门及以下' },
-  { value: 4, label: '全部数据' }
+  { value: 4, label: '当前组织类型全部（旧表单默认）' }
 ]
 const scopeText = (v) => (scopes.find((s) => s.value === v) || {}).label || '-'
 
@@ -116,7 +120,7 @@ const query = reactive({ pageNum: 1, pageSize: 10, roleName: '' })
 const dialog = ref(false)
 const formRef = ref()
 const treeRef = ref()
-const emptyForm = () => ({ id: null, roleName: '', roleKey: '', roleSort: 0, dataScope: 1, status: '0', remark: '' })
+const emptyForm = () => ({ id: null, roleName: '', roleKey: '', businessDomain: 'SYSTEM', roleSort: 0, dataScope: 1, status: '0', remark: '' })
 const form = reactive(emptyForm())
 
 const rules = {
@@ -159,6 +163,7 @@ const openEdit = async (row) => {
     id: res.data.id,
     roleName: res.data.roleName,
     roleKey: res.data.roleKey,
+    businessDomain: res.data.businessDomain,
     roleSort: res.data.roleSort,
     dataScope: res.data.dataScope,
     status: res.data.status,

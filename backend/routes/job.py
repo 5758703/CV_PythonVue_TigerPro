@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 
 from extensions import db
 from models import Job
-from security import permission_required
+from security import permission_required, platform_admin_required
 
 job_bp = Blueprint("sys_job", __name__, url_prefix="/api/system/job")
 
@@ -30,6 +30,7 @@ def get_job(jid):
 
 @job_bp.post("")
 @permission_required("system:job:add")
+@platform_admin_required
 def create_job():
     data = request.get_json(silent=True) or {}
     if not data.get("postCode") or not data.get("postName"):
@@ -47,6 +48,7 @@ def create_job():
 
 @job_bp.put("/<int:jid>")
 @permission_required("system:job:edit")
+@platform_admin_required
 def update_job(jid):
     job = Job.query.get_or_404(jid)
     data = request.get_json(silent=True) or {}
@@ -60,6 +62,7 @@ def update_job(jid):
 
 @job_bp.delete("/<int:jid>")
 @permission_required("system:job:remove")
+@platform_admin_required
 def delete_job(jid):
     job = Job.query.get_or_404(jid)
     db.session.delete(job)

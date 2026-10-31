@@ -67,7 +67,10 @@ LEGACY_SCOPE_ALIASES = {
 
 # 禁止桥接（仅控制台）：避免递归 / 密钥管理面外泄
 NON_BRIDGEABLE_PREFIXES = (
-    "/api/system/open-app",
+    # Service-account JWTs have no human membership context and must never
+    # become a second entrance into scoped user or authorization management.
+    "/api/system",
+    "/api/auth",
     "/openapi/v1",
 )
 

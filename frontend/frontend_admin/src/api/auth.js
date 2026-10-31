@@ -13,6 +13,10 @@ export function getInfo() {
   return request.get('/auth/info')
 }
 
+export function getContexts() {
+  return request.get('/auth/contexts', { headers: { 'X-Org-Id': null } })
+}
+
 // 侧边栏可见菜单树
 export function getRouters() {
   return request.get('/auth/routers')

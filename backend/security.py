@@ -33,9 +33,8 @@ def _match(perm, owned):
 def has_perm(user, perm):
     if user is None:
         return False
-    if user.is_admin:
-        return True
-    return _match(perm, user.perms())
+    from services.organization_auth import effective_permissions
+    return _match(perm, effective_permissions(user))
 
 
 def login_required(fn):
@@ -59,6 +58,7 @@ def permission_required(perm):
                 return jsonify(code=401, message="未登录"), 401
             if not has_perm(user, perm):
                 return jsonify(code=403, message="没有访问权限"), 403
+            g.required_perm = perm
             return fn(*args, **kwargs)
         return wrapper
     return decorator
@@ -77,36 +77,27 @@ def _descendant_dept_ids(dept_id):
     return list(ids)
 
 
-def data_scope_dept_ids(user):
-    """按角色 data_scope 返回允许的部门 id 列表。
+def data_scope_dept_ids(user, perm=None):
+    """本次操作的组织范围；None 仅用于平台配置管理员。
 
-    返回 None  -> 全部（不过滤）
-    返回 []    -> 仅本人（调用方改用 user_id 过滤）
-    返回 [ids] -> 限定这些部门
-    取用户多个角色里最宽松(数值最大)的范围。
-      1 仅本人  2 本部门  3 本部门及下级  4 全部
+    空集合表示没有组织级范围，不可解释为本人或全部。
+    本人条件由 apply_user_data_scope 按完整授权单独构造。
     """
-    if user is None:
-        return []
-    if user.is_admin:
-        return None
-    scope = max([r.data_scope or 1 for r in user.roles], default=1)
-    if scope >= 4:
-        return None
-    if scope == 3:
-        return _descendant_dept_ids(user.dept_id)
-    if scope == 2:
-        return [user.dept_id] if user.dept_id is not None else []
-    return []  # 1 仅本人
+    from services.organization_auth import operation_org_ids
+    return operation_org_ids(user, perm or g.get("required_perm")) if user else set()
 
 
-def apply_user_data_scope(query, user):
+def apply_user_data_scope(query, user, perm=None):
     """对 User 查询套用数据权限过滤。"""
-    if user is None:
-        return query.filter(False)
-    dept_ids = data_scope_dept_ids(user)
-    if dept_ids is None:
-        return query
-    if not dept_ids:
-        return query.filter(User.id == user.id)
-    return query.filter(User.dept_id.in_(dept_ids))
+    from services.organization_auth import scope_user_query
+    return scope_user_query(query, user, perm or g.get("required_perm"))
+
+
+def platform_admin_required(fn):
+    """Configuration and delegation are separate from scoped resource access."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not current_user() or not current_user().is_admin:
+            return jsonify(code=403, message="此授权配置或账号安全操作仅限平台管理员"), 403
+        return fn(*args, **kwargs)
+    return wrapper

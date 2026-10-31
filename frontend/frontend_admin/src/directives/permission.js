@@ -7,16 +7,16 @@ import { useUserStore } from '../store/user'
  */
 function hasPermission(value) {
   const store = useUserStore()
-  const perms = store.perms || []
-  if (perms.includes('*:*:*')) return true
-  const need = Array.isArray(value) ? value : [value]
-  return need.some((p) => perms.includes(p))
+  return store.hasPerm(value)
 }
 
 export default {
   mounted(el, binding) {
     if (!hasPermission(binding.value)) {
-      el.parentNode && el.parentNode.removeChild(el)
+      el.style.display = 'none'
     }
+  },
+  updated(el, binding) {
+    el.style.display = hasPermission(binding.value) ? '' : 'none'
   }
 }

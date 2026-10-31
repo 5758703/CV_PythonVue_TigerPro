@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.exceptions import BadRequest, Forbidden
 
 from config import Config
 from extensions import db, cors, jwt
@@ -16,6 +17,12 @@ def create_app():
         r"/openapi/*": {"origins": "*"},
     })
     jwt.init_app(app)
+
+    @app.errorhandler(BadRequest)
+    @app.errorhandler(Forbidden)
+    def _permission_input_error(error):
+        db.session.rollback()
+        return jsonify(code=error.code, message=error.description), error.code
 
     for bp in all_blueprints:
         app.register_blueprint(bp)
@@ -54,6 +61,8 @@ def create_app():
         _migrate(db)
         from seed import init_seed
         init_seed()
+        from services.organization_migration import migrate_legacy_organization_auth
+        migrate_legacy_organization_auth()
 
     return app
 

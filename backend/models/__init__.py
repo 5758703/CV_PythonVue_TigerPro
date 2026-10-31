@@ -55,6 +55,7 @@ class Dept(db.Model):
     parent_id = db.Column(db.Integer, default=0, index=True)       # 0 = 根
     ancestors = db.Column(db.String(500), default="")             # 祖级列表 "0,1,2"
     dept_name = db.Column(db.String(64), nullable=False)
+    org_type = db.Column(db.String(16), nullable=False, default="ADMIN", index=True)
     order_num = db.Column(db.Integer, default=0)
     leader = db.Column(db.String(32))
     phone = db.Column(db.String(20))
@@ -69,6 +70,7 @@ class Dept(db.Model):
             "parentId": self.parent_id,
             "ancestors": self.ancestors,
             "deptName": self.dept_name,
+            "orgType": self.org_type,
             "orderNum": self.order_num,
             "leader": self.leader,
             "phone": self.phone,
@@ -141,6 +143,7 @@ class Role(db.Model):
     role_name = db.Column(db.String(64), nullable=False)
     role_key = db.Column(db.String(64), unique=True, nullable=False)
     role_sort = db.Column(db.Integer, default=0)
+    business_domain = db.Column(db.String(16), nullable=False, default="SYSTEM")
     # 数据范围 1仅本人 2本部门 3本部门及下级 4全部
     data_scope = db.Column(db.Integer, default=1)
     status = db.Column(db.String(1), default="0")
@@ -156,6 +159,7 @@ class Role(db.Model):
             "roleName": self.role_name,
             "roleKey": self.role_key,
             "roleSort": self.role_sort,
+            "businessDomain": self.business_domain,
             "dataScope": self.data_scope,
             "status": self.status,
             "remark": self.remark,
@@ -179,6 +183,8 @@ class User(db.Model):
     phone = db.Column(db.String(20))
     sex = db.Column(db.String(1), default="0")                  # 0男 1女 2未知
     avatar = db.Column(db.String(255))
+    auth_version = db.Column(db.Integer, nullable=False, default=1)
+    org_auth_migrated = db.Column(db.Boolean, nullable=False, default=False)
     status = db.Column(db.String(1), default="0")
     del_flag = db.Column(db.String(1), default="0")
     create_time = db.Column(db.DateTime, default=datetime.utcnow)
@@ -199,19 +205,24 @@ class User(db.Model):
     # ---- 权限聚合
     @property
     def is_admin(self):
-        return any(r.role_key == "admin" for r in self.roles)
+        return self.status == "0" and self.del_flag == "0" and any(
+            r.role_key == "admin" and r.status == "0" and r.del_flag == "0" for r in self.roles)
 
     def role_keys(self):
-        return [r.role_key for r in self.roles]
+        return [r.role_key for r in self.roles if r.status == "0" and r.del_flag == "0"]
 
     def all_menus(self):
         """角色菜单 ∪ 直接授权菜单，去重。"""
         seen = {}
         for r in self.roles:
+            if r.status != "0" or r.del_flag != "0":
+                continue
             for m in r.menus:
-                seen[m.id] = m
+                if m.status == "0":
+                    seen[m.id] = m
         for m in self.menus:
-            seen[m.id] = m
+            if m.status == "0":
+                seen[m.id] = m
         return list(seen.values())
 
     def perms(self):
@@ -233,6 +244,7 @@ class User(db.Model):
             "avatar": self.avatar,
             "status": self.status,
             "roleIds": [r.id for r in self.roles],
+            "isPlatformAdmin": self.is_admin,
             "postIds": [p.id for p in self.posts],
             "createTime": self.create_time.isoformat() if self.create_time else None,
         }
@@ -254,6 +266,7 @@ from .mtmc import (  # noqa: E402  跨镜 MTMC
 from .pipeline import AiPipeline, AiPipelineRun, AiPipelineVersion  # noqa: E402  视频分析流水线
 
 from .open_app import OpenApiNonce, OpenApiRateBucket  # noqa: E402
+from .organization import OrgMembership, OrgGrant, OrgAuthAudit  # noqa: E402
 
 __all__ = [
     "db",

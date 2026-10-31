@@ -2,7 +2,8 @@
   <div>
     <el-card shadow="never">
       <div class="toolbar">
-        <el-button v-permission="'system:dept:add'" type="primary" :icon="Plus" @click="openAdd()">新增部门</el-button>
+        <el-radio-group v-model="orgType" @change="load"><el-radio-button value="ADMIN">行政组织</el-radio-button><el-radio-button value="PARTY">党组织</el-radio-button></el-radio-group>
+        <el-button v-permission="'system:dept:add'" type="primary" :icon="Plus" @click="openAdd()">新增组织</el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
       </div>
 
@@ -14,7 +15,7 @@
         default-expand-all
         border
       >
-        <el-table-column prop="deptName" label="部门名称" />
+        <el-table-column prop="deptName" label="组织名称" />
         <el-table-column prop="leader" label="负责人" />
         <el-table-column prop="phone" label="联系电话" />
         <el-table-column prop="orderNum" label="排序" width="80" />
@@ -27,13 +28,13 @@
           <template #default="{ row }">
             <el-button v-permission="'system:dept:add'" link type="primary" :icon="Plus" @click="openAdd(row)">新增</el-button>
             <el-button v-permission="'system:dept:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
-            <el-button v-permission="'system:dept:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
+            <el-button v-if="store.isAdmin" v-permission="'system:dept:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
 
-    <el-dialog v-model="dialog" :title="form.id ? '修改部门' : '新增部门'" width="520px" @closed="resetForm">
+    <el-dialog v-model="dialog" :title="form.id ? '修改组织' : '新增组织'" width="520px" @closed="resetForm">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <el-form-item label="上级部门">
           <el-tree-select
@@ -42,6 +43,7 @@
             :props="{ label: 'deptName', children: 'children' }"
             node-key="id"
             check-strictly
+            :disabled="!!form.id && !store.isAdmin"
             placeholder="选择上级部门"
             style="width: 100%"
           />
@@ -59,7 +61,7 @@
           <el-input-number v-model="form.orderNum" :min="0" />
         </el-form-item>
         <el-form-item label="状态">
-          <el-switch v-model="form.status" active-value="0" inactive-value="1" />
+          <el-switch v-model="form.status" active-value="0" inactive-value="1" :disabled="!store.isAdmin" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -76,6 +78,9 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Refresh } from '@element-plus/icons-vue'
 
 import { deptApi } from '../../../api/system'
+import { useUserStore } from '../../../store/user'
+const store = useUserStore()
+const orgType = ref(store.contexts.find(c => c.orgId === store.contextOrgId)?.orgType || 'ADMIN')
 
 const loading = ref(false)
 const saving = ref(false)
@@ -83,7 +88,7 @@ const deptTree = ref([])
 
 const dialog = ref(false)
 const formRef = ref()
-const emptyForm = () => ({ id: null, parentId: 0, deptName: '', leader: '', phone: '', orderNum: 0, status: '0' })
+const emptyForm = () => ({ id: null, parentId: 0, orgType: orgType.value, deptName: '', leader: '', phone: '', orderNum: 0, status: '0' })
 const form = reactive(emptyForm())
 
 const rules = {
@@ -96,7 +101,7 @@ const parentOptions = computed(() => [{ id: 0, deptName: '顶级', children: dep
 const load = async () => {
   loading.value = true
   try {
-    const res = await deptApi.tree()
+    const res = await deptApi.tree({ orgType: orgType.value })
     deptTree.value = res.data
   } finally {
     loading.value = false
@@ -152,5 +157,8 @@ onMounted(load)
 <style scoped>
 .toolbar {
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 </style>

@@ -4,6 +4,7 @@ from .role import role_bp
 from .dept import dept_bp
 from .job import job_bp
 from .menu import menu_bp
+from .organization import organization_bp
 from .ai_model import ai_model_bp
 from .camera import camera_bp
 from .water_level import water_level_bp
@@ -27,7 +28,7 @@ from .model_scenario import model_scenario_bp
 from .squat import squat_bp
 from .radar import radar_bp
 
-all_blueprints = [auth_bp, user_bp, role_bp, dept_bp, job_bp, menu_bp, ai_model_bp,
+all_blueprints = [auth_bp, user_bp, role_bp, dept_bp, job_bp, menu_bp, organization_bp, ai_model_bp,
                   camera_bp, water_level_bp, training_bp, badminton_bp, face_bp, reid_bp, alert_bp,
                   table_recog_bp, vehicle_bp, absence_bp, handpose_bp, fall_bp, openapi_v1_bp, open_app_bp,
                   portal_bp, mtmc_bp, defect_bp, pipeline_bp]

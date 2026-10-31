@@ -77,11 +77,31 @@ def register():
 def info():
     """登录用户身份：基本信息 + 角色标识 + 权限标识集合。"""
     user = current_user()
+    from services.organization_auth import effective_permissions, action_grants, valid_memberships, current_context
+    memberships = valid_memberships(user)
+    context = current_context(user)
+    contexts = {m.org_id: {"orgId": m.org_id, "orgName": m.org.dept_name, "orgType": m.org.org_type}
+                for m in memberships}
+    role_keys = ["admin"] if user.is_admin else sorted({g.role.role_key for g in action_grants(user)})
     return jsonify(code=0, data={
         "user": user.to_dict(),
-        "roles": user.role_keys(),
-        "permissions": sorted(user.perms()),
+        "roles": role_keys,
+        "permissions": sorted(effective_permissions(user)),
+        "contexts": list(contexts.values()),
+        "contextOrgId": context,
+        "authVersion": user.auth_version,
     })
+
+
+@auth_bp.get("/contexts")
+@login_required
+def contexts():
+    """Recovery/discovery endpoint deliberately ignores the selected context."""
+    from services.organization_auth import valid_memberships
+    user = current_user()
+    choices = {m.org_id: {"orgId": m.org_id, "orgName": m.org.dept_name, "orgType": m.org.org_type}
+               for m in valid_memberships(user)}
+    return jsonify(code=0, data={"contexts": list(choices.values()), "isPlatformAdmin": user.is_admin})
 
 
 @auth_bp.get("/routers")
@@ -92,6 +112,8 @@ def routers():
     visible=0 显示；visible=1 隐藏（仍可保留权限标识供接口鉴权）。
     """
     user = current_user()
+    from services.organization_auth import effective_menus, current_context
+    current_context(user)
     if user.is_admin:
         menus = Menu.query.filter(
             Menu.menu_type.in_(["M", "C"]),
@@ -100,7 +122,7 @@ def routers():
         ).all()
     else:
         menus = [
-            m for m in user.all_menus()
+            m for m in effective_menus(user)
             if m.menu_type in ("M", "C") and m.status == "0" and m.visible == "0"
         ]
     menus.sort(key=lambda m: (m.parent_id, m.order_num))
