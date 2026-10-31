@@ -124,7 +124,7 @@ location /openapi/ {
 
 亮暗色主题与科技背景动效展示视频（仓库内保存）：
 
-[`../../assets/demos/tiger-ai-platform-login.mp4`](../../assets/demos/tiger-ai-platform-login.mp4)
+[`../../docs/assets/demos/tiger-ai-platform-login.mp4`](../../docs/assets/demos/tiger-ai-platform-login.mp4)
 
 亦收录于根目录 [README 演示与截图](../../README.zh-CN.md#控制台登录页展示--admin-login-showcase)。
 

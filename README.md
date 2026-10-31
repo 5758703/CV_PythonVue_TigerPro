@@ -1,7 +1,7 @@
 # CV Python Tigerpro
 
 <p align="center">
-  <img src="assets/tiger-ai-logo.svg" alt="Tiger AI" width="330" />
+  <img src="docs/assets/tiger-ai-logo.svg" alt="Tiger AI" width="330" />
 </p>
 
 <p align="center">
@@ -84,12 +84,11 @@ frontend/frontend_admin/ Vue 3 + Vite + Element Plus + Vue Router + Pinia + Axio
 
 Light / dark theme toggle · tech background (particles, constellation links, aurora, scanlines, CRT)
 
-<video src="https://cdn.jsdelivr.net/gh/5758703/CV_PythonVue_TigerPro@main/assets/demos/tiger-ai-platform-login.mp4" controls playsinline preload="metadata" width="100%">
-  Your browser does not support the video tag.
-  <a href="https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4">Open the login demo video</a>
-</video>
+<p align="center">
+  <img src="docs/assets/demos/tiger-ai-platform-login.gif" alt="Tiger AI admin login showcase" width="960" />
+</p>
 
-[Download (Release)](https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4) · In-repo: [`assets/demos/tiger-ai-platform-login.mp4`](assets/demos/tiger-ai-platform-login.mp4)
+[Full MP4 (Release)](https://github.com/5758703/CV_PythonVue_TigerPro/releases/download/login-demo/tiger-ai-platform-login.mp4) · In-repo: [`docs/assets/demos/tiger-ai-platform-login.mp4`](docs/assets/demos/tiger-ai-platform-login.mp4)
 
 ### Video demos
 
