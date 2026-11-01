@@ -2961,7 +2961,7 @@ def seed_open_platform():
     _ensure_ai_menu(1903, 190, "开放应用修改", "F", "system:openapp:edit")
     _ensure_ai_menu(1904, 190, "开放应用删除", "F", "system:openapp:remove")
 
-    # 桥接服务账号（admin 权限，仅内调，不可登录业务）
+    # 桥接服务账号仅持有业务菜单权限，不能成为第二个超级管理员。
     bridge = User.query.filter_by(username=BRIDGE_USER).first()
     if bridge is None:
         bridge = User(
@@ -2972,9 +2972,8 @@ def seed_open_platform():
             email="openapi-bridge@localhost",
         )
         bridge.set_password(secrets.token_urlsafe(32))
-        admin_role = Role.query.filter_by(role_key="admin").first()
-        if admin_role:
-            bridge.roles = [admin_role]
+        from services.superadmin import bridge_business_menus
+        bridge.menus = bridge_business_menus()
         db.session.add(bridge)
         db.session.commit()
 
@@ -3095,7 +3094,7 @@ def init_seed():
     job_ceo = Job.query.get(1)
     job_user = Job.query.get(4)
 
-    admin = User(username="admin", nickname="管理员", dept_id=100,
+    admin = User(id=1, username="admin", nickname="管理员", dept_id=100,
                  email="admin@tigerpro.com", phone="13800000000", sex="0", status="0")
     admin.set_password(_initial_password("admin", "INITIAL_ADMIN_PASSWORD"))
     admin.roles = [admin_role]

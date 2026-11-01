@@ -27,6 +27,14 @@ export const roleApi = {
 }
 
 // ---------------- 部门（树）
+export const orgTypeApi = {
+  list: params => request.get('/system/org-type', { params }),
+  deletionPlan: code => request.get(`/system/org-type/${encodeURIComponent(code)}/deletion-plan`),
+  add: data => request.post('/system/org-type', data),
+  update: data => request.put(`/system/org-type/${encodeURIComponent(data.code)}`, data),
+  remove: code => request.delete(`/system/org-type/${encodeURIComponent(code)}`)
+}
+
 export const deptApi = {
   tree: (params) => request.get('/system/dept', { params }),
   get: (id) => request.get(`/system/dept/${id}`),

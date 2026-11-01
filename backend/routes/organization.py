@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, abort
 
 from extensions import db
+from services.organization_types import primary_type, lock_enabled_type
 from models import Dept, Role, User
 from models.organization import OrgMembership, OrgGrant, OrgAuthAudit
 from security import login_required, platform_admin_required, current_user
@@ -39,9 +40,12 @@ def _period(data, member=None):
     return start, end
 
 
-def _user(uid):
-    user = User.query.filter_by(id=uid, del_flag="0").with_for_update().first_or_404()
-    if user.is_admin:
+def _user(uid, closing=False):
+    query = User.query.filter_by(id=uid)
+    if not closing:
+        query = query.filter_by(del_flag="0")
+    user = query.with_for_update().first_or_404()
+    if user.is_admin and not closing:
         _error("平台管理员账号不使用业务组织授权，请使用普通账号登记任职")
     return user
 
@@ -59,10 +63,11 @@ def _grant_view(grant):
 @login_required
 @platform_admin_required
 def overview(uid):
-    user = User.query.filter_by(id=uid, del_flag="0").first_or_404()
+    user = User.query.filter_by(id=uid).first_or_404()
     memberships = OrgMembership.query.filter_by(user_id=uid).order_by(OrgMembership.id).all()
     grants = OrgGrant.query.join(OrgMembership).filter(OrgMembership.user_id == uid).order_by(OrgGrant.id).all()
     return jsonify(code=0, data=dict(user=user.to_dict(), authVersion=user.auth_version,
+        canAssign=user.del_flag == "0" and user.status == "0" and not user.is_admin,
         memberships=[dict(m.to_dict(), effective=in_period(m) and active_org(m.org_id)) for m in memberships],
         grants=[_grant_view(g) for g in grants],
         audit=[a.to_dict() for a in OrgAuthAudit.query.filter_by(subject_id=uid)
@@ -79,6 +84,7 @@ def create_membership(uid):
     org = db.session.get(Dept, org_id) if isinstance(org_id, int) and not isinstance(org_id, bool) else None
     if not org or not active_org(org.id):
         _error("请选择有效组织")
+    lock_enabled_type(org.org_type)
     kind = data.get("memberKind", "MEMBER")
     if not isinstance(kind, str) or not kind.strip() or len(kind) > 64:
         _error("任职名称必填且不超过64字")
@@ -88,11 +94,11 @@ def create_membership(uid):
             _error("同组织、同任职的有效期不能重叠")
     primary = data.get("isPrimary", False)
     if not isinstance(primary, bool):
-        _error("主行政部门标记必须是布尔值")
-    if primary and (org.org_type != "ADMIN" or start > datetime.utcnow()):
-        _error("主部门只能选择当前生效的行政任职")
+        _error("主组织标记必须是布尔值")
+    if primary and (not primary_type(org.org_type) or start > datetime.utcnow()):
+        _error("主部门只能选择当前生效且类型允许作为主组织的任职")
     if primary and any(m.is_primary for m in valid_memberships(user)):
-        _error("已有有效主行政任职，请先结束旧任职，再登记新任职")
+        _error("已有有效主任职，请先结束旧任职，再登记新任职")
     m = OrgMembership(user_id=uid, org_id=org.id, member_kind=kind.strip(), is_primary=primary,
                       valid_from=start, valid_to=end)
     db.session.add(m)
@@ -111,7 +117,7 @@ def create_membership(uid):
 @platform_admin_required
 def end_membership(mid):
     member = db.session.get(OrgMembership, mid) or abort(404)
-    user = _user(member.user_id)
+    user = _user(member.user_id, closing=True)
     before = member.to_dict()
     member.status = "1"
     now = datetime.utcnow()
@@ -142,6 +148,7 @@ def create_grant(uid):
     member, role = db.session.get(OrgMembership, mid), db.session.get(Role, rid)
     if not member or member.user_id != uid or not in_period(member) or not active_org(member.org_id):
         _error("任职不属于此用户或已失效")
+    lock_enabled_type(member.org.org_type)
     if not role or not role_allowed(role, member.org.org_type):
         _error("角色停用、业务域不匹配或属于不可转授的平台管理员角色")
     scope = data.get("scopeType", "ORG")
@@ -194,7 +201,7 @@ def create_grant(uid):
 @platform_admin_required
 def revoke_grant(gid):
     grant = db.session.get(OrgGrant, gid) or abort(404)
-    user = _user(grant.membership.user_id)
+    user = _user(grant.membership.user_id, closing=True)
     before = grant.to_dict()
     grant.status = "1"
     bump(user)

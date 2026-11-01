@@ -67,7 +67,7 @@
           <div><span>选中角度</span><strong>{{ selectedAngle }}</strong></div>
         </div>
         <div class="wb-table-wrap">
-          <table class="wb-table">
+          <table v-resizable-columns class="wb-table">
             <thead><tr><th>#</th><th>类别</th><th>置信度</th><th>角度</th><th>四点坐标</th></tr></thead>
             <tbody>
               <tr v-for="(item, index) in normalizedResult.detections" :key="index" :class="{ 'is-selected': selectedIndex === index }" tabindex="0" @click="selectDetection(index)" @keydown.enter="selectDetection(index)" @keydown.space.prevent="selectDetection(index)">

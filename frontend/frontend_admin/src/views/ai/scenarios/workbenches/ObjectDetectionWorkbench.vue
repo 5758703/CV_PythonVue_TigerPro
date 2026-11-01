@@ -71,7 +71,7 @@
           <div><span>最高置信度</span><strong>{{ topConfidence }}</strong></div>
         </div>
         <div class="wb-table-wrap">
-          <table class="wb-table">
+          <table v-resizable-columns class="wb-table">
             <thead><tr><th>#</th><th>类别</th><th>置信度</th><th>坐标</th></tr></thead>
             <tbody>
               <tr

@@ -1,0 +1,22 @@
+.tiger-column-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 4;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  border-right: 2px solid transparent;
+  box-sizing: border-box;
+}
+.tiger-column-resize-handle:hover,
+.tiger-column-resize-handle:focus-visible {
+  border-right-color: var(--el-color-primary, #409eff);
+  background: rgba(64, 158, 255, .12);
+  outline: none;
+}
+.tiger-resizing-column,
+.tiger-resizing-column * { cursor: col-resize !important; user-select: none !important; }
+@media print { .tiger-column-resize-handle { display: none !important; } }

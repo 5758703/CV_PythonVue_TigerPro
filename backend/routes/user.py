@@ -3,6 +3,7 @@ from datetime import datetime
 
 from extensions import db
 from models import User, Role, Job, Dept
+from services.organization_types import primary_type, SHARED_DOMAINS
 from security import (
     permission_required, current_user, apply_user_data_scope, data_scope_dept_ids,
 )
@@ -79,12 +80,12 @@ def _apply_relations(user, data):
         user.depts = Dept.query.filter(Dept.id.in_(data.get("deptIds") or [])).all()
 
 
-def _validate_admin_relations(data):
+def _validate_admin_relations(data, existing=None):
     if "deptId" in data and data["deptId"] is not None:
         dept = db.session.get(Dept, data["deptId"]) if isinstance(data["deptId"], int) else None
         from services.organization_auth import active_org
-        if not dept or dept.org_type != "ADMIN" or not active_org(dept.id):
-            abort(400, description="主部门必须是有效行政组织；党组织请在任职管理中登记")
+        if not dept or not primary_type(dept.org_type) or not active_org(dept.id):
+            abort(400, description="主组织必须有效且类型允许作为主组织；其他任职请通过任职管理登记")
     for key, model in (("roleIds", Role), ("postIds", Job), ("deptIds", Dept)):
         if key not in data:
             continue
@@ -94,18 +95,22 @@ def _validate_admin_relations(data):
         rows = model.query.filter(model.id.in_(ids), model.status == "0").all()
         if len(rows) != len(set(ids)) or any(getattr(r, "del_flag", "0") != "0" for r in rows):
             abort(400, description="关联记录不存在或已停用")
-        if model is Dept and any(r.org_type != "ADMIN" for r in rows):
-            abort(400, description="请通过任职管理登记党组织，不可混入旧部门关联")
-        if model is Role and any(r.business_domain == "PARTY" for r in rows):
-            abort(400, description="党务角色必须通过党组织任职单独授权")
+        if model is Dept and any(not primary_type(r.org_type) for r in rows):
+            abort(400, description="该类型不支持主组织兼容关联，请通过任职管理登记")
+        if model is Role and any(r.business_domain not in SHARED_DOMAINS and not primary_type(r.business_domain) for r in rows):
+            abort(400, description="此业务域角色必须通过对应组织任职单独授权")
+        if model is Role:
+            has_admin = any(r.role_key == "admin" for r in rows)
+            if has_admin and (existing is None or existing.id != 1):
+                abort(400, description="超级管理员全项目唯一，不可分配给其他账号")
+            if existing is not None and existing.id == 1 and not has_admin:
+                abort(400, description="不能移除内置超级管理员角色")
 
 
 def _sync_primary_grants(user, old_dept=None, role_change=False):
-    """Compatibility form updates only primary ADMIN/LEGACY sources."""
+    """Compatibility form updates only primary organization/LEGACY sources."""
     if old_dept != user.dept_id:
         for m in OrgMembership.query.filter_by(user_id=user.id, is_primary=True, status="0"):
-            if m.org.org_type != "ADMIN":
-                continue
             m.status = "1"
             m.valid_to = datetime.utcnow()
             for grant in OrgGrant.query.filter_by(membership_id=m.id, status="0"):
@@ -115,7 +120,7 @@ def _sync_primary_grants(user, old_dept=None, role_change=False):
     member = OrgMembership.query.filter_by(user_id=user.id, org_id=user.dept_id,
                                           is_primary=True, status="0").first()
     if not member:
-        member = OrgMembership(user_id=user.id, org_id=user.dept_id, is_primary=True, member_kind="PRIMARY_ADMIN")
+        member = OrgMembership(user_id=user.id, org_id=user.dept_id, is_primary=True, member_kind="PRIMARY_ORG")
         db.session.add(member)
         db.session.flush()
     if role_change or old_dept != user.dept_id:
@@ -182,7 +187,9 @@ def update_user(uid):
                 User.query.filter_by(id=user.id), current_user(), "system:user:edit", sensitive=True).first():
             return jsonify(code=403, message="缺少此组织范围的用户敏感字段权限"), 403
     else:
-        _validate_admin_relations(data)
+        _validate_admin_relations(data, user)
+        if user.id == 1 and data.get("status", "0") != "0":
+            abort(400, description="唯一超级管理员不能停用")
     if ((user.is_admin and not current_user().is_admin)
             or ("deptId" in data and not _allowed_dept(data["deptId"]))
             or not _allowed_depts(data)
@@ -216,7 +223,7 @@ def delete_user(uid):
     user = _scoped_user(uid)
     if not current_user().is_admin:
         return jsonify(code=403, message="删除统一账号会影响全部组织，仅限平台管理员"), 403
-    if user.is_admin:
+    if user.id == 1:
         return jsonify(code=400, message="超级管理员不可删除"), 400
     user.del_flag = "2"  # 软删除
     bump(user)

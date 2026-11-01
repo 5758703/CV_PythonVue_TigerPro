@@ -3,7 +3,8 @@ from flask import Blueprint, request, jsonify, abort
 from extensions import db
 from models import Role, Menu
 from security import permission_required, platform_admin_required, current_user
-from services.organization_auth import DOMAINS, audit
+from services.organization_auth import audit
+from services.organization_types import lock_enabled_type, SHARED_DOMAINS
 
 role_bp = Blueprint("sys_role", __name__, url_prefix="/api/system/role")
 
@@ -42,8 +43,12 @@ def _apply_menus(role, data):
 
 
 def _validate(data):
-    if "businessDomain" in data and data["businessDomain"] not in DOMAINS:
-        abort(400, description="未知业务域")
+    if "businessDomain" in data:
+        domain = data["businessDomain"]
+        if not isinstance(domain, str):
+            abort(400, description="未知业务域")
+        if domain not in SHARED_DOMAINS:
+            lock_enabled_type(domain)
     if "dataScope" in data and (type(data["dataScope"]) is not int or data["dataScope"] not in (1, 2, 3, 4)):
         abort(400, description="未知旧版默认数据范围")
     if "status" in data and data["status"] not in ("0", "1"):

@@ -14,6 +14,7 @@ from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from extensions import db
+from .organization_type import OrgType, default_org_type
 
 # ---------------------------------------------------------------- 关联表（多对多）
 user_role = db.Table(
@@ -55,7 +56,7 @@ class Dept(db.Model):
     parent_id = db.Column(db.Integer, default=0, index=True)       # 0 = 根
     ancestors = db.Column(db.String(500), default="")             # 祖级列表 "0,1,2"
     dept_name = db.Column(db.String(64), nullable=False)
-    org_type = db.Column(db.String(16), nullable=False, default="ADMIN", index=True)
+    org_type = db.Column(db.String(16), nullable=False, default=default_org_type, index=True)
     order_num = db.Column(db.Integer, default=0)
     leader = db.Column(db.String(32))
     phone = db.Column(db.String(20))
@@ -205,16 +206,20 @@ class User(db.Model):
     # ---- 权限聚合
     @property
     def is_admin(self):
-        return self.status == "0" and self.del_flag == "0" and any(
-            r.role_key == "admin" and r.status == "0" and r.del_flag == "0" for r in self.roles)
+        # Reserved primary key: assigning a role can never create another owner.
+        return self.id == 1 and self.status == "0" and self.del_flag == "0"
 
     def role_keys(self):
-        return [r.role_key for r in self.roles if r.status == "0" and r.del_flag == "0"]
+        if self.is_admin:
+            return ["admin"]
+        return [r.role_key for r in self.roles if r.role_key != "admin" and r.status == "0" and r.del_flag == "0"]
 
     def all_menus(self):
         """角色菜单 ∪ 直接授权菜单，去重。"""
         seen = {}
         for r in self.roles:
+            if r.role_key == "admin" and not self.is_admin:
+                continue
             if r.status != "0" or r.del_flag != "0":
                 continue
             for m in r.menus:

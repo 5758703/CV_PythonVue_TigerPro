@@ -253,7 +253,7 @@
               <div class="doc-no">报告编号　{{ reportNo }}</div>
             </header>
 
-            <table class="doc-info">
+            <table v-resizable-columns class="doc-info">
               <tbody>
                 <tr>
                   <th>检测模型</th>

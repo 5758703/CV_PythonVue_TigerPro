@@ -68,7 +68,7 @@
           <div><span>拒识</span><strong>{{ rejectedCount }}</strong></div>
         </div>
         <div class="wb-table-wrap">
-          <table class="wb-table">
+          <table v-resizable-columns class="wb-table">
             <thead><tr><th>#</th><th>姓名</th><th>分数</th><th>匹配</th><th>坐标</th></tr></thead>
             <tbody>
               <tr

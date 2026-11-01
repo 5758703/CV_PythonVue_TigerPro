@@ -13,8 +13,7 @@ from extensions import db
 from models import Dept, User
 from models.organization import OrgMembership, OrgGrant, OrgAuthAudit
 
-ORG_TYPES = {"ADMIN", "PARTY"}
-DOMAINS = {"SYSTEM", "ADMIN", "PARTY", "COMMON"}
+from services.organization_types import type_enabled, primary_type, type_name
 SCOPES = {"SELF", "ORG", "ORG_SUBTREE", "CUSTOM_ORG", "DOMAIN_ALL"}
 
 
@@ -32,7 +31,7 @@ def org_map():
 def active_org(org_id):
     tree = org_map()
     node = tree.get(org_id)
-    if not node or node.org_type not in ORG_TYPES:
+    if not node or not type_enabled(node.org_type):
         return False
     kind, seen = node.org_type, set()
     while node:
@@ -81,26 +80,37 @@ def current_context(user):
             oid = int(raw)
         except (TypeError, ValueError):
             abort(403, description="工作身份无效，请重新选择")
-        if not any(m.org_id == oid for m in memberships):
+        if user.is_admin:
+            if not active_org(oid):
+                abort(403, description="组织不存在或已停用")
+        elif not any(m.org_id == oid for m in memberships):
             abort(403, description="任职已失效或无权使用此组织身份")
     elif user.is_admin:
-        oid = None  # Platform configuration session; not an assumed PARTY identity.
+        oid = None  # Platform session without an assumed organization identity.
     elif managed(user):
         # Do not silently switch from an expired primary identity into another
         # active organization. A single remaining identity is safe to default.
-        primary = [m for m in memberships if m.is_primary and m.org.org_type == "ADMIN"]
+        primary = [m for m in memberships if m.is_primary and primary_type(m.org.org_type)]
         choices = primary or memberships
         oid = choices[0].org_id if len({m.org_id for m in choices}) == 1 else None
     else:
         oid = user.dept_id if active_org(user.dept_id) else None
-        if oid and org_map()[oid].org_type != "ADMIN":
+        if oid and not primary_type(org_map()[oid].org_type):
             oid = None
     setattr(g, key, oid)
     return oid
 
 
+def context_choices(user):
+    if user.is_admin:
+        return [{"orgId": o.id, "orgName": o.dept_name, "orgType": o.org_type, "orgTypeName": type_name(o.org_type)}
+                for o in org_map().values() if active_org(o.id)]
+    return list({m.org_id: {"orgId": m.org_id, "orgName": m.org.dept_name,
+                           "orgType": m.org.org_type, "orgTypeName": type_name(m.org.org_type)} for m in valid_memberships(user)}.values())
+
+
 def role_allowed(role, org_type):
-    return role.status == "0" and role.del_flag == "0" and role.role_key != "admin" and (
+    return type_enabled(org_type) and role.status == "0" and role.del_flag == "0" and role.role_key != "admin" and (
         role.business_domain in ("SYSTEM", "COMMON", org_type))
 
 
@@ -153,13 +163,13 @@ def action_grants(user, perm=None):
         return [x for x in grants if grant_effective(x) and (not perm or _match(
             perm, {m.perms for m in x.role.menus if m.status == "0" and m.perms}))]
     # Transitional legacy path only for accounts with NO membership history.
-    # It is restricted to ADMIN and still pairs each role with its own scope.
-    if org_map()[oid].org_type != "ADMIN":
+    # It is restricted to configured primary types; each role retains its own scope.
+    if not primary_type(org_map()[oid].org_type):
         return []
     m = SimpleNamespace(org_id=oid, org=org_map()[oid])
     return [SimpleNamespace(role=r, membership=m, scope_type={1: "SELF", 2: "ORG", 3: "ORG_SUBTREE", 4: "DOMAIN_ALL"}.get(r.data_scope, "SELF"),
                             scope_anchor_org_id=oid, scope_org_ids=[])
-            for r in user.roles if role_allowed(r, "ADMIN") and (not perm or _match(
+            for r in user.roles if role_allowed(r, org_map()[oid].org_type) and (not perm or _match(
                 perm, {x.perms for x in r.menus if x.status == "0" and x.perms}))]
 
 
@@ -205,10 +215,10 @@ def user_in_orgs(ids, kind):
         OrgMembership.user_id == User.id, OrgMembership.org_id.in_(ids),
         OrgMembership.status == "0", OrgMembership.valid_from <= now,
         or_(OrgMembership.valid_to.is_(None), OrgMembership.valid_to > now)))
-    if kind == "ADMIN":
-        # Compatibility primary field only where no explicit ADMIN history exists.
+    if primary_type(kind):
+        # Compatibility primary field only where no explicit same-type history exists.
         admin_history = exists().where(and_(OrgMembership.user_id == User.id,
-            OrgMembership.org_id == Dept.id, Dept.org_type == "ADMIN"))
+            OrgMembership.org_id == Dept.id, Dept.org_type == kind))
         return or_(membership, and_(~admin_history, User.dept_id.in_(ids)))
     return membership
 
@@ -238,7 +248,7 @@ def user_view(target, actor, perm):
     if actor.is_admin:
         return data
     # Global account associations belong to all work identities; do not expose
-    # administrative department, other roles or posts through a PARTY view.
+    # primary organization, other roles or posts through another organization view.
     for key in ("deptId", "deptName", "roleIds", "postIds"):
         data.pop(key, None)
     oid = current_context(actor)

@@ -71,7 +71,7 @@
           <div><span>返回数</span><strong>{{ normalizedResult.results.length }}</strong></div>
         </div>
         <div class="wb-table-wrap">
-          <table class="wb-table">
+          <table v-resizable-columns class="wb-table">
             <thead><tr><th>#</th><th>标签</th><th>分数</th></tr></thead>
             <tbody>
               <tr v-for="(item, index) in normalizedResult.results" :key="`${item.label}-${index}`">

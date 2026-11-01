@@ -1,6 +1,6 @@
 <template>
   <el-drawer v-model="visible" :title="`${username} · 组织任职与授权`" size="min(1100px, 95vw)" @open="load">
-    <el-alert title="同一账号可同时登记行政与党组织任职。组织关系本身不会自动授予角色；结束任职仅撤销该来源的权限。" type="info" :closable="false" />
+    <el-alert title="同一账号可同时登记不同类型的组织任职。组织关系本身不会自动授予角色；结束任职仅撤销该来源的权限。" type="info" :closable="false" />
     <el-tabs v-loading="loading" class="access-tabs">
       <el-tab-pane label="组织与任职">
         <el-table :data="overview.memberships" border>
@@ -12,11 +12,11 @@
           <el-table-column width="90"><template #default="{ row }"><el-button v-if="row.status === '0'" link type="danger" @click="endMembership(row)">结束任职</el-button></template></el-table-column>
         </el-table>
         <h3>登记新任职</h3>
-        <el-form label-width="110px" :disabled="saving">
-          <el-form-item label="组织类型"><el-radio-group v-model="member.orgType" @change="member.orgId = null"><el-radio-button value="ADMIN">行政组织</el-radio-button><el-radio-button value="PARTY">党组织</el-radio-button></el-radio-group></el-form-item>
+        <el-form label-width="110px" :disabled="saving || !overview.canAssign">
+          <el-form-item label="组织类型"><el-select v-model="member.orgType" @change="member.orgId = null; member.isPrimary = false"><el-option v-for="t in types.filter(t => t.status === '0')" :key="t.code" :value="t.code" :label="t.name" /></el-select></el-form-item>
           <el-form-item label="任职组织"><el-tree-select v-model="member.orgId" :data="memberTree" :props="orgProps" node-key="id" check-strictly filterable style="width: 100%" /></el-form-item>
           <el-form-item label="任职 / 成员身份"><el-input v-model="member.memberKind" placeholder="如：员工、党员、组织委员；不会按名称自动授权" maxlength="64" /></el-form-item>
-          <el-form-item v-if="member.orgType === 'ADMIN'" label="主行政部门"><el-switch v-model="member.isPrimary" /><span class="hint">每人仅一个有效主行政任职</span></el-form-item>
+          <el-form-item v-if="canBePrimary" label="主组织"><el-switch v-model="member.isPrimary" /><span class="hint">每人仅一个有效主任职</span></el-form-item>
           <el-form-item label="有效期（本地）"><el-date-picker v-model="member.validFrom" type="datetime" placeholder="开始：默认现在" /><span class="separator">至</span><el-date-picker v-model="member.validTo" type="datetime" placeholder="结束：可留空" /></el-form-item>
           <el-form-item><el-button type="primary" :loading="saving" @click="addMembership">登记任职</el-button></el-form-item>
         </el-form>
@@ -33,7 +33,7 @@
           <el-table-column width="65"><template #default="{ row }"><el-button v-if="row.status === '0'" link type="danger" @click="revokeGrant(row)">撤销</el-button></template></el-table-column>
         </el-table>
         <h3>为任职授予角色</h3>
-        <el-form label-width="110px" :disabled="saving">
+        <el-form label-width="110px" :disabled="saving || !overview.canAssign">
           <el-form-item label="有效任职"><el-select v-model="grant.membershipId" style="width: 100%" @change="changeMembership"><el-option v-for="m in activeMemberships" :key="m.id" :value="m.id" :label="`${typeText(m.orgType)} / ${m.orgName} / ${m.memberKind}`" /></el-select></el-form-item>
           <el-form-item label="业务角色"><el-select v-model="grant.roleId" filterable style="width: 100%"><el-option v-for="r in availableRoles" :key="r.id" :value="r.id" :label="`${r.roleName} (${r.businessDomain})`" /></el-select></el-form-item>
           <el-form-item label="数据范围"><el-select v-model="grant.scopeType" style="width: 100%"><el-option v-for="s in scopes" :key="s.value" v-bind="s" /></el-select></el-form-item>
@@ -55,21 +55,21 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { organizationApi, deptApi, roleApi } from '../../../api/system'
+import { organizationApi, deptApi, roleApi, orgTypeApi } from '../../../api/system'
 
 const visible = defineModel({ type: Boolean, default: false })
 const props = defineProps({ userId: Number, username: String })
 const emit = defineEmits(['changed'])
 const loading = ref(false), saving = ref(false)
-const overview = reactive({ memberships: [], grants: [], audit: [] })
-const orgTree = ref([]), roles = ref([])
+const overview = reactive({ memberships: [], grants: [], audit: [], canAssign: false })
+const orgTree = ref([]), roles = ref([]), types = ref([])
 const orgProps = { label: 'deptName', children: 'children', disabled: n => n.status !== '0' }
 const scopes = [
   { value: 'SELF', label: '本人（当前组织）' }, { value: 'ORG', label: '指定组织' },
   { value: 'ORG_SUBTREE', label: '指定组织及下级' }, { value: 'CUSTOM_ORG', label: '明确组织集合（不含隐式下级）' },
   { value: 'DOMAIN_ALL', label: '当前组织类型全部（高权限）' }
 ]
-const typeText = t => t === 'PARTY' ? '党组织' : '行政'
+const typeText = code => types.value.find(t => t.code === code)?.name || code
 const scopeLabel = s => scopes.find(x => x.value === s)?.label || s
 const localTime = s => s ? new Date(`${s}Z`).toLocaleString() : '长期'
 const period = row => `${localTime(row.validFrom)} → ${localTime(row.validTo)}`
@@ -80,7 +80,8 @@ const flatOrgs = computed(() => {
   return result
 })
 const orgName = id => id ? flatOrgs.value.find(o => o.id === id)?.deptName || String(id) : ''
-const member = reactive({ orgType: 'ADMIN', orgId: null, memberKind: '', isPrimary: false, validFrom: null, validTo: null })
+const member = reactive({ orgType: null, orgId: null, memberKind: '', isPrimary: false, validFrom: null, validTo: null })
+const canBePrimary = computed(() => types.value.some(t => t.code === member.orgType && t.status === '0' && t.supportsPrimary))
 const grant = reactive({ membershipId: null, roleId: null, scopeType: 'ORG', scopeAnchorOrgId: null, scopeOrgIds: [], sourceType: 'MEMBERSHIP', approvalRef: '', validFrom: null, validTo: null })
 const memberTree = computed(() => orgTree.value.filter(o => o.orgType === member.orgType))
 const activeMemberships = computed(() => overview.memberships.filter(m => m.effective))
@@ -93,7 +94,9 @@ const load = async () => {
   if (!props.userId) return
   loading.value = true
   try {
-    const [o, d, r] = await Promise.all([organizationApi.overview(props.userId), deptApi.tree(), roleApi.list({ pageSize: 1000 })])
+    const [o, d, r, t] = await Promise.all([organizationApi.overview(props.userId), deptApi.tree(), roleApi.list({ pageSize: 1000 }), orgTypeApi.list({ includeArchived: true })])
+    types.value = t.data
+    if (!types.value.some(t => t.code === member.orgType && t.status === '0')) member.orgType = types.value.find(t => t.status === '0')?.code || null
     Object.assign(overview, o.data)
     orgTree.value = d.data
     roles.value = r.data.rows
@@ -108,7 +111,7 @@ const changeMembership = () => {
 }
 watch(() => grant.scopeType, s => { if (s === 'SELF') grant.scopeAnchorOrgId = selectedMember.value?.orgId })
 watch(() => props.userId, () => {
-  Object.assign(member, { orgType: 'ADMIN', orgId: null, memberKind: '', isPrimary: false, validFrom: null, validTo: null })
+  Object.assign(member, { orgType: null, orgId: null, memberKind: '', isPrimary: false, validFrom: null, validTo: null })
   Object.assign(grant, { membershipId: null, roleId: null, scopeType: 'ORG', scopeAnchorOrgId: null, scopeOrgIds: [], sourceType: 'MEMBERSHIP', approvalRef: '', validFrom: null, validTo: null })
 })
 const mutate = async action => {
@@ -118,7 +121,7 @@ const mutate = async action => {
 }
 const addMembership = async () => {
   if (!member.orgId || !member.memberKind.trim()) return ElMessage.warning('请选择组织并填写任职')
-  await mutate(() => organizationApi.addMembership(props.userId, { ...member, isPrimary: member.orgType === 'ADMIN' && member.isPrimary, ...datePayload(member) }))
+  await mutate(() => organizationApi.addMembership(props.userId, { ...member, isPrimary: canBePrimary.value && member.isPrimary, ...datePayload(member) }))
 }
 const addGrant = async () => {
   if (!grant.membershipId || !grant.roleId) return ElMessage.warning('请选择有效任职和角色')

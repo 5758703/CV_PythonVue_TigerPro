@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>Table resize regression fixture</title></head>
+<body><div id="app"></div><script type="module">
+import { createApp } from 'vue'
+import ElementPlus from 'element-plus'
+import 'element-plus/dist/index.css'
+import resizableTables from '/src/plugins/resizableTables.js'
+import Fixture from './resize-tables.vue'
+createApp(Fixture).use(ElementPlus).use(resizableTables).mount('#app')
+</script></body></html>

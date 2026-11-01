@@ -1,10 +1,11 @@
-"""Idempotent legacy mapping; never infer PARTY membership from ADMIN data."""
+"""Idempotent legacy mapping; never infer memberships of another organization type."""
 from datetime import datetime
 
 from extensions import db
 from models import Dept, User
 from models.organization import OrgMembership, OrgGrant
 from services.organization_auth import audit
+from services.organization_types import primary_type
 
 
 def migrate_legacy_organization_auth():
@@ -12,13 +13,13 @@ def migrate_legacy_organization_auth():
         # No stable source: leave the unorganized legacy account for review.
         # Row scopes remain default-deny; legacy AI capability grants are retained.
         primary = db.session.get(Dept, user.dept_id) if user.dept_id else None
-        if not primary or primary.org_type != "ADMIN" or primary.del_flag != "0":
+        if not primary or not primary_type(primary.org_type) or primary.del_flag != "0":
             continue
         if OrgMembership.query.filter_by(user_id=user.id).first():
             user.org_auth_migrated = True
             continue
         now = datetime.utcnow()
-        depts = {d.id: d for d in user.depts if d.org_type == "ADMIN" and d.del_flag == "0"}
+        depts = {d.id: d for d in user.depts if d.org_type == primary.org_type and d.del_flag == "0"}
         depts[primary.id] = primary
         main = None
         for org in depts.values():
@@ -39,5 +40,5 @@ def migrate_legacy_organization_auth():
         audit(user.id, user.id, "LEGACY_MIGRATED", {
             "contextOrgId": primary.id, "roleIds": [r.id for r in user.roles],
             "reviewRequired": True, "directMenuIdsNotMigrated": [m.id for m in user.menus],
-            "note": "旧角色仅绑定主行政任职；全部范围限制在行政组织，直接菜单授权需重新审核"})
+            "note": "旧角色仅绑定主组织任职；全部范围限制在同类型组织，直接菜单授权需重新审核"})
     db.session.commit()

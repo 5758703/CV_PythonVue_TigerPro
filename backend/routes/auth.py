@@ -77,17 +77,14 @@ def register():
 def info():
     """登录用户身份：基本信息 + 角色标识 + 权限标识集合。"""
     user = current_user()
-    from services.organization_auth import effective_permissions, action_grants, valid_memberships, current_context
-    memberships = valid_memberships(user)
+    from services.organization_auth import effective_permissions, action_grants, current_context, context_choices
     context = current_context(user)
-    contexts = {m.org_id: {"orgId": m.org_id, "orgName": m.org.dept_name, "orgType": m.org.org_type}
-                for m in memberships}
     role_keys = ["admin"] if user.is_admin else sorted({g.role.role_key for g in action_grants(user)})
     return jsonify(code=0, data={
         "user": user.to_dict(),
         "roles": role_keys,
         "permissions": sorted(effective_permissions(user)),
-        "contexts": list(contexts.values()),
+        "contexts": context_choices(user),
         "contextOrgId": context,
         "authVersion": user.auth_version,
     })
@@ -97,11 +94,9 @@ def info():
 @login_required
 def contexts():
     """Recovery/discovery endpoint deliberately ignores the selected context."""
-    from services.organization_auth import valid_memberships
     user = current_user()
-    choices = {m.org_id: {"orgId": m.org_id, "orgName": m.org.dept_name, "orgType": m.org.org_type}
-               for m in valid_memberships(user)}
-    return jsonify(code=0, data={"contexts": list(choices.values()), "isPlatformAdmin": user.is_admin})
+    from services.organization_auth import context_choices
+    return jsonify(code=0, data={"contexts": context_choices(user), "isPlatformAdmin": user.is_admin})
 
 
 @auth_bp.get("/routers")

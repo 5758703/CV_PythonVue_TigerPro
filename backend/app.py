@@ -60,7 +60,11 @@ def create_app():
         db.create_all()
         _migrate(db)
         from seed import init_seed
+        from services.organization_types import migrate_type_catalog
+        migrate_type_catalog()
         init_seed()
+        from services.superadmin import ensure_single_superadmin
+        ensure_single_superadmin()
         from services.organization_migration import migrate_legacy_organization_auth
         migrate_legacy_organization_auth()
 

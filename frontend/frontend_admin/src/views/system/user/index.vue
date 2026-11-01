@@ -21,7 +21,7 @@
     <el-card shadow="never">
       <div class="toolbar">
         <el-button v-if="store.isAdmin" v-permission="'system:user:add'" type="primary" :icon="Plus" @click="openAdd">新增用户</el-button>
-        <span class="hint">行政与党组织共用一个账号；在「任职与授权」中分别配置身份和数据范围。</span>
+        <span class="hint">不同类型组织共用一个账号；在「任职与授权」中分别配置身份和数据范围。</span>
       </div>
 
       <el-table :data="rows" v-loading="loading" border stripe>
@@ -40,7 +40,8 @@
           <template #default="{ row }">
             <el-button v-if="store.isAdmin || row.canEdit" v-permission="'system:user:edit'" link type="primary" :icon="Edit" @click="openEdit(row)">修改</el-button>
             <el-button v-if="store.isAdmin && !row.isPlatformAdmin" link type="primary" @click="openAccess(row)">任职与授权</el-button>
-            <el-button v-if="store.isAdmin" v-permission="'system:user:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
+            <el-button v-if="store.isAdmin && !row.isPlatformAdmin" v-permission="'system:user:remove'" link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
+            <el-tag v-if="row.isPlatformAdmin" type="danger" size="small">唯一超管 · 全组织权限</el-tag>
           </template>
         </el-table-column>
       </el-table>
@@ -76,19 +77,23 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item v-if="store.isAdmin" label="主行政部门">
+            <el-form-item v-if="store.isAdmin" label="主组织">
               <el-tree-select
                 v-model="form.deptId"
                 :data="deptTree"
                 :props="{ label: 'deptName', children: 'children' }"
                 node-key="id"
                 check-strictly
-                placeholder="选择部门"
+                clearable
+                placeholder="选择主组织；可清空旧关联"
                 style="width: 100%"
               />
             </el-form-item>
           </el-col>
           <el-col :span="12">
+            <el-form-item v-if="store.isAdmin" label="兼属组织">
+              <el-tree-select v-model="form.deptIds" :data="deptTree" :props="{ label: 'deptName', children: 'children' }" node-key="id" multiple check-strictly show-checkbox clearable placeholder="可移除旧兼属组织关联" style="width: 100%" />
+            </el-form-item>
             <el-form-item label="手机号">
               <el-input v-model="form.phone" :disabled="!store.isAdmin && !form.canEditSensitive" />
             </el-form-item>
@@ -99,9 +104,9 @@
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item v-if="store.isAdmin" label="行政兼容角色">
-              <el-select v-model="form.roleIds" multiple placeholder="选择角色" style="width: 100%">
-                <el-option v-for="r in roles" :key="r.id" :label="r.roleName" :value="r.id" />
+            <el-form-item v-if="store.isAdmin" label="主组织兼容角色">
+              <el-select v-model="form.roleIds" :disabled="form.isPlatformAdmin" multiple placeholder="选择角色" style="width: 100%">
+                <el-option v-for="r in roles.filter(r => r.roleKey !== 'admin' || form.isPlatformAdmin)" :key="r.id" :label="r.roleName" :value="r.id" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -114,7 +119,7 @@
           </el-col>
           <el-col :span="12">
             <el-form-item v-if="store.isAdmin" label="状态">
-              <el-switch v-model="form.status" active-value="0" inactive-value="1" />
+              <el-switch v-model="form.status" :disabled="form.isPlatformAdmin" active-value="0" inactive-value="1" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -133,7 +138,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Refresh, Plus, Edit, Delete } from '@element-plus/icons-vue'
 
-import { userApi, roleApi, jobApi, deptApi } from '../../../api/system'
+import { userApi, roleApi, jobApi, deptApi, orgTypeApi } from '../../../api/system'
 import { useUserStore } from '../../../store/user'
 import OrganizationAccess from './OrganizationAccess.vue'
 
@@ -153,7 +158,7 @@ const query = reactive({ pageNum: 1, pageSize: 10, username: '', status: '' })
 
 const dialog = ref(false)
 const formRef = ref()
-const emptyForm = () => ({ id: null, username: '', nickname: '', password: '', deptId: null, phone: '', email: '', roleIds: [], postIds: [], status: '0', canEditSensitive: false })
+const emptyForm = () => ({ id: null, username: '', nickname: '', password: '', deptId: null, deptIds: [], phone: '', email: '', roleIds: [], postIds: [], status: '0', canEditSensitive: false, isPlatformAdmin: false })
 const form = reactive(emptyForm())
 
 const rules = {
@@ -181,14 +186,14 @@ const reset = () => {
 
 const loadRefs = async () => {
   if (!store.isAdmin) return
-  const [r, p, d] = await Promise.all([
+  const [r, p, d, t] = await Promise.all([
     roleApi.list({ pageNum: 1, pageSize: 100 }),
     jobApi.list({ pageNum: 1, pageSize: 100 }),
-    deptApi.tree({ orgType: 'ADMIN' })
+    deptApi.tree(), orgTypeApi.list()
   ])
   roles.value = r.data.rows
   posts.value = p.data.rows
-  deptTree.value = d.data
+  deptTree.value = d.data.filter(o => t.data.some(t => t.code === o.orgType && t.status === '0' && t.supportsPrimary))
 }
 
 const resetForm = () => Object.assign(form, emptyForm())
@@ -203,9 +208,11 @@ const openEdit = async (row) => {
   const res = await userApi.get(row.id)
   Object.assign(form, {
     id: res.data.id,
+    isPlatformAdmin: res.data.isPlatformAdmin === true,
     username: res.data.username,
     nickname: res.data.nickname,
     deptId: res.data.deptId,
+    deptIds: res.data.deptIds || [],
     phone: res.data.phone,
     email: res.data.email,
     canEditSensitive: res.data.canEditSensitive || false,
@@ -222,8 +229,9 @@ const submit = async () => {
   try {
     const safePayload = { id: form.id, nickname: form.nickname }
     if (form.canEditSensitive) Object.assign(safePayload, { phone: form.phone, email: form.email })
-    if (form.id) await userApi.update(store.isAdmin ? form : safePayload)
-    else await userApi.add(form)
+    const adminPayload = { ...form, deptId: form.deptId ?? null }
+    if (form.id) await userApi.update(store.isAdmin ? adminPayload : safePayload)
+    else await userApi.add(adminPayload)
     ElMessage.success('保存成功')
     dialog.value = false
     load()

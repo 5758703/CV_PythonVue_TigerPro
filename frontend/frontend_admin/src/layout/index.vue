@@ -46,16 +46,17 @@
           </el-breadcrumb>
         </div>
         <div class="header-right">
+          <el-tag v-if="store.isAdmin" type="danger">超级管理员 · 全组织全权限</el-tag>
           <el-select
             v-if="store.contexts.length"
             :model-value="store.contextOrgId"
-            placeholder="请选择工作身份"
+            :placeholder="store.isAdmin ? '全部组织（切换不限制超管权限）' : '请选择工作身份'"
             style="width: 240px"
             :loading="switchingContext"
             @change="switchWorkContext"
           >
             <el-option v-for="c in store.contexts" :key="c.orgId" :value="c.orgId"
-              :label="`${c.orgType === 'PARTY' ? '党组织' : '行政'} / ${c.orgName}`" />
+              :label="`${c.orgTypeName || c.orgType} / ${c.orgName}`" />
           </el-select>
           <a
             class="portal-link"

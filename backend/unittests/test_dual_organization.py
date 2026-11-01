@@ -271,11 +271,14 @@ def test_membership_creation_does_not_grant_role_and_primary_must_be_admin(env):
 def test_legacy_unorganized_ai_capabilities_retained_without_system_access(env):
     app, c, t = env
     with app.app_context():
-        u = db.session.get(User, 1)
+        # ID=1 is the immutable platform owner, so legacy behavior uses a regular account.
+        u = User(id=5, username="unorganized-demo", password_hash="unused")
         u.roles = [Role(role_name="demo", role_key="demo", menus=[
             Menu(menu_name="AI", perms="ai:model:list", menu_type="C"),
             Menu(menu_name="users", perms="system:user:list", menu_type="C")])]
+        db.session.add(u)
         db.session.commit()
-    data = c.get("/api/auth/info", headers=headers(t, user=1, org=None)).get_json()["data"]
+        t[5] = create_access_token(identity="5")
+    data = c.get("/api/auth/info", headers=headers(t, user=5, org=None)).get_json()["data"]
     assert "ai:model:list" in data["permissions"]
     assert "system:user:list" not in data["permissions"]

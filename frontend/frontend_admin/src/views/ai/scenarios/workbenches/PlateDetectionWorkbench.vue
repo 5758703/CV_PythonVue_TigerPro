@@ -72,7 +72,7 @@
           <div><span>OCR</span><strong>{{ hasOcr ? '已返回' : '未联动' }}</strong></div>
         </div>
         <div class="wb-table-wrap">
-          <table class="wb-table">
+          <table v-resizable-columns class="wb-table">
             <thead><tr><th>#</th><th>类别</th><th>置信度</th><th>坐标</th><th>OCR</th></tr></thead>
             <tbody>
               <tr v-for="(item, index) in normalizedResult.detections" :key="index" :class="{ 'is-selected': selectedIndex === index }" tabindex="0" @click="selectDetection(index)" @keydown.enter="selectDetection(index)" @keydown.space.prevent="selectDetection(index)">

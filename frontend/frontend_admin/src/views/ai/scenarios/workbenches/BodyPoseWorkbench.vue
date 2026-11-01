@@ -61,7 +61,7 @@
           <div><span>姿态类型</span><strong>{{ poseTypeLabel }}</strong></div>
         </div>
         <div class="wb-table-wrap">
-          <table class="wb-table">
+          <table v-resizable-columns class="wb-table">
             <thead><tr><th>#</th><th>分数</th><th>关键点</th><th>坐标</th></tr></thead>
             <tbody>
               <tr v-for="(item, index) in normalizedResult.persons" :key="index">

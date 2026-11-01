@@ -4,7 +4,8 @@ from extensions import db
 from models import Dept, User
 from models.organization import OrgMembership
 from security import permission_required, current_user
-from services.organization_auth import ORG_TYPES, operation_org_ids, subtree, audit
+from services.organization_auth import operation_org_ids, subtree, audit
+from services.organization_types import catalog, type_enabled, default_type, lock_enabled_type
 
 dept_bp = Blueprint("sys_dept", __name__, url_prefix="/api/system/dept")
 
@@ -68,7 +69,7 @@ def _ancestors(dept):
 def list_depts():
     name = request.args.get("deptName", "").strip()
     kind = request.args.get("orgType")
-    if kind and kind not in ORG_TYPES:
+    if kind and kind not in catalog():
         abort(400, description="未知组织类型")
     query = Dept.query.filter_by(del_flag="0")
     if kind:
@@ -101,10 +102,11 @@ def get_dept(did):
 def create_dept():
     _lock_tree()
     data = request.get_json(silent=True) or {}
-    name, kind = data.get("deptName"), data.get("orgType", "ADMIN")
-    if not isinstance(name, str) or not name.strip() or len(name) > 64 or kind not in ORG_TYPES:
-        abort(400, description="组织名称必填且不超过64字，类型应为 ADMIN 或 PARTY")
+    name, kind = data.get("deptName"), data.get("orgType", default_type())
+    if not isinstance(name, str) or not name.strip() or len(name) > 64 or not type_enabled(kind):
+        abort(400, description="组织名称必填且不超过64字，请选择已启用的组织类型")
     pid = data.get("parentId", 0)
+    lock_enabled_type(kind)
     parent = _parent(pid, kind)
     if not current_user().is_admin:
         if not parent:

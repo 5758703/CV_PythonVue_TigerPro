@@ -21,7 +21,7 @@
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="roleName" label="角色名称" />
         <el-table-column prop="roleKey" label="权限字符" />
-        <el-table-column prop="businessDomain" label="业务域" width="100" />
+        <el-table-column label="业务域" width="130"><template #default="{ row }">{{ types.find(t => t.code === row.businessDomain)?.name || ({ SYSTEM: '系统管理', COMMON: '共享基础能力' }[row.businessDomain]) || row.businessDomain }}</template></el-table-column>
         <el-table-column label="旧表单默认范围">
           <template #default="{ row }">
             <el-tag effect="plain">{{ scopeText(row.dataScope) }}</el-tag>
@@ -62,7 +62,7 @@
         <el-form-item label="角色顺序">
           <el-input-number v-model="form.roleSort" :min="0" />
         </el-form-item>
-        <el-form-item label="业务域"><el-select v-model="form.businessDomain"><el-option label="系统管理" value="SYSTEM" /><el-option label="行政业务" value="ADMIN" /><el-option label="党务业务" value="PARTY" /><el-option label="共享基础能力" value="COMMON" /></el-select></el-form-item>
+        <el-form-item label="业务域"><el-select v-model="form.businessDomain"><el-option label="系统管理" value="SYSTEM" /><el-option v-for="t in types" :key="t.code" :label="t.name" :value="t.code" :disabled="t.status !== '0'" /><el-option label="共享基础能力" value="COMMON" /></el-select></el-form-item>
         <el-form-item label="数据范围">
           <el-select v-model="form.dataScope" style="width: 100%">
             <el-option v-for="s in scopes" :key="s.value" :label="s.label" :value="s.value" />
@@ -98,7 +98,7 @@ import { ref, reactive, onMounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Refresh, Plus, Edit, Delete } from '@element-plus/icons-vue'
 
-import { roleApi, menuApi } from '../../../api/system'
+import { roleApi, menuApi, orgTypeApi } from '../../../api/system'
 import { useUserStore } from '../../../store/user'
 const store = useUserStore()
 
@@ -114,7 +114,7 @@ const loading = ref(false)
 const saving = ref(false)
 const rows = ref([])
 const total = ref(0)
-const menuTree = ref([])
+const menuTree = ref([]), types = ref([])
 const query = reactive({ pageNum: 1, pageSize: 10, roleName: '' })
 
 const dialog = ref(false)
@@ -198,6 +198,7 @@ const remove = async (row) => {
 
 onMounted(async () => {
   load()
+  types.value = (await orgTypeApi.list()).data
   const m = await menuApi.tree()
   menuTree.value = m.data
 })

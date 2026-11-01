@@ -2,8 +2,9 @@
   <div>
     <el-card shadow="never">
       <div class="toolbar">
-        <el-radio-group v-model="orgType" @change="load"><el-radio-button value="ADMIN">行政组织</el-radio-button><el-radio-button value="PARTY">党组织</el-radio-button></el-radio-group>
-        <el-button v-permission="'system:dept:add'" type="primary" :icon="Plus" @click="openAdd()">新增组织</el-button>
+        <el-select v-model="orgType" placeholder="请选择组织类型" style="width: 220px" @change="load"><el-option v-for="t in types" :key="t.code" :value="t.code" :label="t.name + (t.status === '1' ? '（停用）' : '')" /></el-select>
+        <el-button v-if="store.isAdmin" @click="typeDialog = true">组织类型管理</el-button>
+        <el-button v-permission="'system:dept:add'" type="primary" :icon="Plus"  :disabled="!types.some(t => t.code === orgType && t.status === '0')" @click="openAdd()">新增组织</el-button>
         <el-button :icon="Refresh" @click="load">刷新</el-button>
       </div>
 
@@ -34,9 +35,10 @@
       </el-table>
     </el-card>
 
+    <OrganizationTypes v-model="typeDialog" @changed="typesChanged" />
     <el-dialog v-model="dialog" :title="form.id ? '修改组织' : '新增组织'" width="520px" @closed="resetForm">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
-        <el-form-item label="上级部门">
+        <el-form-item label="上级组织">
           <el-tree-select
             v-model="form.parentId"
             :data="parentOptions"
@@ -44,11 +46,11 @@
             node-key="id"
             check-strictly
             :disabled="!!form.id && !store.isAdmin"
-            placeholder="选择上级部门"
+            placeholder="选择上级组织"
             style="width: 100%"
           />
         </el-form-item>
-        <el-form-item label="部门名称" prop="deptName">
+        <el-form-item label="组织名称" prop="deptName">
           <el-input v-model="form.deptName" />
         </el-form-item>
         <el-form-item label="负责人">
@@ -77,11 +79,18 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Edit, Delete, Refresh } from '@element-plus/icons-vue'
 
-import { deptApi } from '../../../api/system'
+import OrganizationTypes from './OrganizationTypes.vue'
+import { deptApi, orgTypeApi } from '../../../api/system'
 import { useUserStore } from '../../../store/user'
 const store = useUserStore()
-const orgType = ref(store.contexts.find(c => c.orgId === store.contextOrgId)?.orgType || 'ADMIN')
+const orgType = ref(store.contexts.find(c => c.orgId === store.contextOrgId)?.orgType || null)
 
+const types = ref([]), typeDialog = ref(false)
+const loadTypes = async () => {
+  types.value = (await orgTypeApi.list()).data
+  if (!types.value.some(t => t.code === orgType.value)) orgType.value = types.value.find(t => t.status === '0')?.code || types.value[0]?.code || null
+}
+const typesChanged = async () => { await loadTypes(); await store.loadInfo(); await load() }
 const loading = ref(false)
 const saving = ref(false)
 const deptTree = ref([])
@@ -92,7 +101,7 @@ const emptyForm = () => ({ id: null, parentId: 0, orgType: orgType.value, deptNa
 const form = reactive(emptyForm())
 
 const rules = {
-  deptName: [{ required: true, message: '请输入部门名称', trigger: 'blur' }]
+  deptName: [{ required: true, message: '请输入组织名称', trigger: 'blur' }]
 }
 
 // 上级选项：顶级 + 现有树
@@ -101,6 +110,7 @@ const parentOptions = computed(() => [{ id: 0, deptName: '顶级', children: dep
 const load = async () => {
   loading.value = true
   try {
+    if (!orgType.value) { deptTree.value = []; return }
     const res = await deptApi.tree({ orgType: orgType.value })
     deptTree.value = res.data
   } finally {
@@ -145,13 +155,13 @@ const submit = async () => {
 }
 
 const remove = async (row) => {
-  await ElMessageBox.confirm(`确定删除部门「${row.deptName}」？`, '提示', { type: 'warning' })
+  await ElMessageBox.confirm(`确定删除组织「${row.deptName}」？`, '提示', { type: 'warning' })
   await deptApi.remove(row.id)
   ElMessage.success('删除成功')
   load()
 }
 
-onMounted(load)
+onMounted(async () => { await loadTypes(); await load() })
 </script>
 
 <style scoped>

@@ -248,6 +248,10 @@ Vite proxies `/api` to `http://127.0.0.1:5001`.
 
 ## Startup order
 
+Organization types are maintained under **System Management → Organizations/Departments → Organization Type Management**. Administrators can create, rename, sort, enable/disable and delete unused types. Administrative and party organizations are initial catalog data, not a fixed enumeration; custom types automatically appear in organization trees, memberships, role domains and the context selector. Use **Deletion Check and Guidance** to inspect account links, open memberships, unrevoked grants, roles and organizations. Resolve current references through their normal management screens, then recheck and archive-delete the type. Historical definitions and permission records remain intact; archived codes cannot be reused or re-enabled. Enable **Show archived types** to inspect retained definitions. Disabling a type invalidates its memberships and grants on subsequent requests. The configurable primary-organization setting is locked once a type is referenced. Restart the backend to create/migrate the catalog; existing administrator edits are preserved.
+
+The built-in account with user ID `1` (initial username `admin`) is the project's only super administrator. It has all permissions across administrative and party organizations, independently of memberships or the selected organization. It cannot be deleted, disabled, or demoted through system management; other accounts cannot receive the `admin` role. On backend startup, legacy duplicate admin-role assignments are removed and audited. The OpenAPI bridge retains explicit business permissions without super-admin authority. A missing or conflicting built-in account stops startup for manual recovery instead of promoting another account.
+
 1. Start MySQL and create `cv_python_tigerpro`.
 2. Start the backend with `python app.py` (`:5001`; creates tables and seeds data).
 3. Start the console: `cd frontend/frontend_admin && npm run dev` → http://localhost:5173.
