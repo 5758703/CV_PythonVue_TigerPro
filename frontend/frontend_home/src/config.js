@@ -1,6 +1,8 @@
 /**
  * 门户运行时配置与控制台跳转。
  * 本机统一使用 localhost（避免 127.0.0.1 与 localhost 不同源导致登录态丢失）。
+ * 生产子路径部署时 VITE_ADMIN_URL 形如 /console/：优先返回相对路径，避免拼成
+ * 仅 origin 的绝对地址后跳到站点根 /login。
  */
 
 export const TOKEN_COOKIE = 'tiger_ai_token'
@@ -13,12 +15,21 @@ function configuredAdminUrl() {
 }
 
 /**
- * 解析控制台根地址：本机访问时强制 hostname=localhost，保留配置中的端口。
+ * 解析控制台根地址（含子路径）。
+ * - 相对配置 `/console/` → 返回 `/console`（同源部署首选）
+ * - 绝对配置保留 origin + pathname；本机访问时强制 hostname=localhost
  */
 export function resolveAdminBase() {
   const fallback = 'http://localhost:5173'
   try {
-    const raw = configuredAdminUrl()
+    const raw = String(configuredAdminUrl() || '').trim() || fallback
+
+    // 生产网关同部署：直接保留子路径，href 形如 /console/login
+    if (raw.startsWith('/') && !raw.startsWith('//')) {
+      const path = trimSlash(raw)
+      return path && path !== '.' ? (path.startsWith('/') ? path : `/${path}`) : ''
+    }
+
     const base = new URL(raw, typeof window !== 'undefined' ? window.location.origin : fallback)
     if (typeof window !== 'undefined') {
       const host = window.location.hostname
@@ -28,13 +39,18 @@ export function resolveAdminBase() {
     } else if (base.hostname === '127.0.0.1') {
       base.hostname = 'localhost'
     }
-    return trimSlash(base.origin)
+
+    const origin = trimSlash(base.origin)
+    let path = trimSlash(base.pathname)
+    if (path === '/' || path === '.') path = ''
+    if (!path) return origin
+    return `${origin}${path.startsWith('/') ? path : `/${path}`}`
   } catch {
     return trimSlash(fallback)
   }
 }
 
-/** 动态读取（本机打开时始终指向 localhost:端口） */
+/** 动态读取（本机打开时始终指向 localhost:端口，并保留 /console 等子路径） */
 export function getAdminUrl() {
   return resolveAdminBase()
 }
@@ -85,12 +101,27 @@ export function joinPathQuery(path = '/index', query = {}) {
   return qs ? `${pathname}?${qs}` : pathname
 }
 
-/** 控制台绝对地址 */
+/**
+ * 将控制台相对路径挂到 admin base 下。
+ * 注意：不能用 new URL('/index', base)，绝对 path 会丢掉 /console 前缀。
+ */
 export function adminHref(path = '/index', query = {}) {
-  const base = resolveAdminBase()
+  const base = trimSlash(resolveAdminBase())
   const target = joinPathQuery(path, query)
-  const url = new URL(target, `${base}/`)
-  return url.toString()
+  const qIndex = target.indexOf('?')
+  let pathname = qIndex >= 0 ? target.slice(0, qIndex) : target
+  const qs = qIndex >= 0 ? target.slice(qIndex) : ''
+  if (!pathname.startsWith('/')) pathname = `/${pathname}`
+
+  // base 为空时退化为站点相对路径（不应发生）
+  if (!base) {
+    return pathname === '/' ? `/${qs ? qs.slice(1) : ''}` : `${pathname}${qs}`
+  }
+
+  if (pathname === '/') {
+    return qs ? `${base}/${qs}` : `${base}/`
+  }
+  return `${base}${pathname}${qs}`
 }
 
 /**

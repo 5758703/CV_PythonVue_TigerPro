@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity, ArrowRight, AudioLines, Boxes, BrainCircuit, CheckCircle2, ChevronRight, CircleDot,
-  Cpu, Database, Dumbbell, ExternalLink, FolderKanban, GitBranch, BookOpen, Mic, Play,
+  Cpu, Database, Dumbbell, FolderKanban, GitBranch, BookOpen, Mic, Play,
   ScanFace, ScanLine, ShieldCheck, Sparkles, Stethoscope, TrendingUp, Users, Workflow,
 } from 'lucide-vue-next'
 
@@ -33,6 +33,7 @@ const adminHostLabel = computed(() => getAdminUrl().replace(/^https?:\/\//, ''))
 
 const links = computed(() => ({
   github: GITHUB_URL,
+  // 控制台根入口：生产为同源 /console/（如 http://host/console/index）
   console: consoleEntryHref('/index'),
   test: consoleEntryHref('/ai/image'),
   training: consoleEntryHref('/ai/training'),
@@ -320,7 +321,7 @@ onUnmounted(() => {
             <a :href="links.openapi" target="_blank" rel="noopener noreferrer">OpenAPI</a>
             <a :href="links.console" class="nav-console" @click="onConsoleNav($event, '/index')">
               {{ consoleLoggedIn ? '进入控制台' : '登录控制台' }}
-              <ExternalLink :size="13" />
+              <ChevronRight :size="13" />
             </a>
             <a :href="links.github" target="_blank" rel="noopener noreferrer" class="github">
               <GitBranch :size="14" /> GitHub

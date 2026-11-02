@@ -16,9 +16,7 @@ services:
       MYSQL_DATABASE: ${DB_NAME:-cv_python_tigerpro}
       MYSQL_USER: ${DB_USER:-tiger}
       MYSQL_PASSWORD: ${DB_PASSWORD:-tiger_pass_change_me}
-    ports:
-      # 仅本机调试需要时映射；生产可注释
-      - "${MYSQL_PUBLISH_PORT:-3306}:3306"
+    # 仅 Docker 网络内访问；不暴露到公网
     volumes:
       - tiger_mysql_data:/var/lib/mysql
     command:
@@ -43,6 +41,8 @@ services:
     environment:
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      INITIAL_DEMO_PASSWORD: ${INITIAL_DEMO_PASSWORD:-}
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: ${DB_USER:-tiger}
@@ -54,6 +54,7 @@ services:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       YOLO_INFER_BACKEND: ${YOLO_INFER_BACKEND:-auto}
       OBJECT_STORE_BACKEND: ${OBJECT_STORE_BACKEND:-local}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
     volumes:
       - tiger_uploads:/app/uploads
     # 开发调试可打开：- "5001:5001"

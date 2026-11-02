@@ -1,6 +1,7 @@
 import os
 import secrets
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 
@@ -47,8 +48,9 @@ class Config:
     DB_PASSWORD = os.getenv("DB_PASSWORD", "")
     DB_NAME = os.getenv("DB_NAME", "cv_python_tigerpro")
 
+    # 密码中的 @ / : / ! 等必须 URL 编码，否则会被当成 URI 分隔符
     SQLALCHEMY_DATABASE_URI = (
-        f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}"
+        f"mysql+pymysql://{quote_plus(DB_USER)}:{quote_plus(DB_PASSWORD)}"
         f"@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False

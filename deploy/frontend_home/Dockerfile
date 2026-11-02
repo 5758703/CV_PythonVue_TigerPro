@@ -7,6 +7,8 @@ COPY frontend/frontend_home/package.json frontend/frontend_home/package-lock.jso
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 COPY frontend/frontend_home/ ./
+# 去掉本地开发 .env，避免盖过生产 VITE_ADMIN_URL=/console/
+RUN rm -f .env .env.local .env.development .env.development.local
 ENV VITE_ADMIN_URL=$VITE_ADMIN_URL
 RUN npm run build
 

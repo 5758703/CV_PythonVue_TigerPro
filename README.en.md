@@ -18,7 +18,22 @@ A Flask + Vue platform for **multi-task computer vision and speech AI**, with se
 
 **License:** [Apache-2.0](LICENSE) ([Chinese summary](LICENSE.zh-CN.md); the English license governs) · **Repository:** https://github.com/5758703/CV_PythonVue_TigerPro
 
-**Explore** · [Quick start](#quick-start) · [Features](#features) · [Demos](#demos-and-screenshots) · [Backend](#backend) · [Frontends](#frontends) · [Documentation](#documentation) · [Contributing](#contributing)
+**Explore** · [Online demo](#online-demo) · [Quick start](#quick-start) · [Features](#features) · [Demos](#demos-and-screenshots) · [Backend](#backend) · [Frontends](#frontends) · [Documentation](#documentation) · [Contributing](#contributing)
+
+---
+
+## Online demo
+
+| Entry | URL |
+|------|------|
+| Project portal | http://8.217.205.108/ |
+| Admin console | http://8.217.205.108/console/ |
+
+| Account | Password | Notes |
+|------|------|------|
+| `admin` | `TigerAdmin@2024!` | Public demo super admin |
+
+> Use **Enter Console / Sign in** on the portal to open `/console/`. Demo credentials are for public evaluation only—not for production—and may change with redeploys.
 
 ---
 
@@ -35,7 +50,7 @@ frontend/frontend_admin/ Admin console (Vue 3 + Element Plus)     → http://loc
 3. **Portal:** `cd frontend/frontend_home && npm install && npm run dev` (`:5174`).
 4. Open http://localhost:5174 and select **Enter Console**. Use the random `admin` password printed on first startup or `INITIAL_ADMIN_PASSWORD` from `.env`.
 
-> Use **localhost** consistently on your machine; do not mix it with `127.0.0.1`. See [`frontend/README.md`](frontend/README.md) for the frontend overview.
+> Use **localhost** consistently on your machine; do not mix it with `127.0.0.1`. See [`frontend/README.md`](frontend/README.md) for the frontend overview. For the hosted demo, see [Online demo](#online-demo).
 
 ## Features
 
@@ -117,7 +132,7 @@ Light / dark theme toggle · tech background (particles, constellation links, au
 
 | Account | Password | Role | Data scope | Access |
 |---|---|---|---|---|
-| `admin` | `INITIAL_ADMIN_PASSWORD` or the random password in the first startup log | Super admin (`admin`) | All data | All menus and write operations |
+| `admin` | Local: `INITIAL_ADMIN_PASSWORD` or the random password in the first startup log; online demo: `TigerAdmin@2024!` (see [Online demo](#online-demo)) | Super admin (`admin`) | All data | All menus and write operations |
 | `tiger` | `INITIAL_DEMO_PASSWORD` or the random password in the first startup log | Common role (`common`) | Own department (frontend group) | Read-only; user list limited to own department |
 
 > Seeding is idempotent: only an empty `sys_user` table receives the initial 5 departments, 4 posts, 31 menus, 2 roles, and 2 users. Existing database passwords remain unchanged.

@@ -20,7 +20,22 @@ Flask + Vue 前后端分离的 **多任务视觉 / 语音 AI 管理平台**（RB
 
 **许可证：** [Apache-2.0](./LICENSE)（[中文要点译本](./LICENSE.zh-CN.md)，仅供参考，以英文原版为准）· **仓库：** https://github.com/5758703/CV_PythonVue_TigerPro
 
-**导航 / Explore** · [快速开始](#快速开始) · [功能](#功能) · [演示与截图](#演示与截图) · [后端](#后端-backend) · [前端](#前端) · [文档](#文档) · [参与贡献](#参与贡献)
+**导航 / Explore** · [在线体验](#在线体验) · [快速开始](#快速开始) · [功能](#功能) · [演示与截图](#演示与截图) · [后端](#后端-backend) · [前端](#前端) · [文档](#文档) · [参与贡献](#参与贡献)
+
+---
+
+## 在线体验
+
+| 入口 | 地址 |
+|------|------|
+| 项目门户 | http://8.217.205.108/ |
+| 管理控制台 | http://8.217.205.108/console/ |
+
+| 账号 | 密码 | 说明 |
+|------|------|------|
+| `admin` | `TigerAdmin@2024!` | 线上演示超级管理员 |
+
+> 门户右上角「进入控制台 / 登录控制台」会跳转到 `/console/`。账号仅用于公开演示，请勿用于生产；密码可能随部署调整。
 
 ---
 
@@ -37,7 +52,7 @@ frontend/frontend_admin/ 管理控制台（Vue3 + Element Plus） → http://loc
 3. 门户：`cd frontend/frontend_home && npm install && npm run dev`（:5174）
 4. 浏览器打开 http://localhost:5174 ，点「进入控制台」；使用首次启动日志中的 `admin` 随机密码，或 `.env` 里的 `INITIAL_ADMIN_PASSWORD`
 
-> 本机请统一使用 **localhost**（勿混用 `127.0.0.1`）。前端总览见 [`frontend/README.md`](./frontend/README.md)。
+> 本机请统一使用 **localhost**（勿混用 `127.0.0.1`）。前端总览见 [`frontend/README.md`](./frontend/README.md)。线上体验见上方 [在线体验](#在线体验)。
 
 ## 功能
 
@@ -121,7 +136,7 @@ frontend/frontend_admin/ Vue3 + Vite + Element Plus + Vue Router + Pinia + Axios
 
 | 账号 | 密码 | 角色 | 数据范围 | 说明 |
 |------|------|------|----------|------|
-| `admin` | `INITIAL_ADMIN_PASSWORD` 或首次启动日志中的随机密码 | 超级管理员(admin) | 全部数据 | 全菜单 + 全部增删改 |
+| `admin` | 本地：`INITIAL_ADMIN_PASSWORD` 或首次启动日志中的随机密码；线上演示：`TigerAdmin@2024!`（见 [在线体验](#在线体验)） | 超级管理员(admin) | 全部数据 | 全菜单 + 全部增删改 |
 | `tiger` | `INITIAL_DEMO_PASSWORD` 或首次启动日志中的随机密码 | 普通角色(common) | 本部门(前端组) | 只读，用户列表仅见本部门 |
 
 > 初始化幂等：`sys_user` 无数据时才灌种子（5 部门 / 4 岗位 / 31 菜单 / 2 角色 / 2 用户）；已有数据库的密码保持原值。

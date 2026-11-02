@@ -19,6 +19,7 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 
 - 门户：http://localhost/
 - 控制台：http://localhost/console/
-- 默认账号：`admin` / `admin123`
+- 默认账号：以 `deploy/.env` 中 `INITIAL_ADMIN_PASSWORD` 为准（本仓库线上演示为 `admin` / `TigerAdmin@2024!`）
+- 公开体验（若已部署）：门户 http://8.217.205.108/ · 控制台 http://8.217.205.108/console/
 
 > 后端镜像含深度学习依赖，**首次构建耗时长、镜像体积大**；详见 docker 文档中的限制说明。
