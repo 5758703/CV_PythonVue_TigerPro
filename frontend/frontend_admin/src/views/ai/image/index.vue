@@ -430,11 +430,15 @@ const filteredModels = computed(() => {
     alertEnabled: alertEnabled.value,
     category: category.value,
   })
-  // 开放词汇模型靠前，便于在长列表中找到 OmDet / VLM-FO1
-  const prefer = new Set(['omdet-turbo-swin-tiny', 'vlm-fo1-3b'])
+  // 默认 PPE 优先，其次开放词汇模型便于查找
+  const preferRank = (key) => {
+    if (key === 'sec-ppe-yolo') return 0
+    if (key === 'omdet-turbo-swin-tiny' || key === 'vlm-fo1-3b') return 1
+    return 2
+  }
   return [...list].sort((a, b) => {
-    const pa = prefer.has(a.modelKey) ? 0 : 1
-    const pb = prefer.has(b.modelKey) ? 0 : 1
+    const pa = preferRank(a.modelKey)
+    const pb = preferRank(b.modelKey)
     if (pa !== pb) return pa - pb
     return String(a.modelName || '').localeCompare(String(b.modelName || ''), 'zh')
   })
@@ -452,8 +456,17 @@ const isVlmFo1Model = computed(() => {
   const key = (selectedModel.value?.modelKey || '').toLowerCase()
   return lib === 'vlm-fo1' || key.includes('vlm-fo1')
 })
+/** 图片检测默认模型：PPE 安全装备检测（YOLO） */
+const DEFAULT_IMAGE_DETECT_KEY = 'sec-ppe-yolo'
 const syncModelSelection = () => {
-  modelId.value = ensureModelInList(modelId.value, filteredModels.value)
+  const list = filteredModels.value
+  if (!list?.length) {
+    modelId.value = null
+    return
+  }
+  if (modelId.value != null && list.some((m) => m.id === modelId.value)) return
+  const preferred = list.find((m) => m.modelKey === DEFAULT_IMAGE_DETECT_KEY)
+  modelId.value = preferred?.id ?? ensureModelInList(null, list)
 }
 const onCategoryChange = () => {
   syncModelSelection()

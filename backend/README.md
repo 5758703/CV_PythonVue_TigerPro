@@ -154,7 +154,7 @@ python app.py        # http://0.0.0.0:5001
 
 启动时自动：建表 → 轻量迁移 → 写种子。首次建库可在 `.env` 中配置 `INITIAL_ADMIN_PASSWORD` 和 `INITIAL_DEMO_PASSWORD`；留空时随机密码仅在首次启动日志中显示。已有数据库的账号密码不会被更改。`SECRET_KEY` 应配置为固定随机密钥。
 
-模型转换、视频和数字人处理、训练及验证任务使用数据库队列。Windows 的 `run_backend.ps1` 会同时启动管理任务 worker；手动运行 `python app.py` 时，另开终端运行 `python scripts/admin_job_worker.py`。开放平台异步任务另需 `python scripts/open_job_worker.py`。
+模型转换、视频和数字人处理、训练及验证任务使用数据库队列。`python app.py` 与 Windows 的 `run_backend.ps1` 都会自动拉起管理任务 worker；也可手动运行 `python scripts/admin_job_worker.py`。开放平台异步任务另需 `python scripts/open_job_worker.py`。
 
 健康检查：`GET http://127.0.0.1:5001/api/health` → `{"code":0,"message":"ok"}`。
 

@@ -80,5 +80,59 @@ def _migrate(db):
 app = create_app()
 
 
+def _spawn_admin_job_worker():
+    """随 app.py 拉起管理任务 worker（视频检测/转换/训练等依赖队列）。
+
+    仅 ``python app.py`` 入口调用；pytest / create_app 不会启动。
+    设置环境变量 ``TIGERPRO_SKIP_ADMIN_WORKER=1`` 可跳过（例如已由外部脚本托管）。
+    """
+    import atexit
+    import os
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    if os.environ.get("TIGERPRO_SKIP_ADMIN_WORKER", "").strip().lower() in ("1", "true", "yes"):
+        print("[admin-worker] skipped (TIGERPRO_SKIP_ADMIN_WORKER)", flush=True)
+        return None
+
+    script = Path(__file__).resolve().parent / "scripts" / "admin_job_worker.py"
+    if not script.is_file():
+        print(f"[warn] admin job worker missing: {script}", flush=True)
+        return None
+
+    kwargs = {
+        "args": [sys.executable, str(script)],
+        "cwd": str(script.parent.parent),
+    }
+    if sys.platform == "win32":
+        # 避免额外弹出控制台窗口
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    proc = subprocess.Popen(**kwargs)
+    time.sleep(0.8)
+    if proc.poll() is not None:
+        print(
+            f"[warn] admin job worker exited immediately (code={proc.returncode}); "
+            "video/convert/training jobs will stay queued",
+            flush=True,
+        )
+        return None
+
+    def _stop():
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    atexit.register(_stop)
+    print(f"[admin-worker] spawned pid={proc.pid}", flush=True)
+    return proc
+
+
 if __name__ == "__main__":
+    _spawn_admin_job_worker()
     app.run(host="0.0.0.0", port=5001, debug=False, threaded=True)

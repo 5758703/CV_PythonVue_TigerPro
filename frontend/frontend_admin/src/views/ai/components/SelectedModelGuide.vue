@@ -77,11 +77,11 @@ const props = defineProps({
   model: { type: Object, default: null },
   /** image | video | camera | imgcls | livecls | ocr */
   page: { type: String, default: '' },
-  /** 切换模型时是否自动展开 */
-  autoExpand: { type: Boolean, default: true },
+  /** 切换模型时是否自动展开（默认保持收起，由用户手动展开） */
+  autoExpand: { type: Boolean, default: false },
 })
 
-const expanded = ref(true)
+const expanded = ref(false)
 
 const guide = computed(() => resolveModelGuide(props.model, props.page))
 

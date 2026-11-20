@@ -2685,12 +2685,57 @@ def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classe
 
 
 # ------------------------------------------------------------ transformers 文本任务
+def _shim_flex_attention_for_torchao():
+    """torchao 0.12 仍 import torch._inductor.kernel.flex_attention；
+    Torch ≥2.11 已迁到 torch._inductor.kernel.flex.*，缺 shim 会导致
+    accelerate→torchao 导入失败，进而 ``transformers.pipeline`` 报
+    Could not import module 'pipeline'（ViT 分类 / 文本 / ASR 均受影响）。
+    """
+    name = "torch._inductor.kernel.flex_attention"
+    if name in sys.modules:
+        return
+    try:
+        __import__(name)
+        return
+    except ModuleNotFoundError:
+        pass
+    import types
+    from torch._inductor.kernel.flex import flex_attention as _fa
+    from torch._inductor.kernel.flex.common import construct_strides, maybe_realize
+
+    mod = types.ModuleType(name)
+    for key in dir(_fa):
+        if not key.startswith("_"):
+            setattr(mod, key, getattr(_fa, key))
+    mod.construct_strides = construct_strides
+    mod.maybe_realize = maybe_realize
+    sys.modules[name] = mod
+
+
+def _import_hf_pipeline():
+    """惰性导入 transformers.pipeline；先注入 torchao/Torch≥2.11 兼容 shim。"""
+    _shim_flex_attention_for_torchao()
+    try:
+        from transformers import pipeline
+        return pipeline
+    except ModuleNotFoundError:
+        # 先前未 shim 时 accelerate/torchao 可能半残在 sys.modules，清掉后重试
+        for key in list(sys.modules):
+            if key == "accelerate" or key.startswith("accelerate."):
+                del sys.modules[key]
+            elif key == "torchao" or key.startswith("torchao."):
+                del sys.modules[key]
+        _shim_flex_attention_for_torchao()
+        from transformers import pipeline
+        return pipeline
+
+
 def _get_pipeline(task, model_dir):
     key = (task, model_dir)
     with _lock:
         if key in _pipe_cache:
             return _pipe_cache[key]
-        from transformers import pipeline  # 惰性导入
+        pipeline = _import_hf_pipeline()
         pipe = pipeline(task, model=model_dir, tokenizer=model_dir, top_k=None)
         _pipe_cache[key] = pipe
         return pipe
@@ -2719,7 +2764,7 @@ def _get_img_pipeline(task, model_dir):
     with _lock:
         if key in _pipe_cache:
             return _pipe_cache[key]
-        from transformers import pipeline  # 惰性导入
+        pipeline = _import_hf_pipeline()
         pipe = pipeline(task, model=model_dir)
         _pipe_cache[key] = pipe
         return pipe
@@ -3887,7 +3932,7 @@ def _get_text_pipeline(task, model_dir, **kwargs):
     with _lock:
         if key in _pipe_cache:
             return _pipe_cache[key]
-        from transformers import pipeline  # 惰性导入
+        pipeline = _import_hf_pipeline()
         pipe = pipeline(task, model=model_dir, tokenizer=model_dir, **kwargs)
         _pipe_cache[key] = pipe
         return pipe
@@ -4174,6 +4219,7 @@ def _disable_torchcodec_for_asr():
     导入直接抛 RuntimeError（libtorchcodec_core*.dll）。本项目已用 imageio-ffmpeg
     预解码波形，无需 torchcodec。
     """
+    _shim_flex_attention_for_torchao()
     try:
         import transformers.pipelines.automatic_speech_recognition as asr_mod
         asr_mod.is_torchcodec_available = lambda: False
@@ -4198,7 +4244,7 @@ def _get_whisper(model_dir):
         if model_dir in _whisper_cache:
             return _whisper_cache[model_dir]
         _disable_torchcodec_for_asr()
-        from transformers import pipeline  # 惰性导入
+        pipeline = _import_hf_pipeline()
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model_dir,
@@ -4833,32 +4879,6 @@ def synthesize_speech_voxcpm_clone(model_dir, text, prompt_text, prompt_path,
 
 # ------------------------------------------------------------ NeuTTS Air 零样本音色克隆
 _neutts_cache = _model_cache()  # model_dir -> NeuTTS 实例
-
-
-def _shim_flex_attention_for_torchao():
-    """torchao 0.12 仍 import torch._inductor.kernel.flex_attention；
-    Torch ≥2.11 已迁到 torch._inductor.kernel.flex.*，缺 shim 会导致 neutts/neucodec 导入失败。"""
-    import sys
-    import types
-
-    name = "torch._inductor.kernel.flex_attention"
-    if name in sys.modules:
-        return
-    try:
-        __import__(name)
-        return
-    except ModuleNotFoundError:
-        pass
-    from torch._inductor.kernel.flex import flex_attention as _fa
-    from torch._inductor.kernel.flex.common import construct_strides, maybe_realize
-
-    mod = types.ModuleType(name)
-    for key in dir(_fa):
-        if not key.startswith("_"):
-            setattr(mod, key, getattr(_fa, key))
-    mod.construct_strides = construct_strides
-    mod.maybe_realize = maybe_realize
-    sys.modules[name] = mod
 
 
 def _ensure_hf_token_env():

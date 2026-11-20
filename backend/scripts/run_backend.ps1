@@ -34,13 +34,7 @@ if (-not $VenvPython) {
 }
 
 Write-Host "Using: $VenvPython" -ForegroundColor DarkGray
-# Initialize schema before the two processes start; the worker needs the job table.
+# Schema init; management worker is spawned by app.py (__main__).
 & $VenvPython -c "from app import app"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-$Worker = Start-Process -FilePath $VenvPython -ArgumentList "scripts/admin_job_worker.py" -WorkingDirectory $BackendRoot -WindowStyle Hidden -PassThru
-Write-Host "Management worker PID: $($Worker.Id)" -ForegroundColor DarkGray
-try {
-    & $VenvPython app.py
-} finally {
-    if (-not $Worker.HasExited) { Stop-Process -Id $Worker.Id }
-}
+& $VenvPython app.py
