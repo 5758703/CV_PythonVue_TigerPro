@@ -5,7 +5,7 @@
         <el-icon class="mg-ico"><InfoFilled /></el-icon>
         <div class="mg-titles">
           <div class="mg-title-row">
-            <span class="mg-title">选中模型说明</span>
+            <span class="mg-title">{{ heading }}</span>
             <el-tag size="small" effect="dark" type="primary">{{ guide.meta.modelName }}</el-tag>
             <el-tag size="small" effect="plain">{{ taskLabel(guide.meta.task) }}</el-tag>
             <el-tag v-if="guide.meta.library && guide.meta.library !== '—'" size="small" effect="plain">
@@ -79,9 +79,11 @@ const props = defineProps({
   page: { type: String, default: '' },
   /** 切换模型时是否自动展开（默认保持收起，由用户手动展开） */
   autoExpand: { type: Boolean, default: false },
+  /** 标题文案，模型列表详情弹窗可改为「模型详细说明」 */
+  heading: { type: String, default: '选中模型说明' },
 })
 
-const expanded = ref(false)
+const expanded = ref(!!props.autoExpand)
 
 const guide = computed(() => resolveModelGuide(props.model, props.page))
 
@@ -100,6 +102,7 @@ watch(
   () => {
     if (props.autoExpand && props.model) expanded.value = true
   },
+  { immediate: true },
 )
 
 function openSource() {

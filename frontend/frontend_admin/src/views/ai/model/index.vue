@@ -72,8 +72,9 @@
             <el-tag :type="row.status === '0' ? 'success' : 'info'">{{ row.status === "0" ? "启用" : "停用" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="380" fixed="right">
+        <el-table-column label="操作" width="460" fixed="right">
           <template #default="{ row }">
+            <el-button v-permission="'ai:model:query'" link type="primary" :icon="InfoFilled" @click="openDetail(row)">详情</el-button>
             <el-button v-permission="'ai:model:query'" link type="success" :icon="VideoPlay" :disabled="!row.filePath && !isRemoteModel(row)" @click="openTest(row)">测试</el-button>
             <el-button v-if="canDownloadWeight(row)" v-permission="'ai:model:download'" link type="primary" :icon="Download" @click="downloadWeight(row)">下载</el-button>
             <el-button
@@ -331,6 +332,25 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="detailDialog"
+      :title="`模型详情 · ${detailModel.modelName || ''}`"
+      width="820px"
+      destroy-on-close
+    >
+      <div class="model-detail-body">
+        <SelectedModelGuide
+          v-if="detailModel.id"
+          :model="detailModel"
+          heading="模型详细说明"
+          :auto-expand="true"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="detailDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="testDialog" :title="`在线测试 - ${testModel.modelName}`" width="860px" draggable @closed="resetTest">
       <div class="test-bar">
         <el-upload :show-file-list="false" :before-upload="beforeTestImg" :http-request="runDetect" accept="image/*">
@@ -389,10 +409,11 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Search, Refresh, Plus, Edit, Delete, UploadFilled, Download, VideoPlay, ZoomIn, Switch } from "@element-plus/icons-vue";
+import { Search, Refresh, Plus, Edit, Delete, UploadFilled, Download, VideoPlay, ZoomIn, Switch, InfoFilled } from "@element-plus/icons-vue";
 
 import { modelApi } from "../../../api/ai";
 import { syncContainCanvas, canvasOffsetToImageXY } from "../../../utils/containCanvas";
+import SelectedModelGuide from "../components/SelectedModelGuide.vue";
 
 const router = useRouter();
 
@@ -839,6 +860,14 @@ const downloadVariant = async (ext) => {
   URL.revokeObjectURL(url);
 };
 
+// ---------------- 模型详情说明
+const detailDialog = ref(false);
+const detailModel = ref({});
+const openDetail = (row) => {
+  detailModel.value = { ...row };
+  detailDialog.value = true;
+};
+
 // ---------------- 在线测试
 const testDialog = ref(false);
 const detecting = ref(false);
@@ -1016,6 +1045,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.model-detail-body :deep(.model-guide) {
+  margin-top: 0;
+}
 .search-card {
   margin-bottom: 12px;
 }
