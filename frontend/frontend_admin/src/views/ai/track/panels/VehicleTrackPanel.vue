@@ -434,7 +434,11 @@ import {
 } from '@element-plus/icons-vue'
 import { modelApi, vehicleApi, alertApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
-import { pickRecommendedModel } from '../../../../utils/trackModelRecommendation'
+import {
+  pickRecommendedModel,
+  filterTrackDetectModels,
+  SPECIALIZED_DETECT_RE,
+} from '../../../../utils/trackModelRecommendation'
 import {
   createLivePreviewLifecycle,
   releaseOpenedStream,
@@ -489,8 +493,20 @@ const PLATE_PREF = [
   /license-plate-detection/i,
   /车牌检测/i,
 ]
-const OCR_DET_PREF = [/pp-ocrv6.*det|v6.*small.*det|OCRv6_small_det/i, /pp-ocrv5.*det/i, /pp-ocrv4.*det|ch_PP-OCRv4.*det/i]
-const OCR_REC_PREF = [/pp-ocrv6.*rec|v6.*small.*rec|OCRv6_small_rec/i, /pp-ocrv5.*rec/i, /pp-ocrv4.*rec|ch_PP-OCRv4.*rec/i]
+const OCR_DET_PREF = [
+  /pp-ocrv6.*small.*det|OCRv6_small_det|v6_small_det/i,
+  /pp-ocrv6.*medium.*det|OCRv6_medium_det|v6_medium_det/i,
+  /pp-ocrv6.*tiny.*det|OCRv6_tiny_det|v6_tiny_det/i,
+  /pp-ocrv5.*det/i,
+  /pp-ocrv4.*det|ch_PP-OCRv4.*det/i,
+]
+const OCR_REC_PREF = [
+  /pp-ocrv6.*small.*rec|OCRv6_small_rec|v6_small_rec/i,
+  /pp-ocrv6.*medium.*rec|OCRv6_medium_rec|v6_medium_rec/i,
+  /pp-ocrv6.*tiny.*rec|OCRv6_tiny_rec|v6_tiny_rec/i,
+  /pp-ocrv5.*rec/i,
+  /pp-ocrv4.*rec|ch_PP-OCRv4.*rec/i,
+]
 
 const scoreByPref = (m, prefs) => {
   const text = `${m.modelKey || ''} ${m.modelName || ''} ${m.filePath || ''}`
@@ -519,7 +535,7 @@ const modelOptionLabel = (m, kind) => {
   else if (kind === 'plate' && /yolov8-license-plate|Koushim/i.test(text)) tag = ' · YOLOv8'
   else if (kind === 'plate' && /yolov5m-license-plate/i.test(text)) tag = ' · 兼容·YOLOv5m'
   else if (kind === 'plate' && /yolov5n-license-plate|keremberke-yolov5n/i.test(text)) tag = ' · 兼容·YOLOv5n'
-  else if ((kind === 'ocrDet' || kind === 'ocrRec') && /pp-ocrv6|v6_small/i.test(text)) tag = ' · 推荐'
+  else if ((kind === 'ocrDet' || kind === 'ocrRec') && /pp-ocrv6.*small|v6_small|OCRv6_small/i.test(text)) tag = ' · 推荐'
   return `${m.modelName}${tag}`
 }
 
@@ -532,11 +548,17 @@ const detectModels = computed(() => {
       m.status === '0' &&
       !/plate|license|车牌/i.test(`${m.modelKey} ${m.modelName}`),
   )
-  const traffic = yolo.filter(
-    (m) =>
-      /车|交通|vehicle|traffic|yolo26|yolo11|yolov8/i.test(`${m.modelName} ${m.category} ${m.modelKey}`),
-  )
-  return sortByPref(traffic.length ? traffic : yolo, DETECT_PREF)
+  // 排序：车辆/交通专用 → 通用 YOLO → 其它；专用微调（吸烟等）仍可选但排后、不作为默认
+  const rank = (m) => {
+    const text = `${m.modelName || ''} ${m.category || ''} ${m.modelKey || ''}`
+    if (SPECIALIZED_DETECT_RE.test(text)) return 800
+    if (/车|交通|vehicle|traffic/i.test(text)) return 0
+    if (/通用检测/i.test(text)) return 10
+    if (/^(yolo26s|yolo26n|yolo11s|yolo11n)$/i.test(String(m.modelKey || ''))) return 20
+    if (/yolo26|yolo11|yolov8/i.test(text)) return 40
+    return 100
+  }
+  return [...yolo].sort((a, b) => rank(a) - rank(b) || scoreByPref(a, DETECT_PREF) - scoreByPref(b, DETECT_PREF))
 })
 const plateModels = computed(() => {
   const list = allModels.value.filter(
@@ -769,8 +791,13 @@ const loadModels = async () => {
   const res = await modelApi.list({ pageNum: 1, pageSize: 200 })
   allModels.value = res.data.rows || []
   if (detectModels.value.length) {
-    const preferred = pickRecommendedModel(detectModels.value, 'vehicle') || pickPreferred(detectModels.value, DETECT_PREF)
-    const currentOk = detectId.value && detectModels.value.some((m) => m.id === detectId.value)
+    // 若当前误选了吸烟等专用模型，也强制切回车辆适配默认
+    const current = detectModels.value.find((m) => m.id === detectId.value)
+    const currentOk = current && !SPECIALIZED_DETECT_RE.test(`${current.modelKey || ''} ${current.modelName || ''}`)
+    const recommendPool = filterTrackDetectModels(detectModels.value)
+    const preferred = pickRecommendedModel(recommendPool, 'vehicle')
+      || pickPreferred(recommendPool, DETECT_PREF)
+      || pickPreferred(detectModels.value, DETECT_PREF)
     if (!currentOk) detectId.value = preferred?.id || detectModels.value[0].id
   }
   if (plateModels.value.length) {

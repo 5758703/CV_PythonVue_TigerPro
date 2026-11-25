@@ -237,7 +237,11 @@ import {
   ensureModelInList,
   categoriesFromModels,
 } from '../../../../utils/alertModels'
-import { recommendedModelId } from '../../../../utils/trackModelRecommendation'
+import {
+  recommendedModelId,
+  filterTrackDetectModels,
+  pickDefaultDetectModelId,
+} from '../../../../utils/trackModelRecommendation'
 
 const ALERT_SOURCE_KEY = 'track-camera'
 
@@ -354,10 +358,23 @@ const filteredModels = computed(() =>
 )
 
 const syncModelSelection = () => {
-  const currentValid = modelId.value != null && filteredModels.value.some((m) => m.id === modelId.value)
-  modelId.value = currentValid
-    ? modelId.value
-    : (recommendedModelId(filteredModels.value, 'general') ?? ensureModelInList(null, filteredModels.value))
+  const list = filteredModels.value
+  if (!list.length) {
+    modelId.value = null
+    return
+  }
+  // 告警开启：与摄像头/视频页一致，保留 ALERT_PREFERRED_KEYS 排序首项
+  if (alertEnabled.value) {
+    modelId.value = ensureModelInList(modelId.value, list)
+    return
+  }
+  // 告警关闭：勿把吸烟等专用微调当作通用追踪默认
+  const preferPool = filterTrackDetectModels(list)
+  const current = list.find((m) => m.id === modelId.value)
+  const currentOk = current && preferPool.some((m) => m.id === current.id)
+  if (currentOk) return
+  modelId.value = pickDefaultDetectModelId(list, 'general')
+    ?? ensureModelInList(null, preferPool.length ? preferPool : list)
 }
 const modelOptionLabel = (m) => {
   const recommended = m.id === recommendedModelId(filteredModels.value, 'general') ? ' · 推荐' : ''

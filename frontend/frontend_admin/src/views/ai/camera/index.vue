@@ -178,6 +178,7 @@ import {
   ensureModelInList,
   categoriesFromModels,
 } from '../../../utils/alertModels'
+import { pickDefaultDetectModelId, filterTrackDetectModels } from '../../../utils/trackModelRecommendation'
 import SelectedModelGuide from '../components/SelectedModelGuide.vue'
 
 const ALERT_SOURCE_KEY = 'camera-live'
@@ -211,7 +212,20 @@ const selectedModel = computed(() => filteredModels.value.find((m) => m.id === m
   || allModels.value.find((m) => m.id === modelId.value)
   || null)
 const syncModelSelection = () => {
-  modelId.value = ensureModelInList(modelId.value, filteredModels.value)
+  const list = filteredModels.value
+  if (!list.length) {
+    modelId.value = null
+    return
+  }
+  const current = list.find((m) => m.id === modelId.value)
+  if (alertEnabled.value) {
+    modelId.value = ensureModelInList(modelId.value, list)
+    return
+  }
+  const preferPool = filterTrackDetectModels(list)
+  const currentOk = current && preferPool.some((m) => m.id === current.id)
+  if (currentOk) return
+  modelId.value = pickDefaultDetectModelId(list, 'general') ?? ensureModelInList(null, preferPool.length ? preferPool : list)
 }
 const onCategoryChange = () => {
   syncModelSelection()

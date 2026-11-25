@@ -446,7 +446,10 @@ import { ElMessage } from 'element-plus'
 import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
 import { modelApi, absenceApi } from '../../../../api/ai'
 import { cameraApi } from '../../../../api/camera'
-import { recommendedModelId } from '../../../../utils/trackModelRecommendation'
+import {
+  recommendedModelId,
+  SPECIALIZED_DETECT_RE as DETECT_EXCLUDE_RE,
+} from '../../../../utils/trackModelRecommendation'
 
 const mode = ref('file')
 const detectModels = ref([])
@@ -887,7 +890,6 @@ const liveStatusLabel = computed(() => {
 })
 
 /** 离岗场景优先：通用 COCO 检人；避开车牌/PPE/姿态等专用权重 */
-const DETECT_EXCLUDE_RE = /plate|ppe|ball|tumor|pose|obb|seg|license|helmet|fire|smoke|crack|brain/i
 const DETECT_PREF_KEYS = [
   'yolo26s', 'yolo26n', 'yolo11s', 'yolo11n', 'yolov8s', 'yolov8n', 'yolo26m', 'yolo11m',
 ]

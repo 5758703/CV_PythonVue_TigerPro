@@ -5,6 +5,7 @@ import {
   pickRecommendedModel,
   recommendedModelId,
   isRecommendedModel,
+  filterTrackDetectModels,
 } from './trackModelRecommendation.js'
 
 const model = (id, modelKey, modelName = modelKey, extra = {}) => ({
@@ -16,9 +17,18 @@ const model = (id, modelKey, modelName = modelKey, extra = {}) => ({
   ...extra,
 })
 
-test('general tracking prefers the balanced YOLO26s model', () => {
-  const models = [model(1, 'yolo11n'), model(2, 'yolo26s'), model(3, 'yolo26n')]
+test('general tracking prefers the balanced YOLO26s general model', () => {
+  const models = [model(1, 'yolo11n'), model(2, 'yolo26s', 'YOLO26s 通用检测'), model(3, 'yolo26n')]
   assert.equal(recommendedModelId(models, 'general'), 2)
+})
+
+test('general tracking does not prefer smoking YOLO26s over general YOLO26s', () => {
+  const models = [
+    model(1, 'yolo26-smoking-detection', '吸烟行为检测（YOLO26s）', { category: '安防检测' }),
+    model(2, 'yolo26s', 'YOLO26s 通用检测', { category: '通用目标检测' }),
+    model(3, 'yolo11s-ball', 'YOLO11s 羽毛球检测'),
+  ]
+  assert.equal(pickRecommendedModel(models, 'general')?.id, 2)
 })
 
 test('vehicle tracking prefers a vehicle-specific model over a general model', () => {
@@ -27,6 +37,25 @@ test('vehicle tracking prefers a vehicle-specific model over a general model', (
     model(2, 'traffic-yolo11s', '车辆交通检测', { category: '车辆' }),
   ]
   assert.equal(pickRecommendedModel(models, 'vehicle')?.id, 2)
+})
+
+test('vehicle tracking prefers general YOLO26s over smoking detection', () => {
+  const models = [
+    model(1, 'yolo26-smoking-detection', '吸烟行为检测（YOLO26s）', { category: '安防检测' }),
+    model(2, 'yolo26s', 'YOLO26s 通用检测', { category: '通用目标检测' }),
+    model(3, 'yolo26n', 'YOLO26n 通用检测'),
+  ]
+  assert.equal(pickRecommendedModel(models, 'vehicle')?.modelKey, 'yolo26s')
+})
+
+test('filterTrackDetectModels drops specialized fine-tunes when general models exist', () => {
+  const models = [
+    model(1, 'yolo26-smoking-detection', '吸烟行为检测（YOLO26s）'),
+    model(2, 'yolo26s', 'YOLO26s 通用检测'),
+    model(3, 'fire-smoke-detection', '烟火检测'),
+  ]
+  const filtered = filterTrackDetectModels(models)
+  assert.deepEqual(filtered.map((m) => m.id), [2])
 })
 
 test('absence face recognition prefers Buffalo-L', () => {
