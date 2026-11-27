@@ -89,3 +89,51 @@ def test_tracker_activates_accepted_vehicle_below_library_default_split(backend)
     result = tracker.update(detections)
     assert len(result) == 1
     assert not result[0].attrs["tentative"]
+
+
+def test_mtmc_separate_vehicle_detector_feeds_only_matched_recovery_boxes(monkeypatch):
+    pytest.importorskip("trackers")
+    pytest.importorskip("supervision")
+    from services import mtmc_engine as mt
+
+    cfg = mt.MtmcConfig(camera_ids=[1], det_vehicle_path="vehicle.pt", enable_person=False)
+    tracker = mt._make_local_tracker(cfg, object_type="vehicle")
+    assert cfg.local_track_backend == "bytetrack"
+    frame = np.zeros((100, 100, 3), np.uint8)
+    scores = iter([0.90, 0.90, 0.15])
+
+    def detect(path, frame, conf, classes):
+        score = next(scores)
+        boxes = [[4, 4, 30, 30]]
+        if score < cfg.conf:
+            boxes.append([60, 60, 90, 90])
+        return [dict(className="car", classId=2, confidence=score, bbox=b) for b in boxes if score > conf]
+
+    monkeypatch.setattr(mt, "_detect", detect)
+    for _ in range(2):
+        _, vehicles = mt._detect_person_vehicle(cfg, frame)
+        previous = mt._tracks_or_raw(tracker, vehicles, frame)
+    _, weak = mt._detect_person_vehicle(cfg, frame)
+    assert len(weak) == 2 and all(d["associationOnly"] for d in weak)
+    tracks = mt._tracks_or_raw(tracker, weak, frame)
+    assert [t.track_id for t in tracks] == [previous[0].track_id]
+    assert tracks[0].conf == pytest.approx(0.15)
+    assert mt._tracks_or_raw(tracker, [weak[1]], frame) == []
+
+
+def test_pipeline_reports_associated_scores_without_emitting_weak_orphans():
+    pytest.importorskip("trackers")
+    pytest.importorskip("supervision")
+    from services.mtmc_local_track import create_local_tracker
+    from services.pipeline_runtime import _apply_tracking
+
+    session = SimpleNamespace(conf=0.35, stats={},
+                              _tracker=create_local_tracker("bytetrack", track_activation_threshold=0.35))
+    def det(x, score):
+        return {"className": "car", "bbox": [x, 0, x + 20, 20], "confidence": score}
+
+    _apply_tracking(session, [det(0, 0.8)])
+    high = _apply_tracking(session, [det(0, 0.8)])[0]
+    low = _apply_tracking(session, [det(0, 0.15), det(60, 0.15)])
+    assert len(low) == 1 and low[0]["trackId"] == high["trackId"]
+    assert low[0]["confidence"] == pytest.approx(0.15)

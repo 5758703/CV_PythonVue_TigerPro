@@ -81,6 +81,7 @@ class PipelineSession:
     _thread: threading.Thread | None = None
     _hub_key: str | None = None
     _tracker: Any = None
+    _association_conf: float | None = None
     _alert_region: list | None = None
     _alert_line: list | None = None
     _draw_region: bool = False
@@ -277,15 +278,19 @@ def start_run(
             draw_region = True
 
     tracker = None
+    association_conf = None
     if norm.get("trackIds"):
-        from services.mtmc_local_track import create_local_tracker, bytetrack_available
+        from services.mtmc_local_track import ASSOCIATION_CONF, create_local_tracker, bytetrack_available
 
         tcfg = norm["nodes"][norm["trackIds"][0]]["config"]
         backend = "bytetrack" if bytetrack_available() else "iou"
+        if backend == "bytetrack":
+            association_conf = min(conf, ASSOCIATION_CONF)
         tracker = create_local_tracker(
             backend,
             iou_thresh=float(tcfg.get("iouThresh") or 0.3),
             max_age=int(tcfg.get("maxAge") or 30),
+            track_activation_threshold=max(0.25, conf),
         )
 
     rk = (run_key or f"plrun_{uuid.uuid4().hex[:12]}").strip()
@@ -301,6 +306,7 @@ def start_run(
         sample_fps=max(0.5, min(sample_fps, 15.0)),
         app=app,
         _tracker=tracker,
+        _association_conf=association_conf,
         _alert_region=alert_region,
         _alert_line=alert_line,
         _draw_region=draw_region,
@@ -412,6 +418,7 @@ def _apply_tracking(sess: PipelineSession, dets: list[dict]) -> list[dict]:
             "confidence": float(d.get("confidence") or 0),
             "className": d.get("className") or "object",
             "classId": d.get("classId"),
+            "associationOnly": float(d.get("confidence") or 0) < sess.conf,
         }
         for d in dets
         if d.get("bbox") and len(d.get("bbox") or []) >= 4
@@ -421,7 +428,7 @@ def _apply_tracking(sess: PipelineSession, dets: list[dict]) -> list[dict]:
         item = {
             "className": getattr(t, "class_name", None) or "object",
             "classId": getattr(t, "class_id", -1),
-            "confidence": float(getattr(t, "confidence", 0) or 0),
+            "confidence": float(t.conf),
             "bbox": list(getattr(t, "bbox", None) or []),
             "trackId": int(getattr(t, "track_id", 0) or 0),
             "localTrackId": int(getattr(t, "track_id", 0) or 0),
@@ -772,7 +779,7 @@ def _worker_loop(sess: PipelineSession, source_type: str, source: str, width: in
                 result = detect_image(
                     sess.model_abs_path,
                     jpeg,
-                    conf=sess.conf,
+                    conf=sess._association_conf if sess._association_conf is not None else sess.conf,
                     draw=False,
                     model_key=sess.model_key,
                 )

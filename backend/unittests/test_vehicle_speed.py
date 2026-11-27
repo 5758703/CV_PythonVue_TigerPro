@@ -993,6 +993,10 @@ class _FakeTensor:
 class _FakeVehicleModel:
     def __init__(self):
         self._frame_index = 0
+        self.callbacks = {"on_predict_batch_start": []}
+
+    def add_callback(self, event, callback):
+        self.callbacks[event].append(callback)
 
     def track(self, _frame, **_kwargs):
         x = self._frame_index * 10

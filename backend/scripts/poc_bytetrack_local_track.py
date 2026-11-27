@@ -53,7 +53,7 @@ def scenario_low_conf_recovery(tracker_cls, name: str) -> dict:
     c = tr.update([_det([104, 104, 164, 204], conf=0.88)])
     id_b = b[0].track_id if b else None
     id_c = c[0].track_id if c else None
-    ok = id_c == tid
+    ok = id_b == tid and id_c == tid
     return {
         "name": name,
         "scenario": "low_conf_recovery",

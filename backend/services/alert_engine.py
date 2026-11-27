@@ -178,7 +178,13 @@ def _eval_class_presence(rule, cfg: dict, detections: list[dict]) -> dict | None
     classes = cfg.get("classes") or []
     min_conf = float(cfg.get("min_confidence", 0.35))
     dets = _filter_dets(detections, min_conf)
-    hits = [d for d in dets if _match_class(d.get("className", ""), classes)]
+    key = rule.rule_key if hasattr(rule, "rule_key") else rule.get("ruleKey")
+    if key == "ppe-no-hardhat":
+        # Hardhat and NO-Hardhat are opposite labels in the same PPE model.
+        labels = {_norm(t) for t in classes} - {""}
+        hits = [d for d in dets if _norm(d.get("className")) in labels]
+    else:
+        hits = [d for d in dets if _match_class(d.get("className", ""), classes)]
     if not hits:
         return None
     names = sorted({d.get("className", "") for d in hits})

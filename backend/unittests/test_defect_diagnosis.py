@@ -234,6 +234,34 @@ def test_run_pipeline_fallback(monkeypatch):
     assert out["imageBase64"]
 
 
+def test_box_prompt_and_per_detection_fallback(monkeypatch):
+    import cv2
+    import inference
+    from unittest.mock import Mock
+
+    raw = cv2.imencode(".png", np.zeros((32, 32, 3), np.uint8))[1].tobytes()
+    box = [4, 4, 20, 20]
+    mask = np.eye(32, dtype=bool)
+    predictor = Mock()
+    predictor.predict.side_effect = [(mask[None], [0.9], None), RuntimeError("decoder failed")]
+    monkeypatch.setattr(inference, "_get_mobile_sam_predictor", lambda _: predictor)
+    monkeypatch.setattr(dd, "qwen_vl_configured", lambda: False)
+    detections = [{"className": "defect", "confidence": 0.9, "bbox": b} for b in (None, box, box)]
+    monkeypatch.setattr(inference, "detect_image", lambda *a, **kw: {"detections": detections})
+    out = dd.run_pipeline(raw, det_path="det", seg_path="seg", seg_lib="mobilesam", draw=False)
+    assert predictor.predict.call_count == 2
+    prompt = predictor.predict.call_args.kwargs
+    np.testing.assert_array_equal(prompt["box"], box)
+    assert prompt["multimask_output"] is False
+    assert out["engines"]["segmentation"] == "mixed"
+    missing, predicted, fallback = out["suspicious"]
+    assert missing["maskSource"] == "none" and "maskBase64" not in missing
+    assert predicted["maskSource"] == "mobilesam"
+    np.testing.assert_array_equal(inference._decode_mask_b64(predicted["maskBase64"]), mask)
+    assert fallback["maskSource"] == "bbox_rect"
+    assert fallback["maskBase64"] == dd._rect_mask_b64(32, 32, box)
+
+
 def test_engine_status_shape(monkeypatch):
     monkeypatch.setattr(dd.Config, "QWEN_VL_API_KEY", "")
     st = dd.engine_status()

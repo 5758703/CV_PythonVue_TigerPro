@@ -15,6 +15,9 @@ import numpy as np
 
 TrackerBackend = Literal["iou", "bytetrack", "botsort"]
 
+# Recovery candidates are only used to update an existing native track.
+ASSOCIATION_CONF = 0.10
+
 # ByteTrack/BoT-SORT 未激活轨迹（tracker_id<0）使用 900001+ 段，避免与正式 track 冲突
 _TENTATIVE_ID_BASE = 900_000
 
@@ -253,7 +256,9 @@ class _SvTrackerAdapter:
         xyxy = np.asarray([d["bbox"] for d in detections], dtype=np.float32)
         conf = np.asarray([float(d.get("confidence") or 0) for d in detections], dtype=np.float32)
         class_id = np.asarray([hash(str(d.get("className") or "object")) % 1000 for d in detections], dtype=int)
-        return sv.Detections(xyxy=xyxy, confidence=conf, class_id=class_id)
+        recovery = np.asarray([bool(d.get("associationOnly")) for d in detections])
+        return sv.Detections(xyxy=xyxy, confidence=conf, class_id=class_id,
+                             data={"associationOnly": recovery})
 
     def update(self, detections: list[dict], frame=None) -> list[Tracklet]:
         if self.mask_cue.enabled and frame is not None:
@@ -266,12 +271,15 @@ class _SvTrackerAdapter:
         active_tentative: set[int] = set()
         out: list[Tracklet] = []
 
+        recovery = getattr(tracked, "data", {}).get("associationOnly")
         for i in range(len(tracked)):
             raw_tid = int(tracked.tracker_id[i])
             bbox = [float(v) for v in tracked.xyxy[i].tolist()]
             conf = float(tracked.confidence[i]) if tracked.confidence is not None else 0.0
             tentative = raw_tid < 0
             if tentative:
+                if recovery is not None and recovery[i]:
+                    continue
                 tid = self._assign_tentative_id(bbox, active_ids)
                 active_tentative.add(tid)
             else:

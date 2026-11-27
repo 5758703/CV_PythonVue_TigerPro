@@ -233,6 +233,7 @@ def _resolve_models():
 
 def _vehicle_worker(job_id, cfg_bundle):
     from inference import _get_model, _open_h264, _write_bgr, _video_alert_ctx, _apply_frame_video_alerts, _video_alert_stats
+    from inference import _track_yolo_frame
     from services.track_zone import region_to_pixels
     from services.vehicle_track import (
         DEFAULT_VEHICLE_CLASSES,
@@ -302,10 +303,8 @@ def _vehicle_worker(job_id, cfg_bundle):
             ok, frame = cap.read()
             if not ok:
                 break
-            track_kw = dict(persist=True, tracker="bytetrack.yaml", conf=conf, imgsz=imgsz, verbose=False, device="cpu")
-            if classes:
-                track_kw["classes"] = classes
-            r = model.track(frame, **track_kw)[0]
+            r = _track_yolo_frame(model, frame, conf=conf, imgsz=imgsz,
+                                  classes=classes, reset=frames == 0)
             names = r.names
             detections = []
             if r.boxes is not None and r.boxes.id is not None:

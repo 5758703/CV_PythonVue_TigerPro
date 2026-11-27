@@ -12,6 +12,7 @@ import shutil
 import sys
 import threading
 import time
+from contextvars import ContextVar
 
 # Ultralytics 默认把 settings.json 写到用户 Roaming 目录。在 Windows 服务、
 # 沙箱或受限账号下该目录经常不可写，YOLO 初始化会因此失败并让检测结果恒为空。
@@ -2370,6 +2371,41 @@ def fall_video(library, model_key, abs_weight_path, src_path, dst_path, *,
     }
 
 
+_tracking_request = ContextVar("tracking_request", default=None)
+
+
+def _configure_bytetrack_batch(predictor):
+    # The model and its callbacks are cached. Only change our tracking calls.
+    request = _tracking_request.get()
+    if request is None:
+        return
+    conf, reset = request
+    tracker = predictor.trackers[0]  # a single image per call
+    if reset:
+        tracker.reset()
+    tracker.args.new_track_thresh = max(tracker.args.track_high_thresh, conf)
+    predictor.args.conf = min(conf, tracker.args.track_low_thresh)
+
+
+def _track_yolo_frame(model, frame, *, conf, imgsz, classes, reset=False):
+    # Register once, before inference. Ultralytics initializes the tracker at
+    # on_predict_start, then runs this batch hook before detection/NMS.
+    with _lock:
+        if _configure_bytetrack_batch not in model.callbacks["on_predict_batch_start"]:
+            model.add_callback("on_predict_batch_start", _configure_bytetrack_batch)
+    token = _tracking_request.set((conf, reset))
+    try:
+        result = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=conf,
+                             imgsz=imgsz, classes=classes or None, verbose=False, device="cpu")[0]
+    finally:
+        _tracking_request.reset(token)
+    # When nothing associates, Ultralytics returns raw detections. Keep the
+    # caller's original threshold for those untracked boxes (including plots).
+    if result.boxes is not None and result.boxes.id is None:
+        result = result[result.boxes.conf >= conf]
+    return result
+
+
 def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 progress_cb=None, alert_rules=None, alert_source_key=None, classes=None,
                 region=None, class_preset=None, zone_style=None):
@@ -2438,11 +2474,8 @@ def track_video(abs_path, src_path, dst_path, conf=0.25, imgsz=640, line=None,
                 break
             # 区域模式：全帧追踪以保持跨边界 ID，再用多边形做区域过滤/进出判断
             # （等同 TrackZone 区域语义，并修复仅 mask 追踪时无法判断方向的问题）
-            track_kw = dict(persist=True, tracker="bytetrack.yaml",
-                            conf=conf, imgsz=imgsz, verbose=False, device="cpu")
-            if class_filter:
-                track_kw["classes"] = class_filter
-            r = model.track(frame, **track_kw)[0]
+            r = _track_yolo_frame(model, frame, conf=conf, imgsz=imgsz,
+                                  classes=class_filter, reset=frames == 0)
             detections = []
             frame_alarms = []
             active_ids: set = set()
@@ -2587,7 +2620,7 @@ def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classe
                 region=None, class_preset=None, session_id=None):
     """单帧追踪（摄像头实时）：返回 检测框 + 轨迹ID（不画图，前端叠画）。
 
-    reset=True（会话首帧）用 persist=False 重置跟踪器/ID；之后 persist=True 续追。
+    reset=True（会话首帧）重置跟踪器；后续帧沿用轨迹。
     classes / class_preset: 可选类别过滤。
     region: 归一化多边形，启用区域进出统计与 inZone 标记。
     """
@@ -2612,11 +2645,7 @@ def track_frame(abs_path, image_bytes, conf=0.25, reset=False, imgsz=640, classe
     if reset:
         get_or_create_zone_counter(abs_path, session_id, reset=True)
 
-    track_kw = dict(persist=not reset, tracker="bytetrack.yaml",
-                    conf=conf, imgsz=imgsz, verbose=False, device="cpu")
-    if class_filter:
-        track_kw["classes"] = class_filter
-    r = model.track(img, **track_kw)[0]
+    r = _track_yolo_frame(model, img, conf=conf, imgsz=imgsz, classes=class_filter, reset=reset)
     names = r.names
     detections = []
     frame_alarms = []
@@ -3751,7 +3780,7 @@ def segment_image_mobilesam(abs_path, image_bytes, points=None, point_labels=Non
             point_coords=pt_coords,
             point_labels=pt_labels,
             box=box_arr,
-            multimask_output=not box_arr,
+            multimask_output=box_arr is None,
         )
         best = int(np.argmax(scores))
         mask = masks[best]

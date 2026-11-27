@@ -307,41 +307,36 @@ def segment_boxes(
     seg_lib: str | None,
 ) -> list[str | None]:
     """Box-guided masks; one maskBase64 per box (or None)."""
+    return [mask for mask, _ in _segment_box_results(image_bytes, boxes, seg_path, seg_lib)]
+
+
+def _segment_box_results(image_bytes, boxes, seg_path, seg_lib) -> list[tuple[str | None, str]]:
     arr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
-        return [None] * len(boxes)
+        return [(None, "none")] * len(boxes)
     h, w = img.shape[:2]
     lib = (seg_lib or "").lower()
-    masks: list[str | None] = []
-    if not seg_path:
-        for box in boxes:
-            masks.append(_rect_mask_b64(h, w, box))
-        return masks
+    segment = None
+    if seg_path and lib in ("mobilesam", "mobile-sam", "mobile_sam"):
+        from inference import segment_image_mobilesam as segment
+        engine = "mobilesam"
+    elif seg_path and lib in ("opencv-sam", "efficientsam", "efficient-sam", "efficient_sam"):
+        from inference import segment_image_efficientsam as segment
+        engine = "efficientsam"
 
+    masks = []
     for box in boxes:
-        try:
-            if lib in ("mobilesam", "mobile-sam", "mobile_sam"):
-                from inference import segment_image_mobilesam
-
-                res = segment_image_mobilesam(
-                    seg_path, image_bytes, box=list(box), mode="prompt", draw=False
-                )
-            elif lib in ("opencv-sam", "efficientsam", "efficient-sam", "efficient_sam"):
-                from inference import segment_image_efficientsam
-
-                res = segment_image_efficientsam(
-                    seg_path, image_bytes, box=list(box), draw=False
-                )
-            else:
-                masks.append(_rect_mask_b64(h, w, box))
-                continue
-            dets = (res or {}).get("detections") or []
-            mb = dets[0].get("maskBase64") if dets else None
-            masks.append(mb or _rect_mask_b64(h, w, box))
-        except Exception as e:  # noqa: BLE001
-            log.warning("box-guided segment failed: %s", e)
-            masks.append(_rect_mask_b64(h, w, box))
+        if segment is not None:
+            try:
+                res = segment(seg_path, image_bytes, box=list(box), draw=False)
+                dets = (res or {}).get("detections") or []
+                if dets and dets[0].get("maskBase64"):
+                    masks.append((dets[0]["maskBase64"], engine))
+                    continue
+            except Exception as e:  # noqa: BLE001
+                log.warning("box-guided segment failed: %s", e)
+        masks.append((_rect_mask_b64(h, w, box), "bbox_rect"))
     return masks
 
 
@@ -426,32 +421,23 @@ def run_pipeline(
         raise ValueError("无法解析图片")
     h, w = img.shape[:2]
 
-    boxes = [d.get("bbox") for d in suspicious if d.get("bbox") and len(d["bbox"]) == 4]
-    mask_list = segment_boxes(
-        image_bytes, boxes, seg_path=seg_path, seg_lib=seg_lib
-    ) if boxes else []
-
-    seg_engine = "none"
-    if seg_path and boxes:
-        lib = (seg_lib or "").lower()
-        if lib in ("mobilesam", "mobile-sam", "mobile_sam"):
-            seg_engine = "mobilesam"
-        elif lib in ("opencv-sam", "efficientsam", "efficient-sam", "efficient_sam"):
-            seg_engine = "efficientsam"
-        else:
-            seg_engine = "bbox_rect"
-    elif boxes:
-        seg_engine = "bbox_rect"
+    boxes = {i: d["bbox"] for i, d in enumerate(suspicious) if len(d.get("bbox") or []) == 4}
+    mask_results = {}
+    if boxes:
+        results = _segment_box_results(image_bytes, boxes.values(), seg_path, seg_lib)
+        mask_results = dict(zip(boxes, results))
+    engines = {engine for _, engine in mask_results.values()}
+    seg_engine = "mixed" if len(engines) > 1 else next(iter(engines), "none")
 
     enriched: list[dict] = []
     diagnoses: list[dict] = []
     for i, d in enumerate(suspicious):
         item = dict(d)
-        mb = mask_list[i] if i < len(mask_list) else None
+        mb, item["maskSource"] = mask_results.get(i, (None, "none"))
         if mb:
             item["maskBase64"] = mb
         item["label"] = f"{d.get('className') or 'obj'} {float(d.get('confidence') or 0):.2f}"
-        roi_b64 = _crop_roi_b64(img, d["bbox"]) if d.get("bbox") else None
+        roi_b64 = _crop_roi_b64(img, boxes[i]) if i in boxes else None
         diag = diagnose_one(d, roi_b64, scenario)
         diag["index"] = i
         item["diagnosis"] = {

@@ -135,6 +135,17 @@ def test_ppe_no_hardhat_class_presence():
     reset_runtime()
 
 
+def test_ppe_requires_complete_normalized_class_name():
+    rule = _rule("ppe-no-hardhat", "class_presence", {
+        "classes": ["NO-Hardhat", ""], "consecutive_frames": 2, "cooldown_sec": 0,
+    })
+    for label, expected in (("Hardhat", False), ("", False), ("NO_HARDHAT", True)):
+        reset_runtime("ppe-label")
+        dets = [{"className": label, "confidence": 0.90, "bbox": [1, 1, 8, 8]}]
+        assert not evaluate_rules([rule], dets, "ppe-label")
+        assert bool(evaluate_rules([rule], dets, "ppe-label")) is expected
+
+
 def test_line_crossing_intrusion():
     reset_runtime("track1")
     rule = _rule(

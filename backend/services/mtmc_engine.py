@@ -75,8 +75,13 @@ def supplement_rider_person_dets(
         ]
         if proxy[2] <= proxy[0] or proxy[3] <= proxy[1]:
             continue
-        if any(_intersection_over_smaller(proxy, p.get("bbox") or [0, 0, 0, 0]) >= 0.38 for p in out):
+        overlapping = [p for p in out if _intersection_over_smaller(proxy, p.get("bbox") or [0, 0, 0, 0]) >= 0.38]
+        if any(not p.get("associationOnly") for p in overlapping):
             continue
+        # An unconfirmed weak person cannot suppress (or duplicate) the rider
+        # proxy supplied by a bike above the original detection threshold.
+        if overlapping:
+            out = [p for p in out if p not in overlapping]
         out.append({
             "bbox": [round(v, 1) for v in proxy],
             "confidence": round(max(0.12, float(vehicle.get("confidence") or 0) * 0.72), 4),
@@ -1015,6 +1020,12 @@ def _detect(model_path: str | None, frame, conf: float, classes: list[int] | Non
 _PV_CLASSES = [0, 1, 2, 3, 5, 7]
 
 
+def _mtmc_detection_thresholds(cfg):
+    person = min(float(cfg.conf), 0.18)
+    shared = cfg.enable_person and cfg.enable_vehicle and cfg.det_person_path == cfg.det_vehicle_path
+    return person, person if shared else float(cfg.conf)
+
+
 def _detect_person_vehicle(cfg: MtmcConfig, frame, *, runtime_observer=None):
     """人员+车辆一次 YOLO，避免每帧两次推理。"""
     def run(role: str, model_path: str, conf: float, classes: list[int]):
@@ -1028,15 +1039,19 @@ def _detect_person_vehicle(cfg: MtmcConfig, frame, *, runtime_observer=None):
             runtime_observer(role, None)
         return rows
 
-    person_conf = min(float(cfg.conf), 0.18) if cfg.enable_person else float(cfg.conf)
-    vehicle_conf = float(cfg.conf)
+    from services.mtmc_local_track import ASSOCIATION_CONF
+
+    person_conf, vehicle_conf = _mtmc_detection_thresholds(cfg)
+    recover = not cfg.detect_only and cfg.local_track_backend in ("bytetrack", "botsort")
+    person_floor = min(person_conf, ASSOCIATION_CONF) if recover else person_conf
+    vehicle_floor = min(vehicle_conf, ASSOCIATION_CONF) if recover else vehicle_conf
     if (
         cfg.enable_person and cfg.enable_vehicle
         and cfg.det_person_path and cfg.det_vehicle_path
         and cfg.det_person_path == cfg.det_vehicle_path
     ):
         try:
-            raw = _detect(cfg.det_person_path, frame, min(person_conf, vehicle_conf), _PV_CLASSES)
+            raw = _detect(cfg.det_person_path, frame, min(person_floor, vehicle_floor), _PV_CLASSES)
         except Exception as error:  # noqa: BLE001
             if runtime_observer is not None:
                 runtime_observer("personDetection", error)
@@ -1047,19 +1062,21 @@ def _detect_person_vehicle(cfg: MtmcConfig, frame, *, runtime_observer=None):
             runtime_observer("vehicleDetection", None)
         persons = [d for d in raw if int(d.get("classId", -1)) == 0]
         vehicles = [d for d in raw if int(d.get("classId", -1)) in (1, 2, 3, 5, 7)]
-        persons = supplement_rider_person_dets(
-            persons, vehicles, frame_w=frame.shape[1], frame_h=frame.shape[0],
-        )
-        return persons, vehicles
-    persons = []
-    vehicles = []
-    if cfg.enable_person and cfg.det_person_path:
-        persons = run("personDetection", cfg.det_person_path, person_conf, _PERSON_DET_CLASSES)
-    if cfg.enable_vehicle and cfg.det_vehicle_path:
-        vehicles = run("vehicleDetection", cfg.det_vehicle_path, vehicle_conf, _VEHICLE_DET_CLASSES)
+    else:
+        persons, vehicles = [], []
+        if cfg.enable_person and cfg.det_person_path:
+            persons = run("personDetection", cfg.det_person_path, person_floor, _PERSON_DET_CLASSES)
+        if cfg.enable_vehicle and cfg.det_vehicle_path:
+            vehicles = run("vehicleDetection", cfg.det_vehicle_path, vehicle_floor, _VEHICLE_DET_CLASSES)
+    if recover:
+        for dets, cutoff in ((persons, person_conf), (vehicles, vehicle_conf)):
+            for det in dets:
+                if det["confidence"] < cutoff:
+                    det["associationOnly"] = True
     if cfg.enable_person and vehicles:
         persons = supplement_rider_person_dets(
-            persons, vehicles, frame_w=frame.shape[1], frame_h=frame.shape[0],
+            persons, [d for d in vehicles if not d.get("associationOnly")],
+            frame_w=frame.shape[1], frame_h=frame.shape[0],
         )
     return persons, vehicles
 
@@ -1125,6 +1142,8 @@ def _tracks_or_raw(
         return list(tracks)
     extras = []
     for i, det in enumerate(raw):
+        if det.get("associationOnly"):
+            continue
         bbox = [float(v) for v in (det.get("bbox") or [])[:4]]
         if len(bbox) < 4:
             continue
@@ -2841,6 +2860,7 @@ def _enforce_unique_camera_global_ids(items: list[dict]) -> list[dict]:
 def _make_local_tracker(
     cfg: MtmcConfig,
     *,
+    object_type: str = "person",
     session: MtmcSession | None = None,
     camera_id: int | None = None,
 ):
@@ -2868,6 +2888,8 @@ def _make_local_tracker(
     # 与 MTMC 采样率对齐，避免 ByteTrack 按 30FPS 预测导致低采样下轨迹永不激活
     frame_rate = max(2, int(round(sample_fps)))
     track_act = min(0.25, max(0.12, float(cfg.conf) * 0.75))
+    person_conf, vehicle_conf = _mtmc_detection_thresholds(cfg)
+    track_act = max(track_act, vehicle_conf if object_type == "vehicle" else person_conf)
     try:
         tracker = create_local_tracker(
             backend,  # type: ignore[arg-type]
@@ -2996,7 +3018,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     if cam_state.tracker_person is None:
         cam_state.tracker_person = _make_local_tracker(cfg, session=session, camera_id=cam_id)
     if cam_state.tracker_vehicle is None:
-        cam_state.tracker_vehicle = _make_local_tracker(cfg, session=session, camera_id=cam_id)
+        cam_state.tracker_vehicle = _make_local_tracker(cfg, object_type="vehicle", session=session, camera_id=cam_id)
 
     items = []
     collector = _FrameAssociationCollector(session, now)
@@ -3020,13 +3042,15 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
     raw_p, raw_v = _detect_person_vehicle_with_runtime(session, cam_id, frame)
     # “命中”表示检测器命中，必须在耗时的 ReID/车牌/关联前统计；否则首帧
     # ReID 尚未完成时页面会错误地长期显示人员 0。
-    session.stats["persons"] += len(raw_p) if cfg.enable_person else 0
-    session.stats["vehicles"] += len(raw_v) if cfg.enable_vehicle else 0
+    visible_p = [d for d in raw_p if not d.get("associationOnly")]
+    visible_v = [d for d in raw_v if not d.get("associationOnly")]
+    session.stats["persons"] += len(visible_p) if cfg.enable_person else 0
+    session.stats["vehicles"] += len(visible_v) if cfg.enable_vehicle else 0
     session.stats["frames"] += 1
     cam_state.detect_fps = _rolling_fps(cam_state._detect_times, now)
     preliminary = _detect_items_from_raw(
-        raw_p if cfg.enable_person else [],
-        raw_v if cfg.enable_vehicle else [],
+        visible_p if cfg.enable_person else [],
+        visible_v if cfg.enable_vehicle else [],
     )
     _record_session_dets(cam_state, preliminary, now)
     _publish_overlay(cam_state, frame, preliminary, cam_state.congestion)
@@ -3263,7 +3287,7 @@ def _process_frame_locked(session: MtmcSession, cam_state: CamState, frame, hub_
             session=session, camera_id=cam_id,
         )
         tracks_v = supplement_orphan_vehicle_dets(
-            tracks_v, raw_v, frame_w=fw, frame_h=fh,
+            tracks_v, visible_v, frame_w=fw, frame_h=fh,
         )
         cong = congestion_level(len(tracks_v))
         cam_state.congestion = cong
